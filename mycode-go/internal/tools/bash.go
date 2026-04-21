@@ -23,21 +23,23 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 	cmd.Dir = e.cwd
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return errorResult("error: " + err.Error())
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return errorResult("error: " + err.Error())
-	}
+	reader, writer := io.Pipe()
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+
 	if err := cmd.Start(); err != nil {
+		_ = reader.Close()
+		_ = writer.Close()
 		return errorResult("error: " + err.Error())
 	}
+	waited := false
+	killed := false
 	e.trackCmd(cmd)
 	defer func() {
+		_ = reader.Close()
+		_ = writer.Close()
 		e.untrackCmd(cmd)
-		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
+		if !waited && !killed {
 			killCmdTree(cmd)
 		}
 	}()
@@ -48,8 +50,8 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 	}
 
 	lines := make(chan pipeLine, 256)
-	readerErrors := make(chan error, 2)
-	readPipe := func(reader io.Reader) {
+	readerErrors := make(chan error, 1)
+	go func() {
 		defer func() {
 			lines <- pipeLine{done: true}
 		}()
@@ -61,9 +63,13 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 		if err := scanner.Err(); err != nil {
 			readerErrors <- err
 		}
-	}
-	go readPipe(stdout)
-	go readPipe(stderr)
+	}()
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- cmd.Wait()
+		_ = writer.Close()
+	}()
 
 	logPath := filepath.Join(e.toolOutputDir, "bash-"+toolCallID+".log")
 	keptLines := []string{}
@@ -72,19 +78,17 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 	tailLines := []string{}
 	var logFile *os.File
 	var savedOutputPath string
-	doneReaders := 0
+	doneReading := false
 	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
 
-	for doneReaders < 2 {
+	for !doneReading {
 		if time.Now().After(deadline) {
 			killCmdTree(cmd)
+			killed = true
 			if logFile != nil {
 				_ = logFile.Close()
 			}
-			return Result{
-				Output:  fmt.Sprintf("error: timeout after %ds", timeout),
-				IsError: true,
-			}
+			return Result{Output: fmt.Sprintf("error: timeout after %ds", timeout), IsError: true}
 		}
 
 		select {
@@ -95,7 +99,7 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 			return errorResult("error: " + err.Error())
 		case line := <-lines:
 			if line.done {
-				doneReaders++
+				doneReading = true
 				continue
 			}
 			totalLineCount++
@@ -133,7 +137,8 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 		}
 	}
 
-	waitErr := cmd.Wait()
+	waitErr := <-waitDone
+	waited = true
 	if logFile != nil {
 		_ = logFile.Close()
 	}

@@ -42,8 +42,7 @@ const basePrompt = "" +
 	"- Always set offset/limit when reading large files.\n" +
 	"- Always read files before editing them.\n" +
 	"- Use write only for new files or complete rewrites\n" +
-	"- Your response should be concise and relevant.\n" +
-	"- When available skills match the current task, prefer them over manual alternatives. To use a skill: read its `SKILL.md`, then follow the instructions inside."
+	"- Your response should be concise and relevant."
 
 // Skill is the discovered skill summary injected into the system prompt.
 type Skill struct {
@@ -77,13 +76,13 @@ func loadInstructions(cwd, home string) string {
 		if text == "" {
 			continue
 		}
-		sections = append(sections, fmt.Sprintf("## %s\n%s", path, text))
+		sections = append(sections, fmt.Sprintf("Instructions from: %s\n%s", path, text))
 	}
 	if len(sections) == 0 {
 		return ""
 	}
 	return "<workspace_instructions>\n" +
-		"Instructions are ordered from global to current cwd. Later files are more specific.\n\n" +
+		"Ordered from global to project; later instructions take precedence.\n\n" +
 		strings.Join(sections, "\n\n") +
 		"\n</workspace_instructions>"
 }
@@ -113,12 +112,17 @@ func loadSkills(cwd, home string) string {
 	if len(skills) == 0 {
 		return ""
 	}
-	lines := []string{"<available_skills>"}
+	lines := []string{
+		"When a task matches a skill's description, prefer it over manual alternatives - use the read tool to load the file at <location> and follow the instructions inside.",
+		"Relative paths inside a skill file resolve against the skill's directory (dirname of <location>).",
+		"<available_skills>",
+	}
 	for _, skill := range skills {
-		lines = append(lines, "- name: "+skill.Name)
-		lines = append(lines, "  path: "+skill.Path)
-		lines = append(lines, "  description: "+skill.Description)
-		lines = append(lines, "")
+		lines = append(lines, "  <skill>")
+		lines = append(lines, "    <name>"+skill.Name+"</name>")
+		lines = append(lines, "    <description>"+skill.Description+"</description>")
+		lines = append(lines, "    <location>"+skill.Path+"</location>")
+		lines = append(lines, "  </skill>")
 	}
 	lines = append(lines, "</available_skills>")
 	return strings.Join(lines, "\n")

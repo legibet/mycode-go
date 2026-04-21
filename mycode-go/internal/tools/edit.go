@@ -8,23 +8,34 @@ import (
 	"strings"
 )
 
+type editMeta struct {
+	StartLine     int      `json:"start_line"`
+	OldLineCount  int      `json:"old_line_count"`
+	NewLineCount  int      `json:"new_line_count"`
+	AddedLines    int      `json:"added_lines"`
+	RemovedLines  int      `json:"removed_lines"`
+	ContextBefore []string `json:"context_before"`
+	ContextAfter  []string `json:"context_after"`
+}
+
+type editSpec struct {
+	oldText string
+	newText string
+	prefix  string
+	index   int
+}
+
+type editMatch struct {
+	start   int
+	end     int
+	newText string
+	index   int
+}
+
 // Edit applies one or more replacements against the original file content.
 func (e *Executor) Edit(path string, edits []map[string]string) Result {
 	if len(edits) == 0 {
 		return errorResult("error: edits must not be empty")
-	}
-
-	type editSpec struct {
-		oldText string
-		newText string
-		prefix  string
-		index   int
-	}
-	type match struct {
-		start   int
-		end     int
-		newText string
-		index   int
 	}
 
 	filePath := ResolvePath(path, e.cwd)
@@ -68,7 +79,7 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 		newline = "\r\n"
 	}
 
-	matches := make([]match, 0, len(items))
+	matches := make([]editMatch, 0, len(items))
 	var normalizedText string
 	var indexMap []int
 	normalizedLoaded := false
@@ -80,7 +91,7 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 		}
 		if exactCount == 1 {
 			start := strings.Index(text, edit.oldText)
-			matches = append(matches, match{
+			matches = append(matches, editMatch{
 				start:   start,
 				end:     start + len(edit.oldText),
 				newText: edit.newText,
@@ -113,7 +124,7 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 		if end < len(indexMap) {
 			origEnd = indexMap[end]
 		}
-		matches = append(matches, match{
+		matches = append(matches, editMatch{
 			start:   origStart,
 			end:     origEnd,
 			newText: edit.newText,
@@ -147,21 +158,24 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 		return errorResult(fmt.Sprintf("error: failed to write file: %v", err))
 	}
 
-	type editMeta struct {
-		StartLine     int      `json:"start_line"`
-		OldLineCount  int      `json:"old_line_count"`
-		NewLineCount  int      `json:"new_line_count"`
-		AddedLines    int      `json:"added_lines"`
-		RemovedLines  int      `json:"removed_lines"`
-		ContextBefore []string `json:"context_before"`
-		ContextAfter  []string `json:"context_after"`
-	}
+	metas := buildEditMetas(text, updated, matches)
 
+	summary := "Updated " + path
+	if len(items) > 1 {
+		summary = fmt.Sprintf("Updated %s (%d edits)", path, len(items))
+	}
+	return Result{
+		Output:   summary,
+		Metadata: map[string]any{"edits": metas},
+	}
+}
+
+func buildEditMetas(original, updated string, matches []editMatch) []editMeta {
 	updatedLines := strings.Split(updated, "\n")
 	metas := make([]editMeta, 0, len(matches))
 	shift := 0
 	for _, match := range matches {
-		oldSnippet := text[match.start:match.end]
+		oldSnippet := original[match.start:match.end]
 		newStart := match.start + shift
 		startLine := strings.Count(updated[:newStart], "\n") + 1
 		oldLineCount := max(1, splitLineCount(oldSnippet))
@@ -179,15 +193,7 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 		})
 		shift += len(match.newText) - (match.end - match.start)
 	}
-
-	summary := "Updated " + path
-	if len(items) > 1 {
-		summary = fmt.Sprintf("Updated %s (%d edits)", path, len(items))
-	}
-	return Result{
-		Output:   summary,
-		Metadata: map[string]any{"edits": metas},
-	}
+	return metas
 }
 
 func closestLineHint(text, needle string) string {

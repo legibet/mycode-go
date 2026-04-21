@@ -70,6 +70,43 @@ func TestCreateSessionPreservesExistingMessages(t *testing.T) {
 	}
 }
 
+func TestLoadSessionTreatsInvalidMetaAsMissing(t *testing.T) {
+	store := NewStore(t.TempDir())
+	sessionDir := store.SessionDir("broken")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "meta.json"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.LoadSession("broken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != nil {
+		t.Fatalf("expected missing session, got %#v", loaded)
+	}
+}
+
+func TestAppendMessageNormalizesSessionTitle(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage("s1", message.UserTextMessage("first line\nsecond line", nil), "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := store.readMeta("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Title != "first line second line" {
+		t.Fatalf("unexpected title: %q", meta.Title)
+	}
+}
+
 func TestLoadSessionRepairsInterruptedToolLoop(t *testing.T) {
 	store := NewStore(t.TempDir())
 	data, err := store.CreateSession("", "/tmp")

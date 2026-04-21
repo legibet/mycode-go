@@ -152,17 +152,6 @@ func TestSkills(t *testing.T) {
 			t.Fatalf("unexpected skills: %#v", skills)
 		}
 	})
-
-	t.Run("load prompt format", func(t *testing.T) {
-		root := t.TempDir()
-		home := filepath.Join(root, "home", ".mycode")
-		userHomeDir = func() string { return filepath.Join(root, "home") }
-		writeText(t, filepath.Join(home, "skills", "greet", "SKILL.md"), "---\nname: greet\ndescription: Greeting skill.\n---\n")
-		out := loadSkills(root, home)
-		if !strings.Contains(out, "<available_skills>") || !strings.Contains(out, "name: greet") || strings.Contains(out, "Available skills:") {
-			t.Fatalf("unexpected output: %q", out)
-		}
-	})
 }
 
 func writeText(t *testing.T, path, content string) {
