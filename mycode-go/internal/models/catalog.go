@@ -36,8 +36,9 @@ type rawMetadata struct {
 
 // Lookup returns metadata for one provider/model pair.
 func Lookup(providerType, model string) *Metadata {
-	model = strings.TrimSpace(model)
-	if model == "" {
+	providerType = strings.TrimSpace(providerType)
+	requestedModel := strings.TrimSpace(model)
+	if providerType == "" || requestedModel == "" {
 		return nil
 	}
 	loadCatalog()
@@ -45,22 +46,39 @@ func Lookup(providerType, model string) *Metadata {
 		return nil
 	}
 
-	if metadata := lookupEntry(providerType, model); metadata != nil {
-		return metadata
+	// Strip optional "provider/" prefix (e.g. "openai/gpt-4o" → "gpt-4o").
+	modelName := requestedModel
+	if _, after, ok := strings.Cut(requestedModel, "/"); ok {
+		modelName = strings.TrimSpace(after)
 	}
 
-	// Strip optional "provider/" prefix (e.g. "openai/gpt-4o" → "gpt-4o").
-	normalized := model
-	if _, after, ok := strings.Cut(model, "/"); ok {
-		normalized = strings.TrimSpace(after)
+	if entry, ok := catalog[providerType][requestedModel]; ok {
+		return metadataFromEntry(providerType, requestedModel, entry)
 	}
-	if fallback := defaultProvider(normalized); fallback != "" && fallback != providerType {
-		if metadata := lookupEntry(fallback, normalized); metadata != nil {
-			return metadata
+
+	if fallback := defaultProvider(modelName); fallback != "" && fallback != providerType {
+		if entry, ok := catalog[fallback][modelName]; ok {
+			return metadataFromEntry(providerType, requestedModel, entry)
 		}
 	}
 
-	return lookupEntry("aihubmix", normalized)
+	var match rawMetadata
+	found := false
+	for modelID, entry := range catalog["openrouter"] {
+		_, suffix, ok := strings.Cut(modelID, "/")
+		if !ok || strings.TrimSpace(suffix) != modelName {
+			continue
+		}
+		if found {
+			return nil
+		}
+		match = entry
+		found = true
+	}
+	if found {
+		return metadataFromEntry(providerType, requestedModel, match)
+	}
+	return nil
 }
 
 func loadCatalog() {
@@ -74,15 +92,7 @@ func loadCatalog() {
 	})
 }
 
-func lookupEntry(providerType, model string) *Metadata {
-	provider := catalog[providerType]
-	if len(provider) == 0 {
-		return nil
-	}
-	entry, ok := provider[model]
-	if !ok {
-		return nil
-	}
+func metadataFromEntry(providerType, model string, entry rawMetadata) *Metadata {
 	return &Metadata{
 		Provider:           providerType,
 		Model:              model,

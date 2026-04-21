@@ -23,7 +23,7 @@ func TestLookupFallsBackToCanonicalProvider(t *testing.T) {
 		"other": {}
 	}`, func() {
 		meta := Lookup("openai_chat", "openai/gpt-5")
-		if meta == nil || meta.Provider != "openai" || meta.Model != "gpt-5" {
+		if meta == nil || meta.Provider != "openai_chat" || meta.Model != "openai/gpt-5" {
 			t.Fatalf("unexpected metadata: %#v", meta)
 		}
 		if meta.SupportsImageInput == nil || !*meta.SupportsImageInput {
@@ -32,12 +32,43 @@ func TestLookupFallsBackToCanonicalProvider(t *testing.T) {
 	})
 }
 
-func TestLookupFallsBackToAIHubMix(t *testing.T) {
+func TestLookupFallsBackToOpenRouterSuffix(t *testing.T) {
 	withCatalog(t, `{
-		"aihubmix": {"glm-5.1": {"max_output_tokens": 131072}}
+		"moonshotai": {},
+		"openrouter": {"moonshotai/kimi-k2.6": {"max_output_tokens": 262144, "supports_reasoning": true}}
 	}`, func() {
-		meta := Lookup("zai", "glm-5.1")
-		if meta == nil || meta.Provider != "aihubmix" || meta.MaxOutputTokens != 131072 {
+		meta := Lookup("moonshotai", "kimi-k2.6")
+		if meta == nil || meta.Provider != "moonshotai" || meta.Model != "kimi-k2.6" || meta.MaxOutputTokens != 262144 {
+			t.Fatalf("unexpected metadata: %#v", meta)
+		}
+		if meta.SupportsReasoning == nil || !*meta.SupportsReasoning {
+			t.Fatalf("unexpected metadata: %#v", meta)
+		}
+	})
+}
+
+func TestLookupOpenRouterSuffixRejectsAmbiguousMatches(t *testing.T) {
+	withCatalog(t, `{
+		"openrouter": {
+			"first/shared-model": {"max_output_tokens": 64000},
+			"second/shared-model": {"max_output_tokens": 128000}
+		}
+	}`, func() {
+		if meta := Lookup("moonshotai", "shared-model"); meta != nil {
+			t.Fatalf("unexpected metadata: %#v", meta)
+		}
+	})
+}
+
+func TestLookupRequiresProvider(t *testing.T) {
+	withCatalog(t, `{
+		"openai": {"gpt-5": {"max_output_tokens": 128000}},
+		"openrouter": {"some-provider/some-niche-model": {"max_output_tokens": 64000}}
+	}`, func() {
+		if meta := Lookup("", "some-niche-model"); meta != nil {
+			t.Fatalf("unexpected metadata: %#v", meta)
+		}
+		if meta := Lookup("", "gpt-5"); meta != nil {
 			t.Fatalf("unexpected metadata: %#v", meta)
 		}
 	})
@@ -70,7 +101,7 @@ func TestLookupDoesNotRetryAfterFirstCatalogLoad(t *testing.T) {
 			t.Fatalf("unexpected metadata: %#v", meta)
 		}
 
-		catalogJSON = []byte(`{"aihubmix": {"glm-5.1": {"max_output_tokens": 131072}}}`)
+		catalogJSON = []byte(`{"openrouter": {"zai/glm-5.1": {"max_output_tokens": 131072}}}`)
 		if meta := Lookup("zai", "glm-5.1"); meta != nil {
 			t.Fatalf("unexpected metadata after cached miss: %#v", meta)
 		}

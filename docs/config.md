@@ -107,7 +107,7 @@ Lookup strategy:
 
 1. Exact provider + model.
 2. Fallback provider mapping for common model prefixes.
-3. Generic `aihubmix` catalog fallback.
+3. Unique OpenRouter catalog suffix fallback (`provider/model` matched by `model`).
 
 Update the catalog with:
 

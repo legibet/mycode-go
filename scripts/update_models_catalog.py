@@ -16,7 +16,6 @@ TARGET_PATH = (
     / "models_catalog.json"
 )
 PROVIDERS = (
-    "aihubmix",
     "anthropic",
     "deepseek",
     "google",
