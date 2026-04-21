@@ -35,38 +35,40 @@ func Bool(v bool) *bool {
 	return &v
 }
 
-func newTextBlock(blockType, text string, meta map[string]any) Block {
-	block := Block{Type: blockType, Text: text}
-	if len(meta) > 0 {
-		block.Meta = maps.Clone(meta)
-	}
-	return block
-}
-
-func newDataBlock(blockType, data, mimeType, name string, meta map[string]any) Block {
-	block := Block{Type: blockType, Data: data, MIMEType: mimeType, Name: name}
-	if len(meta) > 0 {
-		block.Meta = maps.Clone(meta)
-	}
-	return block
-}
-
 // TextBlock returns a plain text block.
-func TextBlock(text string, meta map[string]any) Block { return newTextBlock("text", text, meta) }
+func TextBlock(text string, meta map[string]any) Block {
+	b := Block{Type: "text", Text: text}
+	if len(meta) > 0 {
+		b.Meta = maps.Clone(meta)
+	}
+	return b
+}
 
 // ThinkingBlock returns a reasoning block.
 func ThinkingBlock(text string, meta map[string]any) Block {
-	return newTextBlock("thinking", text, meta)
+	b := Block{Type: "thinking", Text: text}
+	if len(meta) > 0 {
+		b.Meta = maps.Clone(meta)
+	}
+	return b
 }
 
 // ImageBlock returns an image block.
 func ImageBlock(data, mimeType, name string, meta map[string]any) Block {
-	return newDataBlock("image", data, mimeType, name, meta)
+	b := Block{Type: "image", Data: data, MIMEType: mimeType, Name: name}
+	if len(meta) > 0 {
+		b.Meta = maps.Clone(meta)
+	}
+	return b
 }
 
 // DocumentBlock returns a document block.
 func DocumentBlock(data, mimeType, name string, meta map[string]any) Block {
-	return newDataBlock("document", data, mimeType, name, meta)
+	b := Block{Type: "document", Data: data, MIMEType: mimeType, Name: name}
+	if len(meta) > 0 {
+		b.Meta = maps.Clone(meta)
+	}
+	return b
 }
 
 // ToolUseBlock returns a tool use block. Input is always a non-nil map to
@@ -148,8 +150,15 @@ func AssistantMessage(blocks []Block, provider, model, providerMessageID, stopRe
 func FlattenText(msg Message, includeThinking bool) string {
 	parts := make([]string, 0, len(msg.Content))
 	for _, block := range msg.Content {
-		if block.Meta != nil && truthy(block.Meta["attachment"]) {
-			continue
+		switch v := block.Meta["attachment"].(type) {
+		case bool:
+			if v {
+				continue
+			}
+		case string:
+			if v == "true" || v == "1" {
+				continue
+			}
 		}
 		if block.Type == "text" || (includeThinking && block.Type == "thinking") {
 			text := strings.TrimSpace(block.Text)
@@ -165,10 +174,7 @@ func FlattenText(msg Message, includeThinking bool) string {
 func Clone(msg Message) Message {
 	out := Message{Role: msg.Role}
 	if len(msg.Content) > 0 {
-		out.Content = make([]Block, len(msg.Content))
-		for i, block := range msg.Content {
-			out.Content[i] = CloneBlock(block)
-		}
+		out.Content = CloneBlocks(msg.Content)
 	}
 	if len(msg.Meta) > 0 {
 		out.Meta = maps.Clone(msg.Meta)
@@ -183,10 +189,7 @@ func CloneBlock(block Block) Block {
 		out.Input = maps.Clone(block.Input)
 	}
 	if len(block.Content) > 0 {
-		out.Content = make([]Block, len(block.Content))
-		for i, child := range block.Content {
-			out.Content[i] = CloneBlock(child)
-		}
+		out.Content = CloneBlocks(block.Content)
 	}
 	if len(block.Metadata) > 0 {
 		out.Metadata = maps.Clone(block.Metadata)
@@ -201,13 +204,20 @@ func CloneBlock(block Block) Block {
 	return out
 }
 
-func truthy(value any) bool {
-	switch v := value.(type) {
-	case bool:
-		return v
-	case string:
-		return v == "true" || v == "1"
-	default:
-		return false
+// CloneMessages returns a deep copy of a message slice.
+func CloneMessages(msgs []Message) []Message {
+	out := make([]Message, len(msgs))
+	for i, msg := range msgs {
+		out[i] = Clone(msg)
 	}
+	return out
+}
+
+// CloneBlocks returns a deep copy of a block slice.
+func CloneBlocks(blocks []Block) []Block {
+	out := make([]Block, len(blocks))
+	for i, block := range blocks {
+		out[i] = CloneBlock(block)
+	}
+	return out
 }

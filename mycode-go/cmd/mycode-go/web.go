@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -22,7 +23,7 @@ func webCommand(args []string) int {
 	dev := fs.Bool("dev", false, "Serve API only")
 
 	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
+		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
@@ -52,7 +53,7 @@ func webCommand(args []string) int {
 	}
 
 	fmt.Fprintf(os.Stderr, "Listening on http://%s\n", addr)
-	if err := serverInstance.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := serverInstance.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

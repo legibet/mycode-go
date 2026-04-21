@@ -3,8 +3,10 @@ package tools
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -170,11 +172,8 @@ func (e *Executor) Definitions() []ToolSpec {
 // CancelActive cancels all running bash commands started by this executor.
 func (e *Executor) CancelActive() {
 	e.mu.Lock()
-	cmds := make([]*exec.Cmd, 0, len(e.activeCmds))
-	for cmd := range e.activeCmds {
-		cmds = append(cmds, cmd)
-	}
-	e.activeCmds = map[*exec.Cmd]struct{}{}
+	cmds := slices.Collect(maps.Keys(e.activeCmds))
+	clear(e.activeCmds)
 	e.mu.Unlock()
 
 	for _, cmd := range cmds {

@@ -1,10 +1,11 @@
 package tools
 
 import (
+	"cmp"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
-	"sort"
 	"strings"
 )
 
@@ -41,7 +42,7 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 	filePath := ResolvePath(path, e.cwd)
 	info, err := os.Stat(filePath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return errorResult("error: file not found: " + path)
 		}
 		return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
@@ -132,8 +133,8 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 		})
 	}
 
-	sort.Slice(matches, func(i, j int) bool {
-		return matches[i].start < matches[j].start
+	slices.SortFunc(matches, func(a, b editMatch) int {
+		return cmp.Compare(a.start, b.start)
 	})
 	for i := 1; i < len(matches); i++ {
 		if matches[i-1].end > matches[i].start {
@@ -204,7 +205,7 @@ func closestLineHint(text, needle string) string {
 
 	bestRatio := 0.0
 	bestLine := ""
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		candidate := strings.TrimSpace(strings.TrimRight(line, "\r"))
 		if candidate == "" {
 			continue

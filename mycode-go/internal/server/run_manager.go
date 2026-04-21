@@ -72,15 +72,11 @@ type runState struct {
 }
 
 func newRunState(id, sessionID string, userMessage message.Message, baseMessages []message.Message, agent *agentpkg.Agent, cancel context.CancelFunc) *runState {
-	cloned := make([]message.Message, len(baseMessages))
-	for i, msg := range baseMessages {
-		cloned[i] = message.Clone(msg)
-	}
 	return &runState{
 		id:           id,
 		sessionID:    sessionID,
 		userMessage:  message.Clone(userMessage),
-		baseMessages: cloned,
+		baseMessages: message.CloneMessages(baseMessages),
 		agent:        agent,
 		status:       runStatusRunning,
 		nextSeq:      1,
@@ -140,11 +136,7 @@ func (r *runState) snapshot() runSnapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	messages := make([]message.Message, 0, len(r.baseMessages)+1)
-	for _, msg := range r.baseMessages {
-		messages = append(messages, message.Clone(msg))
-	}
-	messages = append(messages, message.Clone(r.userMessage))
+	messages := append(message.CloneMessages(r.baseMessages), message.Clone(r.userMessage))
 
 	events := make([]map[string]any, 0, len(r.events))
 	for _, event := range r.events {

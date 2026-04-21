@@ -1,9 +1,11 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -99,7 +101,7 @@ func (a googleAdapter) StreamTurn(ctx context.Context, req Request) <-chan Strea
 		if finishMessage != "" {
 			nativeMeta["finish_message"] = finishMessage
 		}
-		msg := message.AssistantMessage(blocks, a.Spec().ID, defaultString(responseModel, req.Model), responseID, finishReason, usage, nativeMeta)
+		msg := message.AssistantMessage(blocks, a.Spec().ID, cmp.Or(responseModel, req.Model), responseID, finishReason, usage, nativeMeta)
 		out <- StreamEvent{Type: "message_done", Msg: &msg}
 	}()
 	return out
@@ -174,16 +176,15 @@ func (a googleAdapter) buildContents(req Request) []*genai.Content {
 
 func (a googleAdapter) buildConfig(req Request) *genai.GenerateContentConfig {
 	config := &genai.GenerateContentConfig{
-		HTTPOptions:       googleHTTPOptions(req.APIBase),
-		MaxOutputTokens:   int32(req.MaxTokens),
-		ThinkingConfig:    &genai.ThinkingConfig{IncludeThoughts: true},
-		SystemInstruction: genai.NewContentFromText(req.System, genai.RoleUser),
+		HTTPOptions:     googleHTTPOptions(req.APIBase),
+		MaxOutputTokens: int32(req.MaxTokens),
+		ThinkingConfig:  &genai.ThinkingConfig{IncludeThoughts: true},
+	}
+	if strings.TrimSpace(req.System) != "" {
+		config.SystemInstruction = genai.NewContentFromText(req.System, genai.RoleUser)
 	}
 	if level := googleThinkingLevel(req.Model, req.ReasoningEffort); level != genai.ThinkingLevelUnspecified {
 		config.ThinkingConfig.ThinkingLevel = level
-	}
-	if strings.TrimSpace(req.System) == "" {
-		config.SystemInstruction = nil
 	}
 	if len(req.Tools) > 0 {
 		declarations := make([]*genai.FunctionDeclaration, 0, len(req.Tools))
@@ -318,9 +319,9 @@ func geminiPartCamelToSnake(p map[string]any) {
 // geminiPartSnakeToCamel is the inverse of geminiPartCamelToSnake.
 // Used before json.Unmarshal into genai.Part, which requires camelCase tags.
 func geminiPartSnakeToCamel(p map[string]any) map[string]any {
-	out := make(map[string]any, len(p))
-	for k, v := range p {
-		out[k] = v
+	out := maps.Clone(p)
+	if out == nil {
+		out = map[string]any{}
 	}
 	for _, pair := range geminiPartCamelKeys {
 		if v, ok := out[pair[1]]; ok {

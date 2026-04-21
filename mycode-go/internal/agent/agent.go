@@ -1,12 +1,14 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/message"
@@ -83,14 +85,8 @@ func New(opts Options) (*Agent, error) {
 		cwd = absolute
 	}
 
-	sessionDir := opts.SessionDir
-	if sessionDir == "" {
-		sessionDir = cwd
-	}
-	sessionID := opts.SessionID
-	if sessionID == "" {
-		sessionID = filepath.Base(sessionDir)
-	}
+	sessionDir := cmp.Or(opts.SessionDir, cwd)
+	sessionID := cmp.Or(opts.SessionID, filepath.Base(sessionDir))
 
 	toolExecutor := opts.Tools
 	if toolExecutor == nil {
@@ -111,11 +107,6 @@ func New(opts Options) (*Agent, error) {
 		system = prompt.Build(cwd, config.ResolveHome())
 	}
 
-	cloned := make([]message.Message, len(opts.Messages))
-	for i, msg := range opts.Messages {
-		cloned[i] = message.Clone(msg)
-	}
-
 	return &Agent{
 		Model:              opts.Model,
 		Provider:           opts.Provider,
@@ -132,7 +123,7 @@ func New(opts Options) (*Agent, error) {
 		SupportsImageInput: opts.SupportsImageInput,
 		SupportsPDFInput:   opts.SupportsPDFInput,
 		System:             system,
-		Messages:           cloned,
+		Messages:           message.CloneMessages(opts.Messages),
 		Tools:              toolExecutor,
 		Adapter:            adapter,
 	}, nil
@@ -271,11 +262,15 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 			return message.Message{}, true
 		}
 
+		input := maps.Clone(toolCall.Input)
+		if input == nil {
+			input = map[string]any{}
+		}
 		out <- Event{Type: "tool_start", Data: map[string]any{
 			"tool_call": map[string]any{
 				"id":    toolCall.ID,
 				"name":  toolCall.Name,
-				"input": cloneInput(toolCall.Input),
+				"input": input,
 			},
 		}}
 
@@ -353,21 +348,17 @@ func (a *Agent) compactIfNeeded(ctx context.Context, onPersist PersistFunc, out 
 
 	var usage map[string]any
 	for i := len(a.Messages) - 1; i >= 0; i-- {
-		msg := a.Messages[i]
-		if msg.Role != "assistant" {
-			continue
+		if a.Messages[i].Role == "assistant" {
+			usage, _ = a.Messages[i].Meta["usage"].(map[string]any)
+			break
 		}
-		if raw, ok := msg.Meta["usage"].(map[string]any); ok {
-			usage = raw
-		}
-		break
 	}
 	if !session.ShouldCompact(usage, a.ContextWindow, a.CompactThreshold) {
 		return
 	}
 
 	beforeCount := len(a.Messages)
-	compactMessages := append(append([]message.Message(nil), a.Messages...), message.UserTextMessage(session.CompactSummaryPrompt, nil))
+	compactMessages := append(slices.Clone(a.Messages), message.UserTextMessage(session.CompactSummaryPrompt, nil))
 	req := provider.Request{
 		Provider:           a.Provider,
 		Model:              a.Model,
@@ -421,13 +412,6 @@ func toolSpecs(specs []tools.ToolSpec) []map[string]any {
 		})
 	}
 	return out
-}
-
-func cloneInput(input map[string]any) map[string]any {
-	if input == nil {
-		return map[string]any{}
-	}
-	return maps.Clone(input)
 }
 
 func asString(value any) string {

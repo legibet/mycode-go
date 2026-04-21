@@ -47,9 +47,9 @@ func detectImageMIMEType(path string, header []byte) string {
 		return "image/webp"
 	}
 
-	switch mime.TypeByExtension(filepath.Ext(path)) {
+	switch mt := mime.TypeByExtension(filepath.Ext(path)); mt {
 	case "image/png", "image/jpeg", "image/gif", "image/webp":
-		return mime.TypeByExtension(filepath.Ext(path))
+		return mt
 	default:
 		return ""
 	}
@@ -97,9 +97,10 @@ func TruncateText(text string, maxLines, maxBytes int, tail bool) (string, Trunc
 	}
 
 	lines := strings.Split(text, "\n")
-	totalBytes := len([]byte(text))
-	source := slices.Clone(lines)
+	totalBytes := len(text)
+	source := lines
 	if tail {
+		source = slices.Clone(lines)
 		slices.Reverse(source)
 	}
 
@@ -109,7 +110,7 @@ func TruncateText(text string, maxLines, maxBytes int, tail bool) (string, Trunc
 		if len(out) >= maxLines {
 			break
 		}
-		lineBytes := len([]byte(line)) + 1
+		lineBytes := len(line) + 1
 		if outputBytes+lineBytes > maxBytes {
 			break
 		}

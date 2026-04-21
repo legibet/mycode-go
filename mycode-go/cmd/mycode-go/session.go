@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -33,7 +34,7 @@ func sessionListCommand(args []string) int {
 
 	allWorkspaces := fs.Bool("all", false, "Show sessions from all workspaces")
 	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
+		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2

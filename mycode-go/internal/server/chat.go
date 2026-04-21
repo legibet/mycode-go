@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -8,7 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,24 +45,20 @@ type chatRequest struct {
 }
 
 func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
-	fail := func(status int, detail any) {
-		writeDetailError(w, status, detail)
-	}
-
 	var req chatRequest
 	if err := decodeJSON(r, &req); err != nil {
-		fail(http.StatusBadRequest, err.Error())
+		writeDetailError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.Message != "" && len(req.Input) > 0 {
-		fail(http.StatusBadRequest, "message and input are mutually exclusive")
+		writeDetailError(w, http.StatusBadRequest, "message and input are mutually exclusive")
 		return
 	}
 
 	cwd := requestCWD(req.CWD)
 	settings, err := config.Load(cwd)
 	if err != nil {
-		fail(http.StatusInternalServerError, err.Error())
+		writeDetailError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -75,20 +72,20 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		if errors.Is(err, config.ErrUnsupportedReasoningEffort) {
-			fail(http.StatusBadRequest, err.Error())
+			writeDetailError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		fail(http.StatusInternalServerError, err.Error())
+		writeDetailError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	userMessage, err := buildUserMessage(req, cwd)
 	if err != nil {
-		fail(http.StatusBadRequest, err.Error())
+		writeDetailError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := validateUserMessage(userMessage, resolved); err != nil {
-		fail(http.StatusBadRequest, err.Error())
+		writeDetailError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -99,7 +96,7 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	data, err := a.store.LoadSession(sessionID)
 	if err != nil {
-		fail(http.StatusInternalServerError, err.Error())
+		writeDetailError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -110,12 +107,12 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 		baseMessages = append(baseMessages, data.Messages...)
 	} else {
 		if req.RewindTo != nil {
-			fail(http.StatusBadRequest, "rewind_to requires an existing session")
+			writeDetailError(w, http.StatusBadRequest, "rewind_to requires an existing session")
 			return
 		}
 		created, err := a.store.CreateSession(sessionID, cwd)
 		if err != nil {
-			fail(http.StatusInternalServerError, err.Error())
+			writeDetailError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		sessionMeta = created.Session
@@ -124,17 +121,17 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 	if req.RewindTo != nil {
 		rewindTo := *req.RewindTo
 		if rewindTo < 0 || rewindTo >= len(baseMessages) {
-			fail(http.StatusBadRequest, fmt.Sprintf("rewind_to must reference a visible message index between 0 and %d", len(baseMessages)-1))
+			writeDetailError(w, http.StatusBadRequest, fmt.Sprintf("rewind_to must reference a visible message index between 0 and %d", len(baseMessages)-1))
 			return
 		}
 		target := baseMessages[rewindTo]
 		if !isRealUserMessage(target) {
-			fail(http.StatusBadRequest, "rewind_to must reference a real user message")
+			writeDetailError(w, http.StatusBadRequest, "rewind_to must reference a real user message")
 			return
 		}
 		baseMessages = baseMessages[:rewindTo]
 		if err := a.store.AppendRewind(sessionID, rewindTo); err != nil {
-			fail(http.StatusInternalServerError, err.Error())
+			writeDetailError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
@@ -156,7 +153,7 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 		SupportsPDFInput:   resolved.SupportsPDFInput,
 	})
 	if err != nil {
-		fail(http.StatusInternalServerError, err.Error())
+		writeDetailError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -170,10 +167,10 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 			if existing := a.runs.getRun(activeErr.RunID); existing != nil {
 				detail["run"] = existing.info()
 			}
-			fail(http.StatusConflict, detail)
+			writeDetailError(w, http.StatusConflict, detail)
 			return
 		}
-		fail(http.StatusInternalServerError, err.Error())
+		writeDetailError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -391,7 +388,7 @@ func buildImageBlock(block chatInputBlock, cwd string) (message.Block, error) {
 		if strings.TrimSpace(block.MIMEType) == "" {
 			return message.Block{}, fmt.Errorf("image data requires mime_type")
 		}
-		return message.ImageBlock(block.Data, block.MIMEType, defaultString(block.Name, "image"), nil), nil
+		return message.ImageBlock(block.Data, block.MIMEType, cmp.Or(block.Name, "image"), nil), nil
 	}
 
 	resolvedPath, data, err := readInputFile(block, cwd, "image")
@@ -410,18 +407,18 @@ func buildImageBlock(block chatInputBlock, cwd string) (message.Block, error) {
 	return message.ImageBlock(
 		base64.StdEncoding.EncodeToString(data),
 		mimeType,
-		defaultString(block.Name, filepath.Base(resolvedPath)),
+		cmp.Or(block.Name, filepath.Base(resolvedPath)),
 		nil,
 	), nil
 }
 
 func buildDocumentBlock(block chatInputBlock, cwd string) (message.Block, error) {
 	if block.Data != "" {
-		mimeType := defaultString(block.MIMEType, "application/pdf")
+		mimeType := cmp.Or(block.MIMEType, "application/pdf")
 		if mimeType != "application/pdf" {
 			return message.Block{}, fmt.Errorf("unsupported document mime_type")
 		}
-		return message.DocumentBlock(block.Data, mimeType, defaultString(block.Name, "document.pdf"), nil), nil
+		return message.DocumentBlock(block.Data, mimeType, cmp.Or(block.Name, "document.pdf"), nil), nil
 	}
 
 	resolvedPath, data, err := readInputFile(block, cwd, "document")
@@ -440,7 +437,7 @@ func buildDocumentBlock(block chatInputBlock, cwd string) (message.Block, error)
 	return message.DocumentBlock(
 		base64.StdEncoding.EncodeToString(data),
 		mimeType,
-		defaultString(block.Name, filepath.Base(resolvedPath)),
+		cmp.Or(block.Name, filepath.Base(resolvedPath)),
 		nil,
 	), nil
 }
@@ -513,7 +510,7 @@ func modelsForProvider(settings config.Settings, resolved config.ResolvedProvide
 			for model := range providerConfig.Models {
 				models = append(models, model)
 			}
-			sort.Strings(models)
+			slices.Sort(models)
 		}
 		return models
 	}

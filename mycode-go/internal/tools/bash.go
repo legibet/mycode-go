@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bufio"
+	"cmp"
 	"fmt"
 	"io"
 	"os"
@@ -14,10 +15,7 @@ import (
 
 // Bash runs a shell command and streams output.
 func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput OutputCallback) Result {
-	timeout := int(BashTimeout / time.Second)
-	if timeoutSeconds > 0 {
-		timeout = timeoutSeconds
-	}
+	timeout := cmp.Or(timeoutSeconds, int(BashTimeout/time.Second))
 
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Dir = e.cwd
@@ -44,21 +42,14 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 		}
 	}()
 
-	type pipeLine struct {
-		text string
-		done bool
-	}
-
-	lines := make(chan pipeLine, 256)
+	lines := make(chan string, 256)
 	readerErrors := make(chan error, 1)
 	go func() {
-		defer func() {
-			lines <- pipeLine{done: true}
-		}()
+		defer close(lines)
 		scanner := bufio.NewScanner(reader)
 		scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 		for scanner.Scan() {
-			lines <- pipeLine{text: strings.TrimRight(scanner.Text(), "\n")}
+			lines <- strings.TrimRight(scanner.Text(), "\n")
 		}
 		if err := scanner.Err(); err != nil {
 			readerErrors <- err
@@ -97,16 +88,16 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 				_ = logFile.Close()
 			}
 			return errorResult("error: " + err.Error())
-		case line := <-lines:
-			if line.done {
+		case line, ok := <-lines:
+			if !ok {
 				doneReading = true
 				continue
 			}
 			totalLineCount++
-			keptBytes += len([]byte(line.text)) + 1
+			keptBytes += len(line) + 1
 
 			if logFile == nil {
-				keptLines = append(keptLines, line.text)
+				keptLines = append(keptLines, line)
 				if keptBytes > BashMaxInMemoryBytes {
 					if err := os.MkdirAll(e.toolOutputDir, 0o755); err == nil {
 						file, fileErr := os.Create(logPath)
@@ -124,14 +115,14 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 					}
 				}
 			} else {
-				tailLines = append(tailLines, line.text)
+				tailLines = append(tailLines, line)
 				tailLines = trimTailLines(tailLines)
-				_, _ = io.WriteString(logFile, line.text)
+				_, _ = io.WriteString(logFile, line)
 				_, _ = io.WriteString(logFile, "\n")
 			}
 
 			if onOutput != nil {
-				onOutput(line.text)
+				onOutput(line)
 			}
 		case <-time.After(100 * time.Millisecond):
 		}

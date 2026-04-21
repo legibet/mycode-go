@@ -1,10 +1,12 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/legibet/mycode-go/internal/message"
@@ -161,8 +163,8 @@ func RepairMessagesForReplay(source []message.Message, supportsImageInput, suppo
 					}
 					attachment := fmt.Sprintf(
 						"<file name=\"%s\" media_type=\"%s\" kind=\"%s\">Current model does not support %s.</file>",
-						escapeAttachmentAttr(defaultString(block.Name, "attached-"+block.Type)),
-						escapeAttachmentAttr(defaultString(block.MIMEType, defaultMIME)),
+						escapeAttachmentAttr(cmp.Or(block.Name, "attached-"+block.Type)),
+						escapeAttachmentAttr(cmp.Or(block.MIMEType, defaultMIME)),
 						block.Type,
 						label,
 					)
@@ -179,13 +181,9 @@ func RepairMessagesForReplay(source []message.Message, supportsImageInput, suppo
 					}
 					next := message.CloneBlock(block)
 					if !supportsImageInput && len(next.Content) > 0 {
-						filtered := next.Content[:0]
-						for _, child := range next.Content {
-							if child.Type != "image" {
-								filtered = append(filtered, child)
-							}
-						}
-						next.Content = append([]message.Block(nil), filtered...)
+						next.Content = slices.DeleteFunc(next.Content, func(child message.Block) bool {
+							return child.Type == "image"
+						})
 					}
 					nextContent = append(nextContent, next)
 					resolvedToolUseIDs[block.ToolUseID] = struct{}{}
@@ -238,11 +236,7 @@ func RepairMessagesForReplay(source []message.Message, supportsImageInput, suppo
 // ToolResultContentBlocks returns structured tool result content or falls back to one text block.
 func ToolResultContentBlocks(block message.Block) []message.Block {
 	if len(block.Content) > 0 {
-		out := make([]message.Block, len(block.Content))
-		for i, child := range block.Content {
-			out[i] = message.CloneBlock(child)
-		}
-		return out
+		return message.CloneBlocks(block.Content)
 	}
 	return []message.Block{message.TextBlock(block.Output, nil)}
 }
@@ -271,13 +265,6 @@ func escapeAttachmentAttr(value string) string {
 	).Replace(value)
 }
 
-func defaultString(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return value
-}
-
 func blockNativeMeta(block message.Block) map[string]any {
 	raw, _ := block.Meta["native"].(map[string]any)
 	if raw == nil {
@@ -295,11 +282,11 @@ func messageNativeMeta(msg message.Message) map[string]any {
 }
 
 func loadImageBlockPayload(block message.Block) (mimeType string, data string) {
-	return defaultString(block.MIMEType, "image/png"), block.Data
+	return cmp.Or(block.MIMEType, "image/png"), block.Data
 }
 
 func loadDocumentBlockPayload(block message.Block) (mimeType string, data string, name string) {
-	return defaultString(block.MIMEType, "application/pdf"), block.Data, defaultString(block.Name, "document.pdf")
+	return cmp.Or(block.MIMEType, "application/pdf"), block.Data, cmp.Or(block.Name, "document.pdf")
 }
 
 func decodeBase64(data string) []byte {

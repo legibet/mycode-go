@@ -3,6 +3,7 @@ package prompt
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -56,10 +57,11 @@ type Skill struct {
 func Build(cwd, home string) string {
 	resolvedCWD := absPath(cwd)
 	parts := []string{basePrompt}
-	for _, section := range []string{loadInstructions(resolvedCWD, home), loadSkills(resolvedCWD, home)} {
-		if section != "" {
-			parts = append(parts, section)
-		}
+	if section := loadInstructions(resolvedCWD, home); section != "" {
+		parts = append(parts, section)
+	}
+	if section := loadSkills(resolvedCWD, home); section != "" {
+		parts = append(parts, section)
 	}
 	parts = append(parts, "Current working directory: "+resolvedCWD+"\nCurrent date: "+time.Now().Format("2006-01"))
 	return strings.Join(parts, "\n\n")
@@ -161,14 +163,8 @@ func discoverSkills(cwd, home string) []Skill {
 		}
 	}
 
-	names := make([]string, 0, len(skillsByName))
-	for name := range skillsByName {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-
-	out := make([]Skill, 0, len(names))
-	for _, name := range names {
+	out := make([]Skill, 0, len(skillsByName))
+	for _, name := range slices.Sorted(maps.Keys(skillsByName)) {
 		out = append(out, skillsByName[name])
 	}
 	return out
@@ -288,7 +284,7 @@ func parseSkill(path, source, fallbackName string) (Skill, bool) {
 	}
 
 	description := strings.TrimSpace(asString(frontmatter["description"]))
-	if name == "" || description == "" {
+	if description == "" {
 		return Skill{}, false
 	}
 	return Skill{

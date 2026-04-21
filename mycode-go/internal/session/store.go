@@ -2,13 +2,15 @@ package session
 
 import (
 	"bufio"
+	"cmp"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -216,7 +218,7 @@ func (s *Store) CreateSession(sessionID, cwd string) (Data, error) {
 // ListSessions returns sessions sorted by updated_at descending.
 func (s *Store) ListSessions(cwd string) ([]Summary, error) {
 	entries, err := os.ReadDir(s.dataDir)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	filterCWD := absPath(cwd)
@@ -234,8 +236,8 @@ func (s *Store) ListSessions(cwd string) ([]Summary, error) {
 		}
 		out = append(out, summarize(entry.Name(), meta))
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].UpdatedAt > out[j].UpdatedAt
+	slices.SortFunc(out, func(a, b Summary) int {
+		return cmp.Compare(b.UpdatedAt, a.UpdatedAt)
 	})
 	return out, nil
 }
@@ -257,7 +259,7 @@ func (s *Store) LoadSession(sessionID string) (*Data, error) {
 
 	meta, err := s.readMeta(sessionID)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
@@ -291,7 +293,7 @@ func (s *Store) ClearSession(sessionID string) error {
 
 	meta, err := s.readMeta(sessionID)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return err
@@ -312,7 +314,7 @@ func (s *Store) AppendRewind(sessionID string, rewindTo int) error {
 
 	meta, err := s.readMeta(sessionID)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return err
@@ -339,7 +341,7 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string)
 
 	meta, err := s.readMeta(sessionID)
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 
@@ -448,7 +450,7 @@ func (s *Store) repairInterruptedToolLoop(sessionID string, meta *Meta, messages
 func (s *Store) readMessages(sessionID string) ([]message.Message, error) {
 	file, err := os.Open(s.messagesPath(sessionID))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err

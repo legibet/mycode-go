@@ -1,9 +1,10 @@
 package workspace
 
 import (
+	"cmp"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -24,10 +25,10 @@ type BrowseResult struct {
 
 // Roots returns allowed workspace roots.
 func Roots() []string {
-	raw := strings.TrimSpace(os.Getenv("MYCODE_WORKSPACE_ROOTS"))
-	if raw == "" {
-		raw = strings.TrimSpace(os.Getenv("WORKSPACE_ROOTS"))
-	}
+	raw := cmp.Or(
+		strings.TrimSpace(os.Getenv("MYCODE_WORKSPACE_ROOTS")),
+		strings.TrimSpace(os.Getenv("WORKSPACE_ROOTS")),
+	)
 	var values []string
 	if raw != "" {
 		values = strings.Split(raw, ",")
@@ -69,16 +70,10 @@ func Browse(root, relativePath string) BrowseResult {
 	if err != nil {
 		return BrowseResult{Root: root, Error: "Invalid root"}
 	}
-	allowed := ""
-	for _, candidate := range Roots() {
-		if requestedRoot == candidate {
-			allowed = candidate
-			break
-		}
-	}
-	if allowed == "" {
+	if !slices.Contains(Roots(), requestedRoot) {
 		return BrowseResult{Root: root, Error: "Invalid root"}
 	}
+	allowed := requestedRoot
 
 	target := filepath.Join(allowed, relativePath)
 	target, err = filepath.Abs(target)
@@ -117,8 +112,8 @@ func Browse(root, relativePath string) BrowseResult {
 		}
 		out = append(out, BrowseEntry{Name: entry.Name(), Path: filepath.ToSlash(rel)})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	slices.SortFunc(out, func(a, b BrowseEntry) int {
+		return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	})
 
 	relCurrent := ""

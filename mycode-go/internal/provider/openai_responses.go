@@ -3,10 +3,13 @@ package provider
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -89,13 +92,8 @@ func (a openAIResponsesAdapter) StreamTurn(ctx context.Context, req Request) <-c
 			return
 		}
 
-		keys := make([]int, 0, len(doneItems))
-		for k := range doneItems {
-			keys = append(keys, k)
-		}
-		slices.Sort(keys)
-		items := make([]responses.ResponseOutputItemUnion, 0, len(keys))
-		for _, idx := range keys {
+		items := make([]responses.ResponseOutputItemUnion, 0, len(doneItems))
+		for _, idx := range slices.Sorted(maps.Keys(doneItems)) {
 			items = append(items, doneItems[idx])
 		}
 		msg := a.convertResponse(*final, items)
@@ -112,7 +110,7 @@ func (a openAIResponsesAdapter) openStream(ctx context.Context, req Request) (*h
 		return nil, err
 	}
 
-	endpoint, err := url.JoinPath(defaultString(strings.TrimSpace(req.APIBase), a.Spec().DefaultBaseURL), "responses")
+	endpoint, err := url.JoinPath(cmp.Or(strings.TrimSpace(req.APIBase), a.Spec().DefaultBaseURL), "responses")
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +181,7 @@ func (a openAIResponsesAdapter) applyStreamEvent(raw []byte, doneItems map[int]r
 		if err := json.Unmarshal(raw, &event); err != nil {
 			return err
 		}
-		return fmt.Errorf("%s", strings.TrimSpace(event.Message))
+		return errors.New(strings.TrimSpace(event.Message))
 	case "response.failed":
 		var event responses.ResponseFailedEvent
 		if err := json.Unmarshal(raw, &event); err != nil {
@@ -193,7 +191,7 @@ func (a openAIResponsesAdapter) applyStreamEvent(raw []byte, doneItems map[int]r
 		if event.Response.Error.Message != "" {
 			msg = event.Response.Error.Message
 		}
-		return fmt.Errorf("%s", msg)
+		return errors.New(msg)
 	}
 	return nil
 }
@@ -395,11 +393,7 @@ func (a openAIResponsesAdapter) serializeTool(tool map[string]any) map[string]an
 	}
 	if properties != nil {
 		copied := dumpJSONMap(properties)
-		names := make([]string, 0, len(copied))
-		for name := range copied {
-			names = append(names, name)
-		}
-		slices.Sort(names)
+		names := slices.Sorted(maps.Keys(copied))
 		for name, rawSchema := range copied {
 			schema, ok := rawSchema.(map[string]any)
 			if !ok {
@@ -413,14 +407,10 @@ func (a openAIResponsesAdapter) serializeTool(tool map[string]any) map[string]an
 			case string:
 				schema["type"] = []any{fieldType, "null"}
 			case []any:
-				hasNull := false
-				for _, item := range fieldType {
-					if text, ok := item.(string); ok && text == "null" {
-						hasNull = true
-						break
-					}
-				}
-				if !hasNull {
+				if !slices.ContainsFunc(fieldType, func(item any) bool {
+					text, ok := item.(string)
+					return ok && text == "null"
+				}) {
 					schema["type"] = append(fieldType, "null")
 				}
 			default:
@@ -428,23 +418,16 @@ func (a openAIResponsesAdapter) serializeTool(tool map[string]any) map[string]an
 				continue
 			}
 			if enumValues, ok := schema["enum"].([]any); ok {
-				hasNull := false
-				for _, item := range enumValues {
-					if item == nil {
-						hasNull = true
-						break
-					}
-				}
-				if !hasNull {
+				if !slices.Contains(enumValues, any(nil)) {
 					schema["enum"] = append(enumValues, nil)
 				}
 			}
 			copied[name] = schema
 		}
 		parameters["properties"] = copied
-		requiredKeys := make([]any, 0, len(names))
-		for _, name := range names {
-			requiredKeys = append(requiredKeys, name)
+		requiredKeys := make([]any, len(names))
+		for i, name := range names {
+			requiredKeys[i] = name
 		}
 		parameters["required"] = requiredKeys
 	}
@@ -479,14 +462,14 @@ func (a openAIResponsesAdapter) convertResponse(response responses.Response, out
 					}
 				}
 			}
-			meta := map[string]any{"native": map[string]any{
+			native := map[string]any{
 				"item_id": variant.ID,
 				"status":  string(variant.Status),
-			}}
-			if summary := dumpJSON(variant.Summary); summary != nil {
-				meta["native"].(map[string]any)["summary"] = summary
 			}
-			blocks = append(blocks, message.ThinkingBlock(strings.Join(textParts, ""), meta))
+			if summary := dumpJSON(variant.Summary); summary != nil {
+				native["summary"] = summary
+			}
+			blocks = append(blocks, message.ThinkingBlock(strings.Join(textParts, ""), map[string]any{"native": native}))
 		case responses.ResponseOutputMessage:
 			for _, part := range variant.Content {
 				switch content := part.AsAny().(type) {
@@ -500,15 +483,15 @@ func (a openAIResponsesAdapter) convertResponse(response responses.Response, out
 			}
 		case responses.ResponseFunctionToolCall:
 			toolInput, err := tools.ParseToolArguments(variant.Arguments)
-			meta := map[string]any{"native": map[string]any{
+			native := map[string]any{
 				"item_id": variant.ID,
 				"status":  string(variant.Status),
-			}}
+			}
 			if err != nil {
-				meta["native"].(map[string]any)["raw_arguments"] = variant.Arguments
+				native["raw_arguments"] = variant.Arguments
 				toolInput = map[string]any{}
 			}
-			blocks = append(blocks, message.ToolUseBlock(variant.CallID, variant.Name, toolInput, meta))
+			blocks = append(blocks, message.ToolUseBlock(variant.CallID, variant.Name, toolInput, map[string]any{"native": native}))
 		}
 	}
 

@@ -1,9 +1,11 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/legibet/mycode-go/internal/message"
@@ -79,9 +81,7 @@ func (a openAIChatAdapter) StreamTurn(ctx context.Context, req Request) <-chan S
 			reasoningDelta, metaUpdate := extractChatReasoningDelta(delta.RawJSON())
 			if reasoningDelta != "" {
 				thinkingParts = append(thinkingParts, reasoningDelta)
-				for key, value := range metaUpdate {
-					thinkingMeta[key] = value
-				}
+				maps.Copy(thinkingMeta, metaUpdate)
 				out <- StreamEvent{Type: "thinking_delta", Text: reasoningDelta}
 			}
 
@@ -133,7 +133,7 @@ func (a openAIChatAdapter) StreamTurn(ctx context.Context, req Request) <-chan S
 				meta["native"] = map[string]any{"raw_arguments": state.ArgumentsText}
 				toolInput = map[string]any{}
 			}
-			blocks = append(blocks, message.ToolUseBlock(defaultString(state.ToolID, fmt.Sprintf("tool_call_%d", index)), state.Name, toolInput, meta))
+			blocks = append(blocks, message.ToolUseBlock(cmp.Or(state.ToolID, fmt.Sprintf("tool_call_%d", index)), state.Name, toolInput, meta))
 		}
 
 		msg := message.AssistantMessage(blocks, a.Spec().ID, responseModel, responseID, finishReason, usage, nil)
@@ -289,9 +289,7 @@ func (a openAIChatAdapter) serializeMessage(msg message.Message) []any {
 			payload["tool_calls"] = toolCalls
 		}
 		if len(thinkingBlocks) > 0 {
-			for key, value := range serializeChatReasoning(thinkingBlocks) {
-				payload[key] = value
-			}
+			maps.Copy(payload, serializeChatReasoning(thinkingBlocks))
 		}
 		return []any{payload}
 	default:

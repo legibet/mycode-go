@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -30,18 +30,6 @@ var validReasoningEfforts = []string{"none", "low", "medium", "high", "xhigh"}
 var lookupModelMetadata = models.Lookup
 
 var ErrUnsupportedReasoningEffort = errors.New("unsupported reasoning_effort")
-
-type unsupportedReasoningEffortError struct {
-	value string
-}
-
-func (e unsupportedReasoningEffortError) Error() string {
-	return fmt.Sprintf("unsupported reasoning_effort %q; supported: %s", e.value, strings.Join(validReasoningEfforts, ", "))
-}
-
-func (e unsupportedReasoningEffortError) Is(target error) bool {
-	return target == ErrUnsupportedReasoningEffort
-}
 
 // ModelConfig overrides bundled metadata for one model.
 type ModelConfig struct {
@@ -122,7 +110,7 @@ func ResolveSessionsDir() string {
 
 // FindWorkspaceRoot returns the nearest git root or cwd.
 func FindWorkspaceRoot(cwd string) string {
-	current := absPath(defaultString(cwd, mustGetwd()))
+	current := absPath(cmp.Or(cwd, mustGetwd()))
 	for {
 		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil {
 			return current
@@ -137,7 +125,7 @@ func FindWorkspaceRoot(cwd string) string {
 
 // Load returns merged config for one cwd.
 func Load(cwd string) (Settings, error) {
-	resolvedCWD := absPath(defaultString(cwd, mustGetwd()))
+	resolvedCWD := absPath(cmp.Or(cwd, mustGetwd()))
 	workspaceRoot := FindWorkspaceRoot(resolvedCWD)
 
 	settings := Settings{
@@ -186,7 +174,7 @@ func Load(cwd string) (Settings, error) {
 			for name := range rawProviders {
 				keys = append(keys, name)
 			}
-			sort.Strings(keys)
+			slices.Sort(keys)
 		}
 		for _, name := range keys {
 			entry, ok := rawProviders[name].(map[string]any)
@@ -349,41 +337,31 @@ func availableProviderReferences(settings Settings) []string {
 
 func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiBase, reasoningEffort string) (ResolvedProvider, error) {
 	configured, hasConfig := settings.Providers[selectedName]
-	providerType := selectedName
-	if hasConfig {
-		providerType = configured.Type
-	}
+	providerType := cmp.Or(configured.Type, selectedName)
 	spec, ok := provider.LookupSpec(providerType)
 	if !ok {
 		supported := []string{}
 		for _, candidate := range provider.Specs() {
 			supported = append(supported, candidate.ID)
 		}
-		sort.Strings(supported)
+		slices.Sort(supported)
 		return ResolvedProvider{}, fmt.Errorf("unsupported provider %q; supported: %s", providerType, strings.Join(supported, ", "))
 	}
 
 	resolvedModel := strings.TrimSpace(model)
-	if resolvedModel == "" {
-		if hasConfig && len(configured.Models) > 0 {
-			if len(configured.ModelOrder) > 0 {
-				resolvedModel = configured.ModelOrder[0]
-			} else {
-				modelNames := make([]string, 0, len(configured.Models))
-				for name := range configured.Models {
-					modelNames = append(modelNames, name)
-				}
-				sort.Strings(modelNames)
-				resolvedModel = modelNames[0]
-			}
-		} else if selectedName == settings.DefaultProvider && strings.TrimSpace(settings.DefaultModel) != "" {
-			resolvedModel = strings.TrimSpace(settings.DefaultModel)
-		} else {
-			if len(spec.DefaultModels) == 0 {
-				return ResolvedProvider{}, fmt.Errorf("provider %q does not define any default models", selectedName)
-			}
-			resolvedModel = spec.DefaultModels[0]
-		}
+	switch {
+	case resolvedModel != "":
+		// already set by request
+	case hasConfig && len(configured.Models) > 0 && len(configured.ModelOrder) > 0:
+		resolvedModel = configured.ModelOrder[0]
+	case hasConfig && len(configured.Models) > 0:
+		resolvedModel = slices.Sorted(maps.Keys(configured.Models))[0]
+	case selectedName == settings.DefaultProvider && strings.TrimSpace(settings.DefaultModel) != "":
+		resolvedModel = strings.TrimSpace(settings.DefaultModel)
+	case len(spec.DefaultModels) > 0:
+		resolvedModel = spec.DefaultModels[0]
+	default:
+		return ResolvedProvider{}, fmt.Errorf("provider %q does not define any default models", selectedName)
 	}
 
 	meta := resolveMetadata(providerType, resolvedModel, hasConfig, configured)
@@ -393,53 +371,47 @@ func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiB
 
 	// Request values win, then provider config, then global defaults.
 	configuredEffort := normalizeReasoningEffort(reasoningEffort)
-	if configuredEffort == "" {
-		if hasConfig && configured.ReasoningEffort != "" {
-			configuredEffort = normalizeReasoningEffort(configured.ReasoningEffort)
-		} else if settings.DefaultReasoningEffort != "" {
-			configuredEffort = normalizeReasoningEffort(settings.DefaultReasoningEffort)
-		}
+	switch {
+	case configuredEffort != "":
+		// from request
+	case hasConfig && configured.ReasoningEffort != "":
+		configuredEffort = normalizeReasoningEffort(configured.ReasoningEffort)
+	case settings.DefaultReasoningEffort != "":
+		configuredEffort = normalizeReasoningEffort(settings.DefaultReasoningEffort)
 	}
 	if configuredEffort != "" {
 		if !slices.Contains(validReasoningEfforts, configuredEffort) {
-			return ResolvedProvider{}, unsupportedReasoningEffortError{value: configuredEffort}
+			return ResolvedProvider{}, fmt.Errorf("%w %q; supported: %s",
+				ErrUnsupportedReasoningEffort, configuredEffort, strings.Join(validReasoningEfforts, ", "))
 		}
 		if !supportsReasoning || !spec.SupportsReasoningEffort {
 			configuredEffort = ""
 		}
 	}
 
-	resolvedAPIBase := strings.TrimSpace(apiBase)
-	if resolvedAPIBase == "" {
-		if hasConfig {
-			resolvedAPIBase = strings.TrimSpace(configured.BaseURL)
-		}
-		if resolvedAPIBase == "" {
-			resolvedAPIBase = spec.DefaultBaseURL
-		}
-	}
+	resolvedAPIBase := cmp.Or(
+		strings.TrimSpace(apiBase),
+		strings.TrimSpace(configured.BaseURL),
+		spec.DefaultBaseURL,
+	)
 
 	resolvedAPIKey := strings.TrimSpace(apiKey)
-	if resolvedAPIKey == "" {
-		if hasConfig {
-			if configured.APIKeyEnvVar != "" {
-				resolvedAPIKey = strings.TrimSpace(os.Getenv(configured.APIKeyEnvVar))
-				if resolvedAPIKey == "" {
-					return ResolvedProvider{}, fmt.Errorf("missing API key env var %q referenced by provider %q", configured.APIKeyEnvVar, selectedName)
-				}
-			} else if configured.APIKey != "" {
-				resolvedAPIKey = configured.APIKey
-			}
-		}
+	switch {
+	case resolvedAPIKey != "":
+		// from request
+	case hasConfig && configured.APIKeyEnvVar != "":
+		resolvedAPIKey = strings.TrimSpace(os.Getenv(configured.APIKeyEnvVar))
 		if resolvedAPIKey == "" {
-			resolvedAPIKey = apiKeyFromEnv(providerType)
+			return ResolvedProvider{}, fmt.Errorf("missing API key env var %q referenced by provider %q", configured.APIKeyEnvVar, selectedName)
 		}
+	case hasConfig && configured.APIKey != "":
+		resolvedAPIKey = configured.APIKey
 	}
 	if resolvedAPIKey == "" {
-		checked := strings.Join(spec.EnvAPIKeyNames, ", ")
-		if checked == "" {
-			checked = "<api key env>"
-		}
+		resolvedAPIKey = apiKeyFromEnv(providerType)
+	}
+	if resolvedAPIKey == "" {
+		checked := cmp.Or(strings.Join(spec.EnvAPIKeyNames, ", "), "<api key env>")
 		return ResolvedProvider{}, fmt.Errorf("provider %q is selected but no API key is available; checked: %s", selectedName, checked)
 	}
 
@@ -568,7 +540,7 @@ func normalizeModels(raw any, order []string) (map[string]ModelConfig, []string)
 			extra = append(extra, name)
 		}
 	}
-	sort.Strings(extra)
+	slices.Sort(extra)
 	keys = append(keys, extra...)
 	for _, name := range keys {
 		rawConfig, _ := modelMap[name].(map[string]any)
@@ -770,13 +742,6 @@ func asBoolPtr(value any) *bool {
 		return &v
 	}
 	return nil
-}
-
-func defaultString(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return value
 }
 
 func mustGetwd() string {
