@@ -14,6 +14,19 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 		return errorResult("error: edits must not be empty")
 	}
 
+	type editSpec struct {
+		oldText string
+		newText string
+		prefix  string
+		index   int
+	}
+	type match struct {
+		start   int
+		end     int
+		newText string
+		index   int
+	}
+
 	filePath := ResolvePath(path, e.cwd)
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -27,6 +40,7 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 	}
 
 	multi := len(edits) > 1
+	items := make([]editSpec, 0, len(edits))
 	for i, edit := range edits {
 		oldText := edit["oldText"]
 		newText := edit["newText"]
@@ -40,6 +54,7 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 		if oldText == newText {
 			return errorResult("error: " + prefix + "oldText and newText are identical")
 		}
+		items = append(items, editSpec{oldText: oldText, newText: newText, prefix: prefix, index: i})
 	}
 
 	readMTime := info.ModTime().UnixNano()
@@ -53,54 +68,42 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 		newline = "\r\n"
 	}
 
-	type match struct {
-		start   int
-		end     int
-		newText string
-		index   int
-	}
-
-	matches := make([]match, 0, len(edits))
+	matches := make([]match, 0, len(items))
 	var normalizedText string
 	var indexMap []int
+	normalizedLoaded := false
 
-	for i, edit := range edits {
-		oldText := edit["oldText"]
-		newText := edit["newText"]
-		prefix := ""
-		if multi {
-			prefix = fmt.Sprintf("edits[%d]: ", i)
+	for _, edit := range items {
+		exactCount := strings.Count(text, edit.oldText)
+		if exactCount > 1 {
+			return errorResult(fmt.Sprintf("error: %soldText occurs %d times; provide a more specific oldText", edit.prefix, exactCount))
 		}
-
-		exactCount := strings.Count(text, oldText)
-		switch {
-		case exactCount == 1:
-			start := strings.Index(text, oldText)
+		if exactCount == 1 {
+			start := strings.Index(text, edit.oldText)
 			matches = append(matches, match{
 				start:   start,
-				end:     start + len(oldText),
-				newText: newText,
-				index:   i,
+				end:     start + len(edit.oldText),
+				newText: edit.newText,
+				index:   edit.index,
 			})
 			continue
-		case exactCount > 1:
-			return errorResult(fmt.Sprintf("error: %soldText occurs %d times; provide a more specific oldText", prefix, exactCount))
 		}
 
-		if normalizedText == "" && indexMap == nil {
+		if !normalizedLoaded {
 			normalizedText, indexMap = normalizeText(text)
+			normalizedLoaded = true
 		}
-		normalizedOld, _ := normalizeText(oldText)
+		normalizedOld, _ := normalizeText(edit.oldText)
 		normalizedCount := strings.Count(normalizedText, normalizedOld)
-		switch {
-		case normalizedCount == 0:
-			modelText := "error: " + prefix + "oldText not found"
-			if hint := closestLineHint(text, oldText); hint != "" {
+		if normalizedCount > 1 {
+			return errorResult(fmt.Sprintf("error: %soldText occurs %d times after normalization; provide a more specific oldText", edit.prefix, normalizedCount))
+		}
+		if normalizedCount == 0 {
+			modelText := "error: " + edit.prefix + "oldText not found"
+			if hint := closestLineHint(text, edit.oldText); hint != "" {
 				modelText += ". closest line: " + hint
 			}
 			return errorResult(modelText)
-		case normalizedCount > 1:
-			return errorResult(fmt.Sprintf("error: %soldText occurs %d times after normalization; provide a more specific oldText", prefix, normalizedCount))
 		}
 
 		start := strings.Index(normalizedText, normalizedOld)
@@ -113,8 +116,8 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 		matches = append(matches, match{
 			start:   origStart,
 			end:     origEnd,
-			newText: newText,
-			index:   i,
+			newText: edit.newText,
+			index:   edit.index,
 		})
 	}
 
@@ -178,8 +181,8 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 	}
 
 	summary := "Updated " + path
-	if len(edits) > 1 {
-		summary = fmt.Sprintf("Updated %s (%d edits)", path, len(edits))
+	if len(items) > 1 {
+		summary = fmt.Sprintf("Updated %s (%d edits)", path, len(items))
 	}
 	return Result{
 		Output:   summary,

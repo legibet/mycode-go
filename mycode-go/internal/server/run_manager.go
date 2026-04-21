@@ -39,6 +39,22 @@ type runSnapshot struct {
 	PendingEvents []map[string]any
 }
 
+type runEvent struct {
+	seq  int
+	typ  string
+	data map[string]any
+}
+
+func (e runEvent) payload() map[string]any {
+	payload := maps.Clone(e.data)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["seq"] = e.seq
+	payload["type"] = e.typ
+	return payload
+}
+
 type runState struct {
 	id           string
 	sessionID    string
@@ -49,7 +65,7 @@ type runState struct {
 	mu         sync.RWMutex
 	status     runStatus
 	errorText  string
-	events     []map[string]any
+	events     []runEvent
 	nextSeq    int
 	finishedAt time.Time
 	cancel     context.CancelFunc
@@ -96,13 +112,8 @@ func (r *runState) appendEvent(event agentpkg.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	payload := maps.Clone(event.Data)
-	if payload == nil {
-		payload = map[string]any{}
-	}
-	payload["seq"] = r.nextSeq
-	payload["type"] = event.Type
 	r.nextSeq++
-	r.events = append(r.events, payload)
+	r.events = append(r.events, runEvent{seq: r.nextSeq - 1, typ: event.Type, data: payload})
 }
 
 func (r *runState) finish(status runStatus, errText string) {
@@ -118,9 +129,8 @@ func (r *runState) pendingAfter(after int) ([]map[string]any, bool) {
 	defer r.mu.RUnlock()
 	var pending []map[string]any
 	for _, event := range r.events {
-		seq, _ := event["seq"].(int)
-		if seq > after {
-			pending = append(pending, maps.Clone(event))
+		if event.seq > after {
+			pending = append(pending, event.payload())
 		}
 	}
 	return pending, r.status != runStatusRunning
@@ -138,7 +148,7 @@ func (r *runState) snapshot() runSnapshot {
 
 	events := make([]map[string]any, 0, len(r.events))
 	for _, event := range r.events {
-		events = append(events, maps.Clone(event))
+		events = append(events, event.payload())
 	}
 
 	return runSnapshot{

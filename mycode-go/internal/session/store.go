@@ -205,11 +205,10 @@ func (s *Store) CreateSession(sessionID, cwd string) (Data, error) {
 	if err := s.writeMeta(data.Session.ID, data.Session.Meta); err != nil {
 		return Data{}, err
 	}
-	file, err := os.OpenFile(s.messagesPath(data.Session.ID), os.O_CREATE, 0o644)
-	if err == nil {
-		_ = file.Close()
+	if err := os.WriteFile(s.messagesPath(data.Session.ID), nil, 0o644); err != nil {
+		return Data{}, err
 	}
-	return data, err
+	return data, nil
 }
 
 // ListSessions returns sessions sorted by updated_at descending.
@@ -341,6 +340,7 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string)
 		if !os.IsNotExist(err) {
 			return err
 		}
+
 		nowValue := now()
 		meta = Meta{
 			CWD:                  absPath(cwd),
@@ -354,6 +354,7 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string)
 	if err := appendJSONL(s.messagesPath(sessionID), msg); err != nil {
 		return err
 	}
+
 	meta.UpdatedAt = now()
 	if meta.Title == DefaultSessionTitle && msg.Role == "user" {
 		if title := strings.TrimSpace(message.FlattenText(msg, false)); title != "" {
@@ -373,7 +374,7 @@ func (s *Store) SessionDir(sessionID string) string {
 
 func (s *Store) repairInterruptedToolLoop(sessionID string, meta *Meta, messages *[]message.Message) error {
 	visible := *messages
-	pendingIDs := []string{}
+	pendingIDs := make([]string, 0)
 	pendingIndex := -1
 	for i := len(visible) - 1; i >= 0; i-- {
 		msg := visible[i]
@@ -390,25 +391,26 @@ func (s *Store) repairInterruptedToolLoop(sessionID string, meta *Meta, messages
 			break
 		}
 	}
+
 	if pendingIndex == -1 {
 		return nil
 	}
 
-	completed := map[string]struct{}{}
+	completedIDs := map[string]struct{}{}
 	for _, msg := range visible[pendingIndex+1:] {
 		if msg.Role != "user" {
 			continue
 		}
 		for _, block := range msg.Content {
 			if block.Type == "tool_result" && block.ToolUseID != "" {
-				completed[block.ToolUseID] = struct{}{}
+				completedIDs[block.ToolUseID] = struct{}{}
 			}
 		}
 	}
 
 	missing := make([]string, 0, len(pendingIDs))
 	for _, id := range pendingIDs {
-		if _, ok := completed[id]; !ok {
+		if _, ok := completedIDs[id]; !ok {
 			missing = append(missing, id)
 		}
 	}
@@ -416,9 +418,9 @@ func (s *Store) repairInterruptedToolLoop(sessionID string, meta *Meta, messages
 		return nil
 	}
 
-	repair := message.BuildMessage("user", nil, nil)
+	repairBlocks := make([]message.Block, 0, len(missing))
 	for _, id := range missing {
-		repair.Content = append(repair.Content, message.ToolResultBlock(
+		repairBlocks = append(repairBlocks, message.ToolResultBlock(
 			id,
 			"error: tool call was interrupted",
 			nil,
@@ -427,13 +429,16 @@ func (s *Store) repairInterruptedToolLoop(sessionID string, meta *Meta, messages
 			nil,
 		))
 	}
+	repair := message.BuildMessage("user", repairBlocks, nil)
 	if err := appendJSONL(s.messagesPath(sessionID), repair); err != nil {
 		return err
 	}
+
 	meta.UpdatedAt = now()
 	if err := s.writeMeta(sessionID, *meta); err != nil {
 		return err
 	}
+
 	*messages = append(*messages, repair)
 	return nil
 }
@@ -451,10 +456,9 @@ func (s *Store) readMessages(sessionID string) ([]message.Message, error) {
 	}()
 
 	scanner := bufio.NewScanner(file)
-	buffer := make([]byte, 0, 64*1024)
-	scanner.Buffer(buffer, 10*1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
-	out := []message.Message{}
+	out := make([]message.Message, 0)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {

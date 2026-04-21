@@ -6,10 +6,10 @@ Authoritative context for agent runs. Keep this file in sync with the Go code.
 
 `mycode-go` is a personal minimal coding agent with a web UI and a small CLI. It keeps `.mycode` config and session compatibility with the original Python version.
 
-This branch is the Go rewrite of the Python backend of `main` branch. It tracks Python `main` externally, not structurally:
+This branch is the Go rewrite of the Python backend of `main` branch. It tracks the Python `main` branch but is not a line-by-line port:
 
 - `web/` is synced directly from Python `main` by cherry-picking web commits.
-- Go backend code mirrors Python `mycode-cli` / `mycode-sdk` external behavior and disk/API contracts.
+- Go backend code mirrors Python `mycode-cli` / `mycode-sdk` external behavior and disk/API contracts, but should be implemented idiomatically in Go and may have a different internal structure.
 - Go backend code does not need to copy Python's package split or internal architecture.
 
 Priorities:

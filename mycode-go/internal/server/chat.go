@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,22 +44,27 @@ type chatRequest struct {
 }
 
 func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
+	fail := func(status int, detail any) {
+		writeDetailError(w, status, detail)
+	}
+
 	var req chatRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeDetailError(w, http.StatusBadRequest, err.Error())
+		fail(http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.Message != "" && len(req.Input) > 0 {
-		writeDetailError(w, http.StatusBadRequest, "message and input are mutually exclusive")
+		fail(http.StatusBadRequest, "message and input are mutually exclusive")
 		return
 	}
 
 	cwd := requestCWD(req.CWD)
 	settings, err := config.Load(cwd)
 	if err != nil {
-		writeDetailError(w, http.StatusInternalServerError, err.Error())
+		fail(http.StatusInternalServerError, err.Error())
 		return
 	}
+
 	resolved, err := config.ResolveProvider(
 		settings,
 		req.Provider,
@@ -68,21 +74,21 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 		req.ReasoningEffort,
 	)
 	if err != nil {
-		if strings.Contains(err.Error(), "unsupported reasoning_effort") {
-			writeDetailError(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, config.ErrUnsupportedReasoningEffort) {
+			fail(http.StatusBadRequest, err.Error())
 			return
 		}
-		writeDetailError(w, http.StatusInternalServerError, err.Error())
+		fail(http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	userMessage, err := buildUserMessage(req, cwd)
 	if err != nil {
-		writeDetailError(w, http.StatusBadRequest, err.Error())
+		fail(http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := validateUserMessage(userMessage, resolved); err != nil {
-		writeDetailError(w, http.StatusBadRequest, err.Error())
+		fail(http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -93,7 +99,7 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	data, err := a.store.LoadSession(sessionID)
 	if err != nil {
-		writeDetailError(w, http.StatusInternalServerError, err.Error())
+		fail(http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -104,12 +110,12 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 		baseMessages = append(baseMessages, data.Messages...)
 	} else {
 		if req.RewindTo != nil {
-			writeDetailError(w, http.StatusBadRequest, "rewind_to requires an existing session")
+			fail(http.StatusBadRequest, "rewind_to requires an existing session")
 			return
 		}
 		created, err := a.store.CreateSession(sessionID, cwd)
 		if err != nil {
-			writeDetailError(w, http.StatusInternalServerError, err.Error())
+			fail(http.StatusInternalServerError, err.Error())
 			return
 		}
 		sessionMeta = created.Session
@@ -118,21 +124,17 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 	if req.RewindTo != nil {
 		rewindTo := *req.RewindTo
 		if rewindTo < 0 || rewindTo >= len(baseMessages) {
-			writeDetailError(
-				w,
-				http.StatusBadRequest,
-				fmt.Sprintf("rewind_to must reference a visible message index between 0 and %d", len(baseMessages)-1),
-			)
+			fail(http.StatusBadRequest, fmt.Sprintf("rewind_to must reference a visible message index between 0 and %d", len(baseMessages)-1))
 			return
 		}
 		target := baseMessages[rewindTo]
 		if !isRealUserMessage(target) {
-			writeDetailError(w, http.StatusBadRequest, "rewind_to must reference a real user message")
+			fail(http.StatusBadRequest, "rewind_to must reference a real user message")
 			return
 		}
 		baseMessages = baseMessages[:rewindTo]
 		if err := a.store.AppendRewind(sessionID, rewindTo); err != nil {
-			writeDetailError(w, http.StatusInternalServerError, err.Error())
+			fail(http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
@@ -154,25 +156,24 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 		SupportsPDFInput:   resolved.SupportsPDFInput,
 	})
 	if err != nil {
-		writeDetailError(w, http.StatusInternalServerError, err.Error())
+		fail(http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	onPersist := func(msg message.Message) error {
+	run, err := a.runs.startRun(sessionID, userMessage, baseMessages, agent, func(msg message.Message) error {
 		return a.store.AppendMessage(sessionID, msg, cwd)
-	}
-
-	run, err := a.runs.startRun(sessionID, userMessage, baseMessages, agent, onPersist)
+	})
 	if err != nil {
-		if activeErr, ok := err.(activeRunError); ok {
+		var activeErr activeRunError
+		if errors.As(err, &activeErr) {
 			detail := map[string]any{"message": "session already has a running task"}
 			if existing := a.runs.getRun(activeErr.RunID); existing != nil {
 				detail["run"] = existing.info()
 			}
-			writeDetailError(w, http.StatusConflict, detail)
+			fail(http.StatusConflict, detail)
 			return
 		}
-		writeDetailError(w, http.StatusInternalServerError, err.Error())
+		fail(http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -337,56 +338,52 @@ func (a *app) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildUserMessage(req chatRequest, cwd string) (message.Message, error) {
-	if len(req.Input) > 0 {
-		blocks := make([]message.Block, 0, len(req.Input))
-		for _, block := range req.Input {
-			switch block.Type {
-			case "text":
-				text := block.Text
-				if block.IsAttachment {
-					name := strings.TrimSpace(block.Name)
-					if name == "" {
-						name = "attached-file"
-					}
-					blocks = append(blocks, message.TextBlock(
-						fmt.Sprintf("<file name=\"%s\">\n%s\n</file>", escapeAttachmentAttr(name), text),
-						map[string]any{"attachment": true, "path": name},
-					))
-					continue
-				}
-				if text != "" {
-					blocks = append(blocks, message.TextBlock(text, nil))
-				}
+	if len(req.Input) == 0 {
+		text := strings.TrimSpace(req.Message)
+		if text == "" {
+			return message.Message{}, fmt.Errorf("message or input is required")
+		}
+		return message.UserTextMessage(text, nil), nil
+	}
 
-			case "document":
-				document, err := buildDocumentBlock(block, cwd)
-				if err != nil {
-					return message.Message{}, err
-				}
-				blocks = append(blocks, document)
+	blocks := make([]message.Block, 0, len(req.Input))
+	for _, input := range req.Input {
+		var block message.Block
+		var err error
 
-			case "image":
-				image, err := buildImageBlock(block, cwd)
-				if err != nil {
-					return message.Message{}, err
+		switch input.Type {
+		case "text":
+			if input.IsAttachment {
+				name := strings.TrimSpace(input.Name)
+				if name == "" {
+					name = "attached-file"
 				}
-				blocks = append(blocks, image)
-
-			default:
-				return message.Message{}, fmt.Errorf("unsupported input block type: %s", block.Type)
+				block = message.TextBlock(
+					fmt.Sprintf("<file name=\"%s\">\n%s\n</file>", escapeAttachmentAttr(name), input.Text),
+					map[string]any{"attachment": true, "path": name},
+				)
+			} else if input.Text == "" {
+				continue
+			} else {
+				block = message.TextBlock(input.Text, nil)
 			}
+		case "document":
+			block, err = buildDocumentBlock(input, cwd)
+		case "image":
+			block, err = buildImageBlock(input, cwd)
+		default:
+			return message.Message{}, fmt.Errorf("unsupported input block type: %s", input.Type)
 		}
-		if len(blocks) == 0 {
-			return message.Message{}, fmt.Errorf("input must include at least one non-empty block")
-		}
-		return message.BuildMessage("user", blocks, nil), nil
-	}
 
-	text := strings.TrimSpace(req.Message)
-	if text == "" {
-		return message.Message{}, fmt.Errorf("message or input is required")
+		if err != nil {
+			return message.Message{}, err
+		}
+		blocks = append(blocks, block)
 	}
-	return message.UserTextMessage(text, nil), nil
+	if len(blocks) == 0 {
+		return message.Message{}, fmt.Errorf("input must include at least one non-empty block")
+	}
+	return message.BuildMessage("user", blocks, nil), nil
 }
 
 func buildImageBlock(block chatInputBlock, cwd string) (message.Block, error) {
@@ -396,15 +393,12 @@ func buildImageBlock(block chatInputBlock, cwd string) (message.Block, error) {
 		}
 		return message.ImageBlock(block.Data, block.MIMEType, defaultString(block.Name, "image"), nil), nil
 	}
-	if strings.TrimSpace(block.Path) == "" {
-		return message.Block{}, fmt.Errorf("image input requires path or data")
+
+	resolvedPath, data, err := readInputFile(block, cwd, "image")
+	if err != nil {
+		return message.Block{}, err
 	}
 
-	resolvedPath := tools.ResolvePath(block.Path, cwd)
-	info, err := os.Stat(resolvedPath)
-	if err != nil || info.IsDir() {
-		return message.Block{}, fmt.Errorf("image file not found: %s", block.Path)
-	}
 	mimeType := strings.TrimSpace(block.MIMEType)
 	if mimeType == "" {
 		mimeType = tools.DetectImageMIMEType(resolvedPath)
@@ -413,10 +407,6 @@ func buildImageBlock(block chatInputBlock, cwd string) (message.Block, error) {
 		return message.Block{}, fmt.Errorf("unsupported image file: %s", block.Path)
 	}
 
-	data, err := os.ReadFile(resolvedPath)
-	if err != nil {
-		return message.Block{}, fmt.Errorf("failed to read image file: %w", err)
-	}
 	return message.ImageBlock(
 		base64.StdEncoding.EncodeToString(data),
 		mimeType,
@@ -433,15 +423,12 @@ func buildDocumentBlock(block chatInputBlock, cwd string) (message.Block, error)
 		}
 		return message.DocumentBlock(block.Data, mimeType, defaultString(block.Name, "document.pdf"), nil), nil
 	}
-	if strings.TrimSpace(block.Path) == "" {
-		return message.Block{}, fmt.Errorf("document input requires path or data")
+
+	resolvedPath, data, err := readInputFile(block, cwd, "document")
+	if err != nil {
+		return message.Block{}, err
 	}
 
-	resolvedPath := tools.ResolvePath(block.Path, cwd)
-	info, err := os.Stat(resolvedPath)
-	if err != nil || info.IsDir() {
-		return message.Block{}, fmt.Errorf("document file not found: %s", block.Path)
-	}
 	mimeType := strings.TrimSpace(block.MIMEType)
 	if mimeType == "" {
 		mimeType = tools.DetectDocumentMIMEType(resolvedPath)
@@ -450,16 +437,30 @@ func buildDocumentBlock(block chatInputBlock, cwd string) (message.Block, error)
 		return message.Block{}, fmt.Errorf("unsupported document file: %s", block.Path)
 	}
 
-	data, err := os.ReadFile(resolvedPath)
-	if err != nil {
-		return message.Block{}, fmt.Errorf("failed to read document file: %w", err)
-	}
 	return message.DocumentBlock(
 		base64.StdEncoding.EncodeToString(data),
 		mimeType,
 		defaultString(block.Name, filepath.Base(resolvedPath)),
 		nil,
 	), nil
+}
+
+func readInputFile(block chatInputBlock, cwd, kind string) (string, []byte, error) {
+	if strings.TrimSpace(block.Path) == "" {
+		return "", nil, fmt.Errorf("%s input requires path or data", kind)
+	}
+
+	resolvedPath := tools.ResolvePath(block.Path, cwd)
+	info, err := os.Stat(resolvedPath)
+	if err != nil || info.IsDir() {
+		return "", nil, fmt.Errorf("%s file not found: %s", kind, block.Path)
+	}
+
+	data, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to read %s file: %w", kind, err)
+	}
+	return resolvedPath, data, nil
 }
 
 func validateUserMessage(userMessage message.Message, resolved config.ResolvedProvider) error {

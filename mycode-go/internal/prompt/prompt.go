@@ -57,11 +57,10 @@ type Skill struct {
 func Build(cwd, home string) string {
 	resolvedCWD := absPath(cwd)
 	parts := []string{basePrompt}
-	if instructions := loadInstructions(resolvedCWD, home); instructions != "" {
-		parts = append(parts, instructions)
-	}
-	if skills := loadSkills(resolvedCWD, home); skills != "" {
-		parts = append(parts, skills)
+	for _, section := range []string{loadInstructions(resolvedCWD, home), loadSkills(resolvedCWD, home)} {
+		if section != "" {
+			parts = append(parts, section)
+		}
 	}
 	parts = append(parts, "Current working directory: "+resolvedCWD+"\nCurrent date: "+time.Now().Format("2006-01"))
 	return strings.Join(parts, "\n\n")
@@ -141,16 +140,20 @@ func discoverSkills(cwd, home string) []Skill {
 
 	skillsByName := map[string]Skill{}
 	seenPaths := map[string]struct{}{}
+	addSkill := func(skill Skill) {
+		if _, seen := seenPaths[skill.Path]; seen {
+			return
+		}
+		seenPaths[skill.Path] = struct{}{}
+		if prev, ok := skillsByName[skill.Name]; ok {
+			slog.Debug("skill overridden", "name", skill.Name, "new", skill.Path, "prev", prev.Path)
+		}
+		skillsByName[skill.Name] = skill
+	}
+
 	for _, root := range roots {
 		for _, skill := range scanSkillRoot(root.path, root.source) {
-			if _, ok := seenPaths[skill.Path]; ok {
-				continue
-			}
-			seenPaths[skill.Path] = struct{}{}
-			if prev, ok := skillsByName[skill.Name]; ok {
-				slog.Debug("skill overridden", "name", skill.Name, "new", skill.Path, "prev", prev.Path)
-			}
-			skillsByName[skill.Name] = skill
+			addSkill(skill)
 		}
 	}
 
@@ -183,16 +186,31 @@ func scanSkillRoot(root, source string) []Skill {
 
 	skills := []Skill{}
 	seenPaths := map[string]struct{}{}
+	addSkill := func(path, fallbackName string) {
+		skill, ok := parseSkill(path, source, fallbackName)
+		if !ok {
+			return
+		}
+		if _, seen := seenPaths[skill.Path]; seen {
+			return
+		}
+		seenPaths[skill.Path] = struct{}{}
+		skills = append(skills, skill)
+	}
+	shouldScanDir := func(entry os.DirEntry) bool {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			return false
+		}
+		if _, skip := skipDirs[entry.Name()]; skip {
+			return false
+		}
+		info, err := entry.Info()
+		return err == nil && info.Mode()&os.ModeSymlink == 0
+	}
+
 	for _, entry := range rootEntries {
 		if entry.Type().IsRegular() && filepath.Ext(entry.Name()) == ".md" {
-			path := filepath.Join(root, entry.Name())
-			skill, ok := parseSkill(path, source, strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())))
-			if ok {
-				if _, seen := seenPaths[skill.Path]; !seen {
-					seenPaths[skill.Path] = struct{}{}
-					skills = append(skills, skill)
-				}
-			}
+			addSkill(filepath.Join(root, entry.Name()), strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())))
 		}
 	}
 
@@ -202,17 +220,7 @@ func scanSkillRoot(root, source string) []Skill {
 	}
 	queue := []pendingDir{}
 	for _, entry := range rootEntries {
-		if !entry.IsDir() {
-			continue
-		}
-		if strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		if _, skip := skipDirs[entry.Name()]; skip {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		if !shouldScanDir(entry) {
 			continue
 		}
 		queue = append(queue, pendingDir{path: filepath.Join(root, entry.Name()), depth: 1})
@@ -224,13 +232,7 @@ func scanSkillRoot(root, source string) []Skill {
 		queue = queue[1:]
 		dirsScanned++
 
-		skillPath := filepath.Join(current.path, "SKILL.md")
-		if skill, ok := parseSkill(skillPath, source, filepath.Base(current.path)); ok {
-			if _, seen := seenPaths[skill.Path]; !seen {
-				seenPaths[skill.Path] = struct{}{}
-				skills = append(skills, skill)
-			}
-		}
+		addSkill(filepath.Join(current.path, "SKILL.md"), filepath.Base(current.path))
 
 		if current.depth >= maxScanDepth {
 			continue
@@ -244,17 +246,7 @@ func scanSkillRoot(root, source string) []Skill {
 			return strings.Compare(a.Name(), b.Name())
 		})
 		for _, child := range children {
-			if !child.IsDir() {
-				continue
-			}
-			if strings.HasPrefix(child.Name(), ".") {
-				continue
-			}
-			if _, skip := skipDirs[child.Name()]; skip {
-				continue
-			}
-			info, err := child.Info()
-			if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			if !shouldScanDir(child) {
 				continue
 			}
 			queue = append(queue, pendingDir{
@@ -278,15 +270,14 @@ func parseSkill(path, source, fallbackName string) (Skill, bool) {
 		return Skill{}, false
 	}
 
-	name := ""
-	for _, candidate := range []string{asString(frontmatter["name"]), fallbackName} {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" || len(candidate) > nameMaxLen || !namePattern.MatchString(candidate) {
-			continue
-		}
-		name = candidate
-		break
+	name := strings.TrimSpace(asString(frontmatter["name"]))
+	if name == "" {
+		name = strings.TrimSpace(fallbackName)
 	}
+	if name == "" || len(name) > nameMaxLen || !namePattern.MatchString(name) {
+		return Skill{}, false
+	}
+
 	description := strings.TrimSpace(asString(frontmatter["description"]))
 	if name == "" || description == "" {
 		return Skill{}, false

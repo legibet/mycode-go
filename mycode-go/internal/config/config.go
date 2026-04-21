@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -27,6 +28,20 @@ const (
 var validReasoningEfforts = []string{"none", "low", "medium", "high", "xhigh"}
 
 var lookupModelMetadata = models.Lookup
+
+var ErrUnsupportedReasoningEffort = errors.New("unsupported reasoning_effort")
+
+type unsupportedReasoningEffortError struct {
+	value string
+}
+
+func (e unsupportedReasoningEffortError) Error() string {
+	return fmt.Sprintf("unsupported reasoning_effort %q; supported: %s", e.value, strings.Join(validReasoningEfforts, ", "))
+}
+
+func (e unsupportedReasoningEffortError) Is(target error) bool {
+	return target == ErrUnsupportedReasoningEffort
+}
 
 // ModelConfig overrides bundled metadata for one model.
 type ModelConfig struct {
@@ -235,13 +250,14 @@ func ResolveProvider(settings Settings, providerName, model, apiKey, apiBase, re
 	if selected == "" {
 		selected = strings.TrimSpace(settings.DefaultProvider)
 	}
+	if selected == "" {
+		available := availableProviderReferences(settings)
+		if len(available) > 0 {
+			selected = available[0]
+		}
+	}
 	if selected != "" {
 		return resolveProviderRuntime(settings, selected, model, apiKey, apiBase, reasoningEffort)
-	}
-
-	available := availableProviderReferences(settings)
-	if len(available) > 0 {
-		return resolveProviderRuntime(settings, available[0], model, apiKey, apiBase, reasoningEffort)
 	}
 
 	envNames := []string{}
@@ -348,24 +364,26 @@ func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiB
 	}
 
 	resolvedModel := strings.TrimSpace(model)
-	if resolvedModel == "" && hasConfig && len(configured.Models) > 0 {
-		models := append([]string(nil), configured.ModelOrder...)
-		if len(models) == 0 {
-			for name := range configured.Models {
-				models = append(models, name)
-			}
-			sort.Strings(models)
-		}
-		resolvedModel = models[0]
-	}
-	if resolvedModel == "" && selectedName == settings.DefaultProvider && strings.TrimSpace(settings.DefaultModel) != "" {
-		resolvedModel = strings.TrimSpace(settings.DefaultModel)
-	}
 	if resolvedModel == "" {
-		if len(spec.DefaultModels) == 0 {
-			return ResolvedProvider{}, fmt.Errorf("provider %q does not define any default models", selectedName)
+		if hasConfig && len(configured.Models) > 0 {
+			if len(configured.ModelOrder) > 0 {
+				resolvedModel = configured.ModelOrder[0]
+			} else {
+				modelNames := make([]string, 0, len(configured.Models))
+				for name := range configured.Models {
+					modelNames = append(modelNames, name)
+				}
+				sort.Strings(modelNames)
+				resolvedModel = modelNames[0]
+			}
+		} else if selectedName == settings.DefaultProvider && strings.TrimSpace(settings.DefaultModel) != "" {
+			resolvedModel = strings.TrimSpace(settings.DefaultModel)
+		} else {
+			if len(spec.DefaultModels) == 0 {
+				return ResolvedProvider{}, fmt.Errorf("provider %q does not define any default models", selectedName)
+			}
+			resolvedModel = spec.DefaultModels[0]
 		}
-		resolvedModel = spec.DefaultModels[0]
 	}
 
 	meta := resolveMetadata(providerType, resolvedModel, hasConfig, configured)
@@ -373,6 +391,7 @@ func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiB
 	supportsImageInput := meta != nil && meta.SupportsImageInput != nil && *meta.SupportsImageInput
 	supportsPDFInput := meta != nil && meta.SupportsPDFInput != nil && *meta.SupportsPDFInput
 
+	// Request values win, then provider config, then global defaults.
 	configuredEffort := normalizeReasoningEffort(reasoningEffort)
 	if configuredEffort == "" {
 		if hasConfig && configured.ReasoningEffort != "" {
@@ -383,34 +402,38 @@ func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiB
 	}
 	if configuredEffort != "" {
 		if !slices.Contains(validReasoningEfforts, configuredEffort) {
-			return ResolvedProvider{}, fmt.Errorf("unsupported reasoning_effort %q; supported: %s", configuredEffort, strings.Join(validReasoningEfforts, ", "))
+			return ResolvedProvider{}, unsupportedReasoningEffortError{value: configuredEffort}
 		}
-		if meta == nil || !supportsReasoning || !spec.SupportsReasoningEffort {
+		if !supportsReasoning || !spec.SupportsReasoningEffort {
 			configuredEffort = ""
 		}
 	}
 
 	resolvedAPIBase := strings.TrimSpace(apiBase)
-	if resolvedAPIBase == "" && hasConfig {
-		resolvedAPIBase = strings.TrimSpace(configured.BaseURL)
-	}
 	if resolvedAPIBase == "" {
-		resolvedAPIBase = spec.DefaultBaseURL
+		if hasConfig {
+			resolvedAPIBase = strings.TrimSpace(configured.BaseURL)
+		}
+		if resolvedAPIBase == "" {
+			resolvedAPIBase = spec.DefaultBaseURL
+		}
 	}
 
 	resolvedAPIKey := strings.TrimSpace(apiKey)
-	if resolvedAPIKey == "" && hasConfig {
-		if configured.APIKeyEnvVar != "" {
-			resolvedAPIKey = strings.TrimSpace(os.Getenv(configured.APIKeyEnvVar))
-			if resolvedAPIKey == "" {
-				return ResolvedProvider{}, fmt.Errorf("missing API key env var %q referenced by provider %q", configured.APIKeyEnvVar, selectedName)
-			}
-		} else if configured.APIKey != "" {
-			resolvedAPIKey = configured.APIKey
-		}
-	}
 	if resolvedAPIKey == "" {
-		resolvedAPIKey = apiKeyFromEnv(providerType)
+		if hasConfig {
+			if configured.APIKeyEnvVar != "" {
+				resolvedAPIKey = strings.TrimSpace(os.Getenv(configured.APIKeyEnvVar))
+				if resolvedAPIKey == "" {
+					return ResolvedProvider{}, fmt.Errorf("missing API key env var %q referenced by provider %q", configured.APIKeyEnvVar, selectedName)
+				}
+			} else if configured.APIKey != "" {
+				resolvedAPIKey = configured.APIKey
+			}
+		}
+		if resolvedAPIKey == "" {
+			resolvedAPIKey = apiKeyFromEnv(providerType)
+		}
 	}
 	if resolvedAPIKey == "" {
 		checked := strings.Join(spec.EnvAPIKeyNames, ", ")

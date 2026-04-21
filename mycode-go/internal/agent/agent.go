@@ -149,81 +149,41 @@ func (a *Agent) Chat(ctx context.Context, userInput message.Message, onPersist P
 	go func() {
 		defer close(out)
 		if userInput.Role != "user" {
-			out <- Event{Type: "error", Data: map[string]any{"message": "user input must be a user message"}}
+			a.emitError(out, "user input must be a user message")
 			return
 		}
 		if err := a.validateUserInput(userInput); err != nil {
-			out <- Event{Type: "error", Data: map[string]any{"message": err.Error()}}
+			a.emitError(out, err.Error())
 			return
 		}
 
-		// persist saves a message and emits an error event on failure, returning false to abort.
-		persist := func(msg message.Message) bool {
+		persist := func(msg message.Message) error {
 			if onPersist == nil {
-				return true
+				return nil
 			}
-			if err := onPersist(msg); err != nil {
-				out <- Event{Type: "error", Data: map[string]any{"message": err.Error()}}
-				return false
-			}
-			return true
+			return onPersist(msg)
 		}
 
 		a.Messages = append(a.Messages, message.Clone(userInput))
-		if !persist(userInput) {
+		if err := persist(userInput); err != nil {
+			a.emitError(out, err.Error())
 			return
 		}
 
-		completed := false
 		for turn := 0; a.MaxTurns <= 0 || turn < a.MaxTurns; turn++ {
-			req := provider.Request{
-				Provider:           a.Provider,
-				Model:              a.Model,
-				SessionID:          a.SessionID,
-				Messages:           a.Messages,
-				System:             a.System,
-				Tools:              toolSpecs(a.Tools.Definitions()),
-				MaxTokens:          a.MaxTokens,
-				APIKey:             a.APIKey,
-				APIBase:            a.APIBase,
-				ReasoningEffort:    a.ReasoningEffort,
-				SupportsImageInput: a.SupportsImageInput,
-				SupportsPDFInput:   a.SupportsPDFInput,
-			}
-
-			var assistant *message.Message
-			for event := range a.Adapter.StreamTurn(ctx, req) {
-				switch event.Type {
-				case "thinking_delta":
-					if event.Text != "" {
-						out <- Event{Type: "reasoning", Data: map[string]any{"delta": event.Text}}
-					}
-				case "text_delta":
-					if event.Text != "" {
-						out <- Event{Type: "text", Data: map[string]any{"delta": event.Text}}
-					}
-				case "message_done":
-					assistant = event.Msg
-				case "provider_error":
-					msg := "provider error"
-					if event.Err != nil {
-						msg = event.Err.Error()
-					}
-					out <- Event{Type: "error", Data: map[string]any{"message": msg}}
-					return
+			assistant, err := a.streamAssistantTurn(ctx, out)
+			if err != nil {
+				if ctx.Err() != nil {
+					a.emitError(out, "cancelled")
+				} else {
+					a.emitError(out, err.Error())
 				}
-			}
-			if ctx.Err() != nil {
-				out <- Event{Type: "error", Data: map[string]any{"message": "cancelled"}}
-				return
-			}
-			if assistant == nil {
-				out <- Event{Type: "error", Data: map[string]any{"message": "provider produced no assistant message"}}
 				return
 			}
 
 			a.Messages = append(a.Messages, message.Clone(*assistant))
-			if !persist(*assistant) {
+			if err := persist(*assistant); err != nil {
+				a.emitError(out, err.Error())
 				return
 			}
 
@@ -234,75 +194,124 @@ func (a *Agent) Chat(ctx context.Context, userInput message.Message, onPersist P
 				}
 			}
 			if len(toolCalls) == 0 {
-				completed = true
-				break
+				a.compactIfNeeded(ctx, onPersist, out)
+				return
 			}
 
-			toolResults := make([]message.Block, 0, len(toolCalls))
-			for _, toolCall := range toolCalls {
-				select {
-				case <-ctx.Done():
-					out <- Event{Type: "error", Data: map[string]any{"message": "cancelled"}}
-					return
-				default:
-				}
-
-				out <- Event{Type: "tool_start", Data: map[string]any{
-					"tool_call": map[string]any{
-						"id":    toolCall.ID,
-						"name":  toolCall.Name,
-						"input": cloneInput(toolCall.Input),
-					},
-				}}
-
-				result := a.runTool(toolCall, out)
-				toolResults = append(toolResults, message.ToolResultBlock(
-					toolCall.ID,
-					result.Output,
-					result.Metadata,
-					result.IsError,
-					result.Content,
-					nil,
-				))
-
-				data := map[string]any{
-					"tool_use_id": toolCall.ID,
-					"output":      result.Output,
-					"is_error":    result.IsError,
-				}
-				if len(result.Metadata) > 0 {
-					data["metadata"] = result.Metadata
-				}
-				if len(result.Content) > 0 {
-					data["content"] = result.Content
-				}
-				out <- Event{Type: "tool_done", Data: data}
-
-				if result.Output == "error: cancelled" && ctx.Err() != nil {
-					toolMessage := message.BuildMessage("user", toolResults, nil)
-					a.Messages = append(a.Messages, toolMessage)
-					if onPersist != nil {
-						_ = onPersist(toolMessage)
-					}
+			toolMessage, cancelled := a.executeToolCalls(ctx, toolCalls, out)
+			if len(toolMessage.Content) > 0 {
+				a.Messages = append(a.Messages, toolMessage)
+				if err := persist(toolMessage); err != nil {
+					a.emitError(out, err.Error())
 					return
 				}
 			}
-
-			toolMessage := message.BuildMessage("user", toolResults, nil)
-			a.Messages = append(a.Messages, toolMessage)
-			if !persist(toolMessage) {
+			if cancelled {
+				if len(toolMessage.Content) == 0 {
+					a.emitError(out, "cancelled")
+				}
 				return
 			}
 		}
 
-		if !completed && a.MaxTurns > 0 {
-			out <- Event{Type: "error", Data: map[string]any{"message": "max_turns reached"}}
-			return
-		}
-
-		a.compactIfNeeded(ctx, onPersist, out)
+		a.emitError(out, "max_turns reached")
 	}()
 	return out
+}
+
+func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*message.Message, error) {
+	req := provider.Request{
+		Provider:           a.Provider,
+		Model:              a.Model,
+		SessionID:          a.SessionID,
+		Messages:           a.Messages,
+		System:             a.System,
+		Tools:              toolSpecs(a.Tools.Definitions()),
+		MaxTokens:          a.MaxTokens,
+		APIKey:             a.APIKey,
+		APIBase:            a.APIBase,
+		ReasoningEffort:    a.ReasoningEffort,
+		SupportsImageInput: a.SupportsImageInput,
+		SupportsPDFInput:   a.SupportsPDFInput,
+	}
+
+	var assistant *message.Message
+	for event := range a.Adapter.StreamTurn(ctx, req) {
+		switch event.Type {
+		case "thinking_delta":
+			if event.Text != "" {
+				out <- Event{Type: "reasoning", Data: map[string]any{"delta": event.Text}}
+			}
+		case "text_delta":
+			if event.Text != "" {
+				out <- Event{Type: "text", Data: map[string]any{"delta": event.Text}}
+			}
+		case "message_done":
+			assistant = event.Msg
+		case "provider_error":
+			if event.Err != nil {
+				return nil, event.Err
+			}
+			return nil, errors.New("provider error")
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if assistant == nil {
+		return nil, errors.New("provider produced no assistant message")
+	}
+	return assistant, nil
+}
+
+func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block, out chan<- Event) (message.Message, bool) {
+	toolResults := make([]message.Block, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		if ctx.Err() != nil {
+			return message.Message{}, true
+		}
+
+		out <- Event{Type: "tool_start", Data: map[string]any{
+			"tool_call": map[string]any{
+				"id":    toolCall.ID,
+				"name":  toolCall.Name,
+				"input": cloneInput(toolCall.Input),
+			},
+		}}
+
+		result := a.runTool(toolCall, out)
+		toolResults = append(toolResults, message.ToolResultBlock(
+			toolCall.ID,
+			result.Output,
+			result.Metadata,
+			result.IsError,
+			result.Content,
+			nil,
+		))
+
+		data := map[string]any{
+			"tool_use_id": toolCall.ID,
+			"output":      result.Output,
+			"is_error":    result.IsError,
+		}
+		if len(result.Metadata) > 0 {
+			data["metadata"] = result.Metadata
+		}
+		if len(result.Content) > 0 {
+			data["content"] = result.Content
+		}
+		out <- Event{Type: "tool_done", Data: data}
+
+		if result.Output == "error: cancelled" && ctx.Err() != nil {
+			return message.BuildMessage("user", toolResults, nil), true
+		}
+	}
+
+	return message.BuildMessage("user", toolResults, nil), false
+}
+
+func (a *Agent) emitError(out chan<- Event, msg string) {
+	out <- Event{Type: "error", Data: map[string]any{"message": msg}}
 }
 
 func (a *Agent) validateUserInput(userInput message.Message) error {

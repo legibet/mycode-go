@@ -14,7 +14,6 @@ import (
 )
 
 type chatToolCallState struct {
-	Index         int
 	ToolID        string
 	Name          string
 	ArgumentsText string
@@ -47,7 +46,7 @@ func (a openAIChatAdapter) StreamTurn(ctx context.Context, req Request) <-chan S
 		}
 
 		stream := client.Chat.Completions.NewStreaming(ctx, oparam.Override[openai.ChatCompletionNewParams](json.RawMessage(bodyBytes)))
-		toolCalls := map[int]*chatToolCallState{}
+		toolCalls := make([]chatToolCallState, 0)
 		textParts := make([]string, 0)
 		thinkingParts := make([]string, 0)
 		thinkingMeta := map[string]any{}
@@ -93,11 +92,10 @@ func (a openAIChatAdapter) StreamTurn(ctx context.Context, req Request) <-chan S
 
 			for _, toolCall := range delta.ToolCalls {
 				index := int(toolCall.Index)
-				state := toolCalls[index]
-				if state == nil {
-					state = &chatToolCallState{Index: index}
-					toolCalls[index] = state
+				for len(toolCalls) <= index {
+					toolCalls = append(toolCalls, chatToolCallState{})
 				}
+				state := &toolCalls[index]
 				if toolCall.ID != "" {
 					state.ToolID = toolCall.ID
 				}
@@ -125,9 +123,8 @@ func (a openAIChatAdapter) StreamTurn(ctx context.Context, req Request) <-chan S
 		if len(textParts) > 0 {
 			blocks = append(blocks, message.TextBlock(strings.Join(textParts, ""), nil))
 		}
-		for index := 0; index < len(toolCalls); index++ {
-			state := toolCalls[index]
-			if state == nil {
+		for index, state := range toolCalls {
+			if state.ToolID == "" && state.Name == "" && state.ArgumentsText == "" {
 				continue
 			}
 			toolInput, err := tools.ParseToolArguments(state.ArgumentsText)
@@ -198,76 +195,63 @@ func (a openAIChatAdapter) buildPayload(req Request) map[string]any {
 }
 
 func (a openAIChatAdapter) serializeMessage(msg message.Message) []any {
-	role := msg.Role
-	switch role {
+	switch msg.Role {
 	case "user":
-		payloadMessages := make([]any, 0)
+		payloadMessages := make([]any, 0, len(msg.Content)+1)
+		toolMessages := make([]any, 0)
+		textParts := make([]string, 0)
+		mediaContent := make([]any, 0)
 		hasMedia := false
 		for _, block := range msg.Content {
-			if block.Type == "image" || block.Type == "document" {
+			switch block.Type {
+			case "text":
+				if block.Text == "" {
+					continue
+				}
+				textParts = append(textParts, block.Text)
+				mediaContent = append(mediaContent, map[string]any{"type": "text", "text": block.Text})
+			case "image":
 				hasMedia = true
-				break
+				mimeType, data := loadImageBlockPayload(block)
+				mediaContent = append(mediaContent, map[string]any{
+					"type": "image_url",
+					"image_url": map[string]any{
+						"url": "data:" + mimeType + ";base64," + data,
+					},
+				})
+			case "document":
+				hasMedia = true
+				mimeType, data, name := loadDocumentBlockPayload(block)
+				mediaContent = append(mediaContent, map[string]any{
+					"type": "file",
+					"file": map[string]any{
+						"filename":  name,
+						"file_data": "data:" + mimeType + ";base64," + data,
+					},
+				})
+			case "tool_result":
+				toolMessages = append(toolMessages, map[string]any{
+					"role":         "tool",
+					"tool_call_id": block.ToolUseID,
+					"content":      block.Output,
+				})
 			}
 		}
 
 		if hasMedia {
-			content := make([]any, 0)
-			for _, block := range msg.Content {
-				switch block.Type {
-				case "text":
-					if block.Text != "" {
-						content = append(content, map[string]any{"type": "text", "text": block.Text})
-					}
-				case "image":
-					mimeType, data := loadImageBlockPayload(block)
-					content = append(content, map[string]any{
-						"type": "image_url",
-						"image_url": map[string]any{
-							"url": "data:" + mimeType + ";base64," + data,
-						},
-					})
-				case "document":
-					mimeType, data, name := loadDocumentBlockPayload(block)
-					content = append(content, map[string]any{
-						"type": "file",
-						"file": map[string]any{
-							"filename":  name,
-							"file_data": "data:" + mimeType + ";base64," + data,
-						},
-					})
-				}
-			}
-			if len(content) > 0 {
+			if len(mediaContent) > 0 {
 				payloadMessages = append(payloadMessages, map[string]any{
 					"role":    "user",
-					"content": content,
+					"content": mediaContent,
 				})
 			}
-		} else {
-			textParts := make([]string, 0)
-			for _, block := range msg.Content {
-				if block.Type == "text" && block.Text != "" {
-					textParts = append(textParts, block.Text)
-				}
-			}
-			if len(textParts) > 0 {
-				payloadMessages = append(payloadMessages, map[string]any{
-					"role":    "user",
-					"content": strings.Join(textParts, "\n"),
-				})
-			}
-		}
-
-		for _, block := range msg.Content {
-			if block.Type != "tool_result" {
-				continue
-			}
+		} else if len(textParts) > 0 {
 			payloadMessages = append(payloadMessages, map[string]any{
-				"role":         "tool",
-				"tool_call_id": block.ToolUseID,
-				"content":      block.Output,
+				"role":    "user",
+				"content": strings.Join(textParts, "\n"),
 			})
 		}
+		payloadMessages = append(payloadMessages, toolMessages...)
 		return payloadMessages
 	case "assistant":
 		textParts := make([]string, 0)

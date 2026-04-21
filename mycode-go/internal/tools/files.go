@@ -32,21 +32,10 @@ func ResolvePath(path, cwd string) string {
 
 // DetectImageMIMEType returns a supported image type.
 func DetectImageMIMEType(path string) string {
-	file, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer func() {
-		_ = file.Close()
-	}()
+	return detectImageMIMEType(path, readFileHeader(path, 16))
+}
 
-	header := make([]byte, 16)
-	n, err := file.Read(header)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return ""
-	}
-	header = header[:n]
-
+func detectImageMIMEType(path string, header []byte) string {
 	switch {
 	case bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")):
 		return "image/png"
@@ -68,23 +57,34 @@ func DetectImageMIMEType(path string) string {
 
 // DetectDocumentMIMEType returns a supported document type.
 func DetectDocumentMIMEType(path string) string {
-	file, err := os.Open(path)
-	if err == nil {
-		defer func() {
-			_ = file.Close()
-		}()
-		header := make([]byte, 5)
-		n, readErr := file.Read(header)
-		if readErr == nil || errors.Is(readErr, io.EOF) {
-			if bytes.HasPrefix(header[:n], []byte("%PDF-")) {
-				return "application/pdf"
-			}
-		}
+	return detectDocumentMIMEType(path, readFileHeader(path, 5))
+}
+
+func detectDocumentMIMEType(path string, header []byte) string {
+	if bytes.HasPrefix(header, []byte("%PDF-")) {
+		return "application/pdf"
 	}
 	if mime.TypeByExtension(filepath.Ext(path)) == "application/pdf" {
 		return "application/pdf"
 	}
 	return ""
+}
+
+func readFileHeader(path string, size int) []byte {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+
+	header := make([]byte, size)
+	n, err := file.Read(header)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil
+	}
+	return header[:n]
 }
 
 // TruncateText truncates text by line and byte budget.
@@ -169,27 +169,6 @@ func TruncateText(text string, maxLines, maxBytes int, tail bool) (string, Trunc
 // Read reads a text file or image.
 func (e *Executor) Read(path string, offset, limit int) Result {
 	filePath := ResolvePath(path, e.cwd)
-	imageType := DetectImageMIMEType(filePath)
-	if imageType != "" {
-		if !e.supportsImageInput {
-			return errorResult("error: image input is not supported by the current model")
-		}
-		data, err := os.ReadFile(filePath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return errorResult("error: file not found: " + path)
-			}
-			return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
-		}
-		summary := "Read image file [" + imageType + "]"
-		return Result{
-			Output: summary,
-			Content: []message.Block{
-				message.TextBlock(summary, nil),
-				message.ImageBlock(base64.StdEncoding.EncodeToString(data), imageType, filepath.Base(filePath), nil),
-			},
-		}
-	}
 
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -205,6 +184,19 @@ func (e *Executor) Read(path string, offset, limit int) Result {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
+	}
+	if imageType := detectImageMIMEType(filePath, data); imageType != "" {
+		if !e.supportsImageInput {
+			return errorResult("error: image input is not supported by the current model")
+		}
+		summary := "Read image file [" + imageType + "]"
+		return Result{
+			Output: summary,
+			Content: []message.Block{
+				message.TextBlock(summary, nil),
+				message.ImageBlock(base64.StdEncoding.EncodeToString(data), imageType, filepath.Base(filePath), nil),
+			},
+		}
 	}
 	if !utf8.Valid(data) {
 		return errorResult("error: file is not valid utf-8 text: " + path)

@@ -84,64 +84,69 @@ func defaultProjectToolCallID(toolCallID string, _ map[string]struct{}) string {
 // RepairMessagesForReplay converts canonical history into a replay-safe transcript.
 func RepairMessagesForReplay(source []message.Message, supportsImageInput, supportsPDFInput bool) []message.Message {
 	replay := make([]message.Message, 0, len(source))
-	emittedToolUseIDs := map[string]struct{}{}
-	emittedToolResultIDs := map[string]struct{}{}
-	openToolUseIDs := []string{}
+	seenToolUseIDs := map[string]struct{}{}
+	seenToolResultIDs := map[string]struct{}{}
+	pendingToolUseIDs := []string{}
 
 	for _, msg := range source {
 		switch msg.Role {
 		case "assistant":
-			if len(openToolUseIDs) > 0 {
-				replay = append(replay, interruptedToolResultMessage(openToolUseIDs))
-				for _, id := range openToolUseIDs {
-					emittedToolResultIDs[id] = struct{}{}
+			if len(pendingToolUseIDs) > 0 {
+				replay = append(replay, interruptedToolResultMessage(pendingToolUseIDs))
+				for _, id := range pendingToolUseIDs {
+					seenToolResultIDs[id] = struct{}{}
 				}
-				openToolUseIDs = nil
+				pendingToolUseIDs = nil
 			}
+
 			stopReason, _ := msg.Meta["stop_reason"].(string)
 			if stopReason == "error" || stopReason == "aborted" || stopReason == "cancelled" {
 				continue
 			}
-			content := []message.Block{}
-			currentToolUseIDs := []string{}
+
+			nextContent := make([]message.Block, 0, len(msg.Content))
+			nextPendingToolUseIDs := make([]string, 0)
 			for _, block := range msg.Content {
 				switch block.Type {
 				case "text", "thinking":
-					if strings.TrimSpace(block.Text) != "" {
-						content = append(content, message.CloneBlock(block))
+					if strings.TrimSpace(block.Text) == "" {
+						continue
 					}
+					nextContent = append(nextContent, message.CloneBlock(block))
 				case "tool_use":
 					if block.ID == "" {
 						continue
 					}
-					if _, exists := emittedToolUseIDs[block.ID]; exists {
+					if _, seen := seenToolUseIDs[block.ID]; seen {
 						continue
 					}
-					emittedToolUseIDs[block.ID] = struct{}{}
-					currentToolUseIDs = append(currentToolUseIDs, block.ID)
-					content = append(content, message.CloneBlock(block))
+					seenToolUseIDs[block.ID] = struct{}{}
+					nextPendingToolUseIDs = append(nextPendingToolUseIDs, block.ID)
+					nextContent = append(nextContent, message.CloneBlock(block))
 				}
 			}
-			if len(content) == 0 {
+			if len(nextContent) == 0 {
 				continue
 			}
+
 			next := message.Clone(msg)
-			next.Content = content
+			next.Content = nextContent
 			replay = append(replay, next)
-			openToolUseIDs = currentToolUseIDs
+			pendingToolUseIDs = nextPendingToolUseIDs
 		case "user":
-			content := []message.Block{}
+			nextContent := make([]message.Block, 0, len(msg.Content))
 			resolvedToolUseIDs := map[string]struct{}{}
-			hasUserInput := false
+			hasVisibleUserInput := false
 			for _, block := range msg.Content {
 				switch block.Type {
 				case "text":
-					if strings.TrimSpace(block.Text) != "" {
-						hasUserInput = true
-						content = append(content, message.CloneBlock(block))
+					if strings.TrimSpace(block.Text) == "" {
+						continue
 					}
+					hasVisibleUserInput = true
+					nextContent = append(nextContent, message.CloneBlock(block))
 				case "image", "document":
-					hasUserInput = true
+					hasVisibleUserInput = true
 					supported := supportsImageInput
 					label := "image input"
 					defaultMIME := "image"
@@ -151,7 +156,7 @@ func RepairMessagesForReplay(source []message.Message, supportsImageInput, suppo
 						defaultMIME = "application/pdf"
 					}
 					if supported {
-						content = append(content, message.CloneBlock(block))
+						nextContent = append(nextContent, message.CloneBlock(block))
 						continue
 					}
 					attachment := fmt.Sprintf(
@@ -161,15 +166,15 @@ func RepairMessagesForReplay(source []message.Message, supportsImageInput, suppo
 						block.Type,
 						label,
 					)
-					content = append(content, message.TextBlock(attachment, map[string]any{"attachment": true}))
+					nextContent = append(nextContent, message.TextBlock(attachment, map[string]any{"attachment": true}))
 				case "tool_result":
 					if block.ToolUseID == "" {
 						continue
 					}
-					if _, ok := emittedToolUseIDs[block.ToolUseID]; !ok {
+					if _, seen := seenToolUseIDs[block.ToolUseID]; !seen {
 						continue
 					}
-					if _, ok := emittedToolResultIDs[block.ToolUseID]; ok {
+					if _, seen := seenToolResultIDs[block.ToolUseID]; seen {
 						continue
 					}
 					next := message.CloneBlock(block)
@@ -182,37 +187,33 @@ func RepairMessagesForReplay(source []message.Message, supportsImageInput, suppo
 						}
 						next.Content = append([]message.Block(nil), filtered...)
 					}
-					content = append(content, next)
+					nextContent = append(nextContent, next)
 					resolvedToolUseIDs[block.ToolUseID] = struct{}{}
-					emittedToolResultIDs[block.ToolUseID] = struct{}{}
+					seenToolResultIDs[block.ToolUseID] = struct{}{}
 				}
 			}
 
-			if hasUserInput && len(openToolUseIDs) > 0 {
-				missing := []string{}
-				for _, id := range openToolUseIDs {
+			if len(pendingToolUseIDs) > 0 {
+				unresolvedToolUseIDs := make([]string, 0, len(pendingToolUseIDs))
+				for _, id := range pendingToolUseIDs {
 					if _, ok := resolvedToolUseIDs[id]; !ok {
-						missing = append(missing, id)
+						unresolvedToolUseIDs = append(unresolvedToolUseIDs, id)
 					}
 				}
-				if len(missing) > 0 {
-					replay = append(replay, interruptedToolResultMessage(missing))
-					for _, id := range missing {
-						emittedToolResultIDs[id] = struct{}{}
+				if hasVisibleUserInput {
+					if len(unresolvedToolUseIDs) > 0 {
+						replay = append(replay, interruptedToolResultMessage(unresolvedToolUseIDs))
+						for _, id := range unresolvedToolUseIDs {
+							seenToolResultIDs[id] = struct{}{}
+						}
 					}
+					pendingToolUseIDs = nil
+				} else {
+					pendingToolUseIDs = unresolvedToolUseIDs
 				}
-				openToolUseIDs = nil
-			} else if len(openToolUseIDs) > 0 {
-				pending := []string{}
-				for _, id := range openToolUseIDs {
-					if _, ok := resolvedToolUseIDs[id]; !ok {
-						pending = append(pending, id)
-					}
-				}
-				openToolUseIDs = pending
 			}
 
-			if len(content) == 0 {
+			if len(nextContent) == 0 {
 				if len(replay) > 0 && replay[len(replay)-1].Role == "assistant" {
 					replay = append(replay, message.BuildMessage("user", []message.Block{
 						message.TextBlock("[User turn omitted during replay]", nil),
@@ -222,13 +223,13 @@ func RepairMessagesForReplay(source []message.Message, supportsImageInput, suppo
 			}
 
 			next := message.Clone(msg)
-			next.Content = content
+			next.Content = nextContent
 			replay = append(replay, next)
 		}
 	}
 
-	if len(openToolUseIDs) > 0 {
-		replay = append(replay, interruptedToolResultMessage(openToolUseIDs))
+	if len(pendingToolUseIDs) > 0 {
+		replay = append(replay, interruptedToolResultMessage(pendingToolUseIDs))
 	}
 
 	return replay
