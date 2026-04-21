@@ -96,6 +96,15 @@ func TestSkills(t *testing.T) {
 		}
 	})
 
+	t.Run("parse skill invalid name falls back", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "SKILL.md")
+		writeText(t, path, "---\nname: bad name!\ndescription: Minimal skill.\n---\nBody\n")
+		skill, ok := parseSkill(path, "project", "my-tool")
+		if !ok || skill.Name != "my-tool" {
+			t.Fatalf("unexpected skill: %#v", skill)
+		}
+	})
+
 	t.Run("scan root matches python rules", func(t *testing.T) {
 		root := t.TempDir()
 		writeText(t, filepath.Join(root, "deploy.md"), "---\nname: deploy\ndescription: Deploy.\n---\n")

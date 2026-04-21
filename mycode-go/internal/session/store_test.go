@@ -48,6 +48,28 @@ func TestCreateSessionDoesNotPrecreateToolOutputDir(t *testing.T) {
 	}
 }
 
+func TestCreateSessionPreservesExistingMessages(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage("s1", message.UserTextMessage("hello", nil), "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.LoadSession("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded == nil || len(loaded.Messages) != 1 || loaded.Messages[0].Content[0].Text != "hello" {
+		t.Fatalf("unexpected loaded session: %#v", loaded)
+	}
+}
+
 func TestLoadSessionRepairsInterruptedToolLoop(t *testing.T) {
 	store := NewStore(t.TempDir())
 	data, err := store.CreateSession("", "/tmp")

@@ -270,11 +270,16 @@ func parseSkill(path, source, fallbackName string) (Skill, bool) {
 		return Skill{}, false
 	}
 
-	name := strings.TrimSpace(asString(frontmatter["name"]))
-	if name == "" {
-		name = strings.TrimSpace(fallbackName)
+	name := ""
+	for _, candidate := range []string{asString(frontmatter["name"]), fallbackName} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || len(candidate) > nameMaxLen || !namePattern.MatchString(candidate) {
+			continue
+		}
+		name = candidate
+		break
 	}
-	if name == "" || len(name) > nameMaxLen || !namePattern.MatchString(name) {
+	if name == "" {
 		return Skill{}, false
 	}
 

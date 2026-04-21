@@ -205,9 +205,11 @@ func (s *Store) CreateSession(sessionID, cwd string) (Data, error) {
 	if err := s.writeMeta(data.Session.ID, data.Session.Meta); err != nil {
 		return Data{}, err
 	}
-	if err := os.WriteFile(s.messagesPath(data.Session.ID), nil, 0o644); err != nil {
+	file, err := os.OpenFile(s.messagesPath(data.Session.ID), os.O_RDONLY|os.O_CREATE, 0o644)
+	if err != nil {
 		return Data{}, err
 	}
+	_ = file.Close()
 	return data, nil
 }
 
