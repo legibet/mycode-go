@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/internal/provider"
 	"github.com/legibet/mycode-go/internal/session"
 )
 
@@ -122,8 +123,6 @@ func TestServeStaticFromConfiguredWebRoot(t *testing.T) {
 }
 
 func TestSessionLifecycle(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "test-key")
-
 	store := session.NewStore(t.TempDir())
 	handler := newApp(false, "", store, newRunManager())
 	cwd := t.TempDir()
@@ -244,6 +243,7 @@ func TestBuildUserMessageEscapesAttachmentNameLikePython(t *testing.T) {
 }
 
 func TestChatRejectsRewindForNewSessionWithoutCreatingFiles(t *testing.T) {
+	isolateServerConfigTest(t)
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	store := session.NewStore(t.TempDir())
@@ -281,6 +281,7 @@ func TestChatRejectsRewindForNewSessionWithoutCreatingFiles(t *testing.T) {
 }
 
 func TestChatRejectsUnsupportedReasoningEffortAsBadRequest(t *testing.T) {
+	isolateServerConfigTest(t)
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	handler := newApp(false, "", session.NewStore(t.TempDir()), newRunManager())
@@ -304,6 +305,7 @@ func TestChatRejectsUnsupportedReasoningEffortAsBadRequest(t *testing.T) {
 }
 
 func TestChatRejectsRewindToCompactSummary(t *testing.T) {
+	isolateServerConfigTest(t)
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	store := session.NewStore(t.TempDir())
@@ -353,6 +355,7 @@ func TestChatRejectsRewindToCompactSummary(t *testing.T) {
 }
 
 func TestConfigRoute(t *testing.T) {
+	isolateServerConfigTest(t)
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	handler := newApp(false, "", session.NewStore(t.TempDir()), newRunManager())
@@ -399,5 +402,16 @@ func decodeBody(t *testing.T, recorder *httptest.ResponseRecorder, dst any) {
 	t.Helper()
 	if err := json.Unmarshal(recorder.Body.Bytes(), dst); err != nil {
 		t.Fatalf("failed to decode response: %v; body=%s", err, recorder.Body.String())
+	}
+}
+
+func isolateServerConfigTest(t *testing.T) {
+	t.Helper()
+	t.Setenv("MYCODE_HOME", filepath.Join(t.TempDir(), "home", ".mycode"))
+	t.Setenv("PORT", "")
+	for _, spec := range provider.Specs() {
+		for _, envName := range spec.EnvAPIKeyNames {
+			t.Setenv(envName, "")
+		}
 	}
 }

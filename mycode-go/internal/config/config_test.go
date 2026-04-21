@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/legibet/mycode-go/internal/models"
+	"github.com/legibet/mycode-go/internal/provider"
 )
 
 func TestLoadMergesGlobalAndProjectConfigs(t *testing.T) {
@@ -20,7 +21,7 @@ func TestLoadMergesGlobalAndProjectConfigs(t *testing.T) {
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 
 	writeJSON(t, filepath.Join(home, "config.json"), `{
 		"providers": {
@@ -73,7 +74,7 @@ func TestLoadCompactThresholdParsing(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 
 	settings, err := Load(workspace)
 	if err != nil {
@@ -100,7 +101,7 @@ func TestResolveProviderAutoDiscoveryOrder(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 	t.Setenv("OPENAI_API_KEY", "openai-env-key")
 	t.Setenv("MOONSHOT_API_KEY", "moonshot-env-key")
 
@@ -124,7 +125,7 @@ func TestResolveProviderAutoDiscoveryMatchesPythonRegistryOrder(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 	t.Setenv("GOOGLE_API_KEY", "google-env-key")
 	t.Setenv("DEEPSEEK_API_KEY", "deepseek-env-key")
 
@@ -148,7 +149,7 @@ func TestResolveProviderPrefersFirstConfiguredProviderWithCredentials(t *testing
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 	t.Setenv("OPENROUTER_API_KEY", "router-env-key")
 	t.Setenv("DEEPSEEK_API_KEY", "deepseek-env-key")
 
@@ -183,7 +184,7 @@ func TestResolveProviderPreservesConfiguredModelOrder(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 	t.Setenv("OPENAI_API_KEY", "env-key")
 
 	writeJSON(t, filepath.Join(home, "config.json"), `{
@@ -221,7 +222,7 @@ func TestResolveProviderPrefersExplicitAPIKeyOverEnv(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 	t.Setenv("ANTHROPIC_API_KEY", "env-key")
 
 	writeJSON(t, filepath.Join(home, "config.json"), `{
@@ -255,7 +256,7 @@ func TestResolveProviderOpenAIChatIgnoresReasoningEffort(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 	t.Setenv("OPENROUTER_API_KEY", "router-env-key")
 	writeJSON(t, filepath.Join(home, "config.json"), `{
 		"providers": {
@@ -290,7 +291,7 @@ func TestResolveProviderDefaultProviderDoesNotFallback(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 	t.Setenv("OPENAI_API_KEY", "openai-env-key")
 	writeJSON(t, filepath.Join(home, "config.json"), `{
 		"providers": {
@@ -318,7 +319,7 @@ func TestLoadRejectsCustomProviderWithoutType(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 	writeJSON(t, filepath.Join(home, "config.json"), `{
 		"providers": {
 			"custom-provider": {
@@ -339,7 +340,7 @@ func TestResolveProviderMissingConfiguredAPIKeyEnvVar(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 	t.Setenv("OPENAI_API_KEY", "default-env-key")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	writeJSON(t, filepath.Join(home, "config.json"), `{
@@ -370,7 +371,7 @@ func TestResolveProviderUsesMetadataOverrides(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 	t.Setenv("OPENAI_API_KEY", "env-key")
 
 	oldLookup := lookupModelMetadata
@@ -424,7 +425,7 @@ func TestResolveProviderUsesGlobalDefaultReasoningEffort(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MYCODE_HOME", home)
+	isolateConfigTest(t, home)
 	t.Setenv("OPENAI_API_KEY", "env-key")
 
 	oldLookup := lookupModelMetadata
@@ -477,4 +478,15 @@ func boolPtr(v bool) *bool {
 
 func contains(text, needle string) bool {
 	return strings.Contains(text, needle)
+}
+
+func isolateConfigTest(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("MYCODE_HOME", home)
+	t.Setenv("PORT", "")
+	for _, spec := range provider.Specs() {
+		for _, envName := range spec.EnvAPIKeyNames {
+			t.Setenv(envName, "")
+		}
+	}
 }
