@@ -2,7 +2,6 @@ package tools
 
 import (
 	"bufio"
-	"cmp"
 	"fmt"
 	"io"
 	"os"
@@ -15,7 +14,10 @@ import (
 
 // Bash runs a shell command and streams output.
 func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput OutputCallback) Result {
-	timeout := cmp.Or(timeoutSeconds, int(BashTimeout/time.Second))
+	timeout := int(BashTimeout / time.Second)
+	if timeoutSeconds > 0 {
+		timeout = timeoutSeconds
+	}
 
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Dir = e.cwd
