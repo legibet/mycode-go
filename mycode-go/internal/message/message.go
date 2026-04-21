@@ -69,9 +69,14 @@ func DocumentBlock(data, mimeType, name string, meta map[string]any) Block {
 	return newDataBlock("document", data, mimeType, name, meta)
 }
 
-// ToolUseBlock returns a tool use block.
+// ToolUseBlock returns a tool use block. Input is always a non-nil map to
+// match the Python tool_use_block contract (`dict(input or {})`).
 func ToolUseBlock(id, name string, input map[string]any, meta map[string]any) Block {
-	block := Block{Type: "tool_use", ID: id, Name: name, Input: maps.Clone(input)}
+	inputCopy := maps.Clone(input)
+	if inputCopy == nil {
+		inputCopy = map[string]any{}
+	}
+	block := Block{Type: "tool_use", ID: id, Name: name, Input: inputCopy}
 	if len(meta) > 0 {
 		block.Meta = maps.Clone(meta)
 	}
