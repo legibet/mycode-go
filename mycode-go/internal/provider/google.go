@@ -155,7 +155,7 @@ func (a googleAdapter) buildContents(req Request) []*genai.Content {
 					mimeType, data, _ := loadDocumentBlockPayload(block)
 					parts = append(parts, genai.NewPartFromBytes(decodeBase64(data), mimeType))
 				case "tool_result":
-					response := map[string]any{"result": block.ModelText}
+					response := map[string]any{"result": block.Output}
 					if block.IsError != nil && *block.IsError {
 						response["is_error"] = true
 					}

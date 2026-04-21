@@ -265,7 +265,7 @@ func (a openAIChatAdapter) serializeMessage(msg message.Message) []any {
 			payloadMessages = append(payloadMessages, map[string]any{
 				"role":         "tool",
 				"tool_call_id": block.ToolUseID,
-				"content":      block.ModelText,
+				"content":      block.Output,
 			})
 		}
 		return payloadMessages

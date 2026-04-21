@@ -25,14 +25,14 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return errorResult("error: "+err.Error(), err.Error())
+		return errorResult("error: " + err.Error())
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return errorResult("error: "+err.Error(), err.Error())
+		return errorResult("error: " + err.Error())
 	}
 	if err := cmd.Start(); err != nil {
-		return errorResult("error: "+err.Error(), err.Error())
+		return errorResult("error: " + err.Error())
 	}
 	e.trackCmd(cmd)
 	defer func() {
@@ -82,9 +82,8 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 				_ = logFile.Close()
 			}
 			return Result{
-				ModelText:   fmt.Sprintf("error: timeout after %ds", timeout),
-				DisplayText: fmt.Sprintf("Command timed out after %ds", timeout),
-				IsError:     true,
+				Output:  fmt.Sprintf("error: timeout after %ds", timeout),
+				IsError: true,
 			}
 		}
 
@@ -93,7 +92,7 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 			if logFile != nil {
 				_ = logFile.Close()
 			}
-			return errorResult("error: "+err.Error(), err.Error())
+			return errorResult("error: " + err.Error())
 		case line := <-lines:
 			if line.done {
 				doneReaders++
@@ -105,17 +104,19 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 			if logFile == nil {
 				keptLines = append(keptLines, line.text)
 				if keptBytes > BashMaxInMemoryBytes {
-					file, fileErr := os.Create(logPath)
-					if fileErr == nil {
-						logFile = file
-						savedOutputPath = logPath
-						if len(keptLines) > 0 {
-							_, _ = io.WriteString(logFile, strings.Join(keptLines, "\n"))
-							_, _ = io.WriteString(logFile, "\n")
-							tailLines = append(tailLines, keptLines...)
-							tailLines = trimTailLines(tailLines)
+					if err := os.MkdirAll(e.toolOutputDir, 0o755); err == nil {
+						file, fileErr := os.Create(logPath)
+						if fileErr == nil {
+							logFile = file
+							savedOutputPath = logPath
+							if len(keptLines) > 0 {
+								_, _ = io.WriteString(logFile, strings.Join(keptLines, "\n"))
+								_, _ = io.WriteString(logFile, "\n")
+								tailLines = append(tailLines, keptLines...)
+								tailLines = trimTailLines(tailLines)
+							}
+							keptLines = nil
 						}
-						keptLines = nil
 					}
 				}
 			} else {
@@ -138,10 +139,10 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 	}
 	if waitErr != nil {
 		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
-			return Result{ModelText: "error: cancelled", DisplayText: "Cancelled", IsError: true}
+			return Result{Output: "error: cancelled", IsError: true}
 		}
 		if exitErr, ok := waitErr.(*exec.ExitError); ok && exitErr.ExitCode() < 0 {
-			return Result{ModelText: "error: cancelled", DisplayText: "Cancelled", IsError: true}
+			return Result{Output: "error: cancelled", IsError: true}
 		}
 	}
 
@@ -155,8 +156,10 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 	}
 	content, trunc := TruncateText(output, DefaultMaxLines, DefaultMaxBytes, true)
 	if savedOutputPath == "" && trunc.Truncated {
-		if err := os.WriteFile(logPath, []byte(rawOutput), 0o644); err == nil {
-			savedOutputPath = logPath
+		if err := os.MkdirAll(e.toolOutputDir, 0o755); err == nil {
+			if err := os.WriteFile(logPath, []byte(rawOutput), 0o644); err == nil {
+				savedOutputPath = logPath
+			}
 		}
 	}
 
@@ -184,5 +187,5 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 	if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() != 0 {
 		result += fmt.Sprintf("\n\n[exit code: %d]", cmd.ProcessState.ExitCode())
 	}
-	return Result{ModelText: result, DisplayText: result}
+	return Result{Output: result}
 }

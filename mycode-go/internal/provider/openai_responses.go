@@ -291,7 +291,7 @@ func (a openAIResponsesAdapter) serializeUserMessage(msg message.Message) []any 
 				break
 			}
 		}
-		output := any(block.ModelText)
+		output := any(block.Output)
 		if hasImages {
 			output = a.serializeInputContent(resultBlocks)
 		}

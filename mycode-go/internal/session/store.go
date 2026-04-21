@@ -19,11 +19,9 @@ import (
 
 const (
 	// MessageFormatVersion is the persisted session format version.
-	MessageFormatVersion = 5
+	MessageFormatVersion = 6
 	// DefaultSessionTitle is the initial session title.
 	DefaultSessionTitle = "New chat"
-	// DefaultSessionProvider is the fallback provider for drafts.
-	DefaultSessionProvider = "anthropic"
 )
 
 // CompactSummaryPrompt asks the model for a compact continuation summary.
@@ -53,20 +51,22 @@ const compactAck = "Understood. I have the context from the conversation summary
 
 // Meta is the session metadata stored in meta.json.
 type Meta struct {
-	ID                   string `json:"id"`
-	Title                string `json:"title"`
-	Provider             string `json:"provider"`
-	Model                string `json:"model"`
 	CWD                  string `json:"cwd"`
-	APIBase              string `json:"api_base,omitempty"`
-	MessageFormatVersion int    `json:"message_format_version"`
+	Title                string `json:"title"`
 	CreatedAt            string `json:"created_at"`
 	UpdatedAt            string `json:"updated_at"`
+	MessageFormatVersion int    `json:"message_format_version"`
+}
+
+// Summary is the session payload returned by the API.
+type Summary struct {
+	ID string `json:"id"`
+	Meta
 }
 
 // Data is one loaded session.
 type Data struct {
-	Session  Meta              `json:"session"`
+	Session  Summary           `json:"session"`
 	Messages []message.Message `json:"messages"`
 }
 
@@ -173,27 +173,25 @@ func ApplyRewind(messages []message.Message) []message.Message {
 }
 
 // DraftSession builds an in-memory draft.
-func (s *Store) DraftSession(title, providerName, model, cwd, apiBase string) Data {
+func (s *Store) DraftSession(cwd string) Data {
 	nowValue := now()
+	meta := Meta{
+		CWD:                  absPath(cwd),
+		Title:                DefaultSessionTitle,
+		CreatedAt:            nowValue,
+		UpdatedAt:            nowValue,
+		MessageFormatVersion: MessageFormatVersion,
+	}
+	sessionID := newID()
 	return Data{
-		Session: Meta{
-			ID:                   newID(),
-			Title:                defaultString(title, DefaultSessionTitle),
-			Provider:             defaultString(providerName, DefaultSessionProvider),
-			Model:                model,
-			CWD:                  absPath(cwd),
-			APIBase:              apiBase,
-			MessageFormatVersion: MessageFormatVersion,
-			CreatedAt:            nowValue,
-			UpdatedAt:            nowValue,
-		},
+		Session:  summarize(sessionID, meta),
 		Messages: []message.Message{},
 	}
 }
 
 // CreateSession writes a session immediately.
-func (s *Store) CreateSession(title, sessionID, providerName, model, cwd, apiBase string) (Data, error) {
-	data := s.DraftSession(title, providerName, model, cwd, apiBase)
+func (s *Store) CreateSession(sessionID, cwd string) (Data, error) {
+	data := s.DraftSession(cwd)
 	if sessionID != "" {
 		data.Session.ID = sessionID
 	}
@@ -204,7 +202,7 @@ func (s *Store) CreateSession(title, sessionID, providerName, model, cwd, apiBas
 	if err := s.ensureSessionDir(data.Session.ID); err != nil {
 		return Data{}, err
 	}
-	if err := s.writeMeta(data.Session.ID, data.Session); err != nil {
+	if err := s.writeMeta(data.Session.ID, data.Session.Meta); err != nil {
 		return Data{}, err
 	}
 	file, err := os.OpenFile(s.messagesPath(data.Session.ID), os.O_CREATE, 0o644)
@@ -215,13 +213,13 @@ func (s *Store) CreateSession(title, sessionID, providerName, model, cwd, apiBas
 }
 
 // ListSessions returns sessions sorted by updated_at descending.
-func (s *Store) ListSessions(cwd string) ([]Meta, error) {
+func (s *Store) ListSessions(cwd string) ([]Summary, error) {
 	entries, err := os.ReadDir(s.dataDir)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
 	filterCWD := absPath(cwd)
-	out := make([]Meta, 0, len(entries))
+	out := make([]Summary, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -233,7 +231,7 @@ func (s *Store) ListSessions(cwd string) ([]Meta, error) {
 		if filterCWD != "" && absPath(meta.CWD) != filterCWD {
 			continue
 		}
-		out = append(out, meta)
+		out = append(out, summarize(entry.Name(), meta))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].UpdatedAt > out[j].UpdatedAt
@@ -242,7 +240,7 @@ func (s *Store) ListSessions(cwd string) ([]Meta, error) {
 }
 
 // LatestSession returns the latest session for a workspace.
-func (s *Store) LatestSession(cwd string) (*Meta, error) {
+func (s *Store) LatestSession(cwd string) (*Summary, error) {
 	sessions, err := s.ListSessions(cwd)
 	if err != nil || len(sessions) == 0 {
 		return nil, err
@@ -273,7 +271,7 @@ func (s *Store) LoadSession(sessionID string) (*Data, error) {
 		return nil, err
 	}
 
-	return &Data{Session: meta, Messages: visible}, nil
+	return &Data{Session: summarize(sessionID, meta), Messages: visible}, nil
 }
 
 // DeleteSession removes a session directory.
@@ -297,6 +295,7 @@ func (s *Store) ClearSession(sessionID string) error {
 		}
 		return err
 	}
+	meta.Title = DefaultSessionTitle
 	meta.UpdatedAt = now()
 	if err := s.writeMeta(sessionID, meta); err != nil {
 		return err
@@ -328,7 +327,7 @@ func (s *Store) AppendRewind(sessionID string, rewindTo int) error {
 }
 
 // AppendMessage appends one canonical message.
-func (s *Store) AppendMessage(sessionID string, msg message.Message, providerName, model, cwd, apiBase string) error {
+func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string) error {
 	lock := s.sessionLock(sessionID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -344,15 +343,11 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, providerNam
 		}
 		nowValue := now()
 		meta = Meta{
-			ID:                   sessionID,
-			Title:                DefaultSessionTitle,
-			Provider:             defaultString(providerName, DefaultSessionProvider),
-			Model:                model,
 			CWD:                  absPath(cwd),
-			APIBase:              apiBase,
-			MessageFormatVersion: MessageFormatVersion,
+			Title:                DefaultSessionTitle,
 			CreatedAt:            nowValue,
 			UpdatedAt:            nowValue,
+			MessageFormatVersion: MessageFormatVersion,
 		}
 	}
 
@@ -360,9 +355,6 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, providerNam
 		return err
 	}
 	meta.UpdatedAt = now()
-	if meta.MessageFormatVersion == 0 {
-		meta.MessageFormatVersion = MessageFormatVersion
-	}
 	if meta.Title == DefaultSessionTitle && msg.Role == "user" {
 		if title := strings.TrimSpace(message.FlattenText(msg, false)); title != "" {
 			if len(title) > 48 {
@@ -429,7 +421,7 @@ func (s *Store) repairInterruptedToolLoop(sessionID string, meta *Meta, messages
 		repair.Content = append(repair.Content, message.ToolResultBlock(
 			id,
 			"error: tool call was interrupted",
-			"Tool call was interrupted",
+			nil,
 			true,
 			nil,
 			nil,
@@ -497,7 +489,7 @@ func (s *Store) writeMeta(sessionID string, meta Meta) error {
 }
 
 func (s *Store) ensureSessionDir(sessionID string) error {
-	if err := os.MkdirAll(filepath.Join(s.sessionDir(sessionID), "tool-output"), 0o755); err != nil {
+	if err := os.MkdirAll(s.sessionDir(sessionID), 0o755); err != nil {
 		return err
 	}
 	return nil
@@ -560,11 +552,11 @@ func absPath(path string) string {
 	return value
 }
 
-func defaultString(value, fallback string) string {
-	if value == "" {
-		return fallback
+func summarize(sessionID string, meta Meta) Summary {
+	return Summary{
+		ID:   sessionID,
+		Meta: meta,
 	}
-	return value
 }
 
 func asInt(value any) int {

@@ -190,7 +190,7 @@ func (a anthropicAdapter) serializeBlock(block message.Block) map[string]any {
 				})
 			}
 		}
-		content := any(block.ModelText)
+		content := any(block.Output)
 		if len(contentBlocks) > 0 {
 			content = contentBlocks
 		}
@@ -216,8 +216,12 @@ func (a anthropicAdapter) thinkingConfig(req Request) map[string]any {
 			return map[string]any{"type": "disabled"}
 		}
 		model := strings.ToLower(req.Model)
-		if strings.HasPrefix(model, "claude-sonnet-4-6") || strings.HasPrefix(model, "claude-opus-4-6") {
-			return map[string]any{"type": "adaptive"}
+		if strings.HasPrefix(model, "claude-opus-4-7") || strings.HasPrefix(model, "claude-opus-4-6") || strings.HasPrefix(model, "claude-sonnet-4-6") {
+			thinking := map[string]any{"type": "adaptive"}
+			if strings.HasPrefix(model, "claude-opus-4-7") {
+				thinking["display"] = "summarized"
+			}
+			return thinking
 		}
 		return manualAnthropicThinkingConfig(effort)
 	case "moonshotai", "minimax":
@@ -233,6 +237,8 @@ func (a anthropicAdapter) outputConfig(req Request) map[string]any {
 	}
 	model := strings.ToLower(req.Model)
 	switch {
+	case strings.HasPrefix(model, "claude-opus-4-7"):
+		return map[string]any{"effort": req.ReasoningEffort}
 	case strings.HasPrefix(model, "claude-sonnet-4-6"):
 		effort := req.ReasoningEffort
 		if effort == "xhigh" {

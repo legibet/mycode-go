@@ -172,19 +172,18 @@ func (e *Executor) Read(path string, offset, limit int) Result {
 	imageType := DetectImageMIMEType(filePath)
 	if imageType != "" {
 		if !e.supportsImageInput {
-			return errorResult("error: image input is not supported by the current model", "Current model does not support image input")
+			return errorResult("error: image input is not supported by the current model")
 		}
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return errorResult("error: file not found: "+path, "File not found: "+path)
+				return errorResult("error: file not found: " + path)
 			}
-			return errorResult(fmt.Sprintf("error: failed to read file: %v", err), "Failed to read file: "+path)
+			return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
 		}
 		summary := "Read image file [" + imageType + "]"
 		return Result{
-			ModelText:   summary,
-			DisplayText: summary,
+			Output: summary,
 			Content: []message.Block{
 				message.TextBlock(summary, nil),
 				message.ImageBlock(base64.StdEncoding.EncodeToString(data), imageType, filepath.Base(filePath), nil),
@@ -195,20 +194,20 @@ func (e *Executor) Read(path string, offset, limit int) Result {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return errorResult("error: file not found: "+path, "File not found: "+path)
+			return errorResult("error: file not found: " + path)
 		}
-		return errorResult(fmt.Sprintf("error: failed to read file: %v", err), "Failed to read file: "+path)
+		return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
 	}
 	if info.IsDir() {
-		return errorResult("error: not a file: "+path, "Not a file: "+path)
+		return errorResult("error: not a file: " + path)
 	}
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return errorResult(fmt.Sprintf("error: failed to read file: %v", err), "Failed to read file: "+path)
+		return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
 	}
 	if !utf8.Valid(data) {
-		return errorResult("error: file is not valid utf-8 text: "+path, "File is not valid UTF-8 text: "+path)
+		return errorResult("error: file is not valid utf-8 text: " + path)
 	}
 
 	startLine := 1
@@ -248,13 +247,10 @@ func (e *Executor) Read(path string, offset, limit int) Result {
 		lines = append(lines, line)
 	}
 	if err := scanner.Err(); err != nil {
-		return errorResult(fmt.Sprintf("error: failed to read file: %v", err), "Failed to read file: "+path)
+		return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
 	}
 	if totalLines < startLine && (totalLines != 0 || startLine != 1) {
-		return errorResult(
-			fmt.Sprintf("error: offset %d beyond end of file (%d lines)", offset, totalLines),
-			fmt.Sprintf("Offset %d beyond end of file: %s", offset, path),
-		)
+		return errorResult(fmt.Sprintf("error: offset %d beyond end of file (%d lines)", offset, totalLines))
 	}
 
 	parts := []string{}
@@ -277,19 +273,19 @@ func (e *Executor) Read(path string, offset, limit int) Result {
 	}
 
 	content = strings.Join(parts, "\n\n")
-	return Result{ModelText: content, DisplayText: content}
+	return Result{Output: content}
 }
 
 // Write writes a file atomically.
 func (e *Executor) Write(path, content string) Result {
 	filePath := ResolvePath(path, e.cwd)
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
-		return errorResult(fmt.Sprintf("error: failed to write file: %v", err), "Failed to write file: "+path)
+		return errorResult(fmt.Sprintf("error: failed to write file: %v", err))
 	}
 	if err := atomicWriteText(filePath, content, ""); err != nil {
-		return errorResult(fmt.Sprintf("error: failed to write file: %v", err), "Failed to write file: "+path)
+		return errorResult(fmt.Sprintf("error: failed to write file: %v", err))
 	}
-	return Result{ModelText: "ok", DisplayText: "Wrote " + path}
+	return Result{Output: "Wrote " + path}
 }
 
 func atomicWriteText(path, content, newline string) error {

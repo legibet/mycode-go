@@ -71,7 +71,7 @@ func TestRead(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)
 		result := executor.Read(".", 0, 0)
-		if !result.IsError || !strings.Contains(strings.ToLower(result.ModelText), "not a file") {
+		if !result.IsError || !strings.Contains(strings.ToLower(result.Output), "not a file") {
 			t.Fatalf("unexpected result: %#v", result)
 		}
 	})
@@ -84,7 +84,7 @@ func TestRead(t *testing.T) {
 			t.Fatal(err)
 		}
 		result := executor.Read("binary.bin", 0, 0)
-		if !result.IsError || !strings.Contains(strings.ToLower(result.ModelText), "utf-8") {
+		if !result.IsError || !strings.Contains(strings.ToLower(result.Output), "utf-8") {
 			t.Fatalf("unexpected result: %#v", result)
 		}
 	})
@@ -98,11 +98,11 @@ func TestRead(t *testing.T) {
 			t.Fatal(err)
 		}
 		result := executor.Read("long.txt", 0, 0)
-		if !strings.Contains(result.ModelText, "... [line truncated]") {
-			t.Fatalf("missing truncation marker: %q", result.ModelText)
+		if !strings.Contains(result.Output, "... [line truncated]") {
+			t.Fatalf("missing truncation marker: %q", result.Output)
 		}
-		if !strings.Contains(result.ModelText, "sed -n '2p'") {
-			t.Fatalf("missing hint: %q", result.ModelText)
+		if !strings.Contains(result.Output, "sed -n '2p'") {
+			t.Fatalf("missing hint: %q", result.Output)
 		}
 	})
 
@@ -114,7 +114,7 @@ func TestRead(t *testing.T) {
 			t.Fatal(err)
 		}
 		result := executor.Read("tiny.png", 0, 0)
-		if result.IsError || result.ModelText != "Read image file [image/png]" {
+		if result.IsError || result.Output != "Read image file [image/png]" {
 			t.Fatalf("unexpected result: %#v", result)
 		}
 		if len(result.Content) != 2 || result.Content[1].Type != "image" {
@@ -135,7 +135,7 @@ func TestEdit(t *testing.T) {
 			"oldText": "beta gamam",
 			"newText": "replacement",
 		}})
-		if !result.IsError || !strings.Contains(result.ModelText, "closest line: beta gamma") {
+		if !result.IsError || !strings.Contains(result.Output, "closest line: beta gamma") {
 			t.Fatalf("unexpected result: %#v", result)
 		}
 	})
@@ -193,7 +193,7 @@ func TestEdit(t *testing.T) {
 			"oldText": "x\n",
 			"newText": "y\n",
 		}})
-		if !result.IsError || !strings.Contains(strings.ToLower(result.ModelText), "after normalization") {
+		if !result.IsError || !strings.Contains(strings.ToLower(result.Output), "after normalization") {
 			t.Fatalf("unexpected result: %#v", result)
 		}
 	})
@@ -225,7 +225,7 @@ func TestBash(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)
 		result := executor.Bash("empty", "true", 0, nil)
-		if result.ModelText != "(empty)" {
+		if result.Output != "(empty)" {
 			t.Fatalf("unexpected result: %#v", result)
 		}
 	})
@@ -237,8 +237,8 @@ func TestBash(t *testing.T) {
 		if result.IsError {
 			t.Fatalf("unexpected error result: %#v", result)
 		}
-		if !strings.Contains(result.ModelText, "some output") || !strings.Contains(result.ModelText, "[exit code: 42]") {
-			t.Fatalf("unexpected output: %q", result.ModelText)
+		if !strings.Contains(result.Output, "some output") || !strings.Contains(result.Output, "[exit code: 42]") {
+			t.Fatalf("unexpected output: %q", result.Output)
 		}
 	})
 
@@ -246,8 +246,8 @@ func TestBash(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)
 		result := executor.Bash("large", "seq 1 3000", 0, nil)
-		if !strings.Contains(result.ModelText, "Truncated:") || !strings.Contains(result.ModelText, "Full output:") {
-			t.Fatalf("unexpected output: %q", result.ModelText)
+		if !strings.Contains(result.Output, "Truncated:") || !strings.Contains(result.Output, "Full output:") {
+			t.Fatalf("unexpected output: %q", result.Output)
 		}
 		if _, err := osReadFile(filepath.Join(dir, "tool-output", "bash-large.log")); err != nil {
 			t.Fatal(err)
@@ -258,11 +258,11 @@ func TestBash(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)
 		result := executor.Bash("long-line", "head -c 60000 /dev/zero | tr '\\000' x", 0, nil)
-		if !strings.Contains(result.ModelText, "KB limit") || !strings.Contains(result.ModelText, "Full output:") {
-			t.Fatalf("unexpected output: %q", result.ModelText)
+		if !strings.Contains(result.Output, "KB limit") || !strings.Contains(result.Output, "Full output:") {
+			t.Fatalf("unexpected output: %q", result.Output)
 		}
-		if strings.Contains(result.ModelText, "0 lines") {
-			t.Fatalf("unexpected output: %q", result.ModelText)
+		if strings.Contains(result.Output, "0 lines") {
+			t.Fatalf("unexpected output: %q", result.Output)
 		}
 	})
 
@@ -270,7 +270,7 @@ func TestBash(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)
 		result := executor.Bash("timeout", "sleep 2", 1, nil)
-		if !result.IsError || !strings.Contains(strings.ToLower(result.ModelText), "timeout") {
+		if !result.IsError || !strings.Contains(strings.ToLower(result.Output), "timeout") {
 			t.Fatalf("unexpected result: %#v", result)
 		}
 	})
@@ -278,21 +278,20 @@ func TestBash(t *testing.T) {
 
 func assertEditOK(t *testing.T, result Result, startLines, oldLineCounts, newLineCounts []int) {
 	t.Helper()
-	var payload struct {
-		Status string `json:"status"`
-		Edits  []struct {
-			StartLine    int `json:"start_line"`
-			OldLineCount int `json:"old_line_count"`
-			NewLineCount int `json:"new_line_count"`
-		} `json:"edits"`
+	rawEdits := result.Metadata["edits"]
+	data, err := json.Marshal(rawEdits)
+	if err != nil {
+		t.Fatalf("unexpected metadata: %#v", result.Metadata)
 	}
-	if err := json.Unmarshal([]byte(result.ModelText), &payload); err != nil {
-		t.Fatalf("failed to decode payload: %v", err)
+	var edits []struct {
+		StartLine    int `json:"start_line"`
+		OldLineCount int `json:"old_line_count"`
+		NewLineCount int `json:"new_line_count"`
 	}
-	if payload.Status != "ok" || len(payload.Edits) != len(startLines) {
-		t.Fatalf("unexpected payload: %#v", payload)
+	if err := json.Unmarshal(data, &edits); err != nil || len(edits) != len(startLines) {
+		t.Fatalf("unexpected metadata: %#v", result.Metadata)
 	}
-	for i, edit := range payload.Edits {
+	for i, edit := range edits {
 		if edit.StartLine != startLines[i] || edit.OldLineCount != oldLineCounts[i] || edit.NewLineCount != newLineCounts[i] {
 			t.Fatalf("unexpected edit %d: %#v", i, edit)
 		}

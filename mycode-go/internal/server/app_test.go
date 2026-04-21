@@ -134,9 +134,7 @@ func TestSessionLifecycle(t *testing.T) {
 		http.MethodPost,
 		"/api/sessions",
 		map[string]any{
-			"title":    "Test session",
-			"provider": "openai",
-			"cwd":      cwd,
+			"cwd": cwd,
 		},
 	)
 	if recorder.Code != http.StatusOK {
@@ -154,7 +152,7 @@ func TestSessionLifecycle(t *testing.T) {
 	if created.Session.ID == "" {
 		t.Fatal("expected session id")
 	}
-	if created.Session.Title != "Test session" {
+	if created.Session.Title != session.DefaultSessionTitle {
 		t.Fatalf("unexpected title: %s", created.Session.Title)
 	}
 	if created.Session.CWD != cwd {
@@ -282,12 +280,35 @@ func TestChatRejectsRewindForNewSessionWithoutCreatingFiles(t *testing.T) {
 	}
 }
 
+func TestChatRejectsUnsupportedReasoningEffortAsBadRequest(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	handler := newApp(false, "", session.NewStore(t.TempDir()), newRunManager())
+	recorder := performJSON(
+		t,
+		handler,
+		http.MethodPost,
+		"/api/chat",
+		map[string]any{
+			"session_id":       "bad-effort",
+			"message":          "hello",
+			"provider":         "openai",
+			"model":            "gpt-5.4",
+			"cwd":              t.TempDir(),
+			"reasoning_effort": "maximum",
+		},
+	)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestChatRejectsRewindToCompactSummary(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	store := session.NewStore(t.TempDir())
 	handler := newApp(false, "", store, newRunManager())
-	created, err := store.CreateSession("Test", "", "openai", "gpt-5.4", "/tmp", "")
+	created, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +320,7 @@ func TestChatRejectsRewindToCompactSummary(t *testing.T) {
 		session.BuildCompactEvent("summary of hello+hi", "p", "m", 2, nil),
 		message.UserTextMessage("explain X", nil),
 	} {
-		if err := store.AppendMessage(sessionID, msg, "openai", "gpt-5.4", "/tmp", ""); err != nil {
+		if err := store.AppendMessage(sessionID, msg, "/tmp"); err != nil {
 			t.Fatal(err)
 		}
 	}

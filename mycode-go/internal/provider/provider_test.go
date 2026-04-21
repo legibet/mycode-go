@@ -304,7 +304,7 @@ func TestOpenAIResponsesReplaysNativeOutputItemsForToolResults(t *testing.T) {
 				},
 			}),
 			message.BuildMessage("user", []message.Block{
-				message.ToolResultBlock("call_1", "file contents", "file contents", false, nil, nil),
+				message.ToolResultBlock("call_1", "file contents", nil, false, nil, nil),
 			}, nil),
 		},
 		MaxTokens: 4096,
@@ -436,9 +436,9 @@ func TestRepairMessagesForReplayDropsDuplicateAndOrphanToolResults(t *testing.T)
 			message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
 		}, "", "", "", "", nil, nil),
 		message.BuildMessage("user", []message.Block{
-			message.ToolResultBlock("call_1", "first", "first", false, nil, nil),
-			message.ToolResultBlock("call_1", "duplicate", "duplicate", false, nil, nil),
-			message.ToolResultBlock("call_2", "orphan", "orphan", false, nil, nil),
+			message.ToolResultBlock("call_1", "first", nil, false, nil, nil),
+			message.ToolResultBlock("call_1", "duplicate", nil, false, nil, nil),
+			message.ToolResultBlock("call_2", "orphan", nil, false, nil, nil),
 		}, nil),
 		message.AssistantMessage([]message.Block{
 			message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
@@ -450,7 +450,7 @@ func TestRepairMessagesForReplayDropsDuplicateAndOrphanToolResults(t *testing.T)
 			message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
 		}, "", "", "", "", nil, nil),
 		message.BuildMessage("user", []message.Block{
-			message.ToolResultBlock("call_1", "first", "first", false, nil, nil),
+			message.ToolResultBlock("call_1", "first", nil, false, nil, nil),
 		}, nil),
 	}
 	if !reflect.DeepEqual(replay, expected) {
@@ -464,7 +464,7 @@ func TestRepairMessagesForReplayKeepsPlaceholderUserTurn(t *testing.T) {
 			message.TextBlock("first", nil),
 		}, "", "", "", "", nil, nil),
 		message.BuildMessage("user", []message.Block{
-			message.ToolResultBlock("missing", "orphan", "orphan", false, nil, nil),
+			message.ToolResultBlock("missing", "orphan", nil, false, nil, nil),
 		}, nil),
 		message.AssistantMessage([]message.Block{
 			message.TextBlock("second", nil),
@@ -491,7 +491,7 @@ func TestRepairMessagesForReplayFiltersImagesWhenDisabled(t *testing.T) {
 		message.BuildMessage("user", []message.Block{
 			message.TextBlock("describe this", nil),
 			message.ImageBlock("abc", "image/png", `logo"<v2>.png`, nil),
-			message.ToolResultBlock("call_1", "Read image file [image/png]", "Read image file [image/png]", false, []message.Block{
+			message.ToolResultBlock("call_1", "Read image file [image/png]", nil, false, []message.Block{
 				message.TextBlock("Read image file [image/png]", nil),
 				message.ImageBlock("abc", "image/png", "", nil),
 			}, nil),
@@ -505,7 +505,7 @@ func TestRepairMessagesForReplayFiltersImagesWhenDisabled(t *testing.T) {
 		message.BuildMessage("user", []message.Block{
 			message.TextBlock("describe this", nil),
 			message.TextBlock(`<file name="logo&quot;&lt;v2&gt;.png" media_type="image/png" kind="image">Current model does not support image input.</file>`, map[string]any{"attachment": true}),
-			message.ToolResultBlock("call_1", "Read image file [image/png]", "Read image file [image/png]", false, []message.Block{
+			message.ToolResultBlock("call_1", "Read image file [image/png]", nil, false, []message.Block{
 				message.TextBlock("Read image file [image/png]", nil),
 			}, nil),
 		}, nil),
@@ -526,7 +526,7 @@ func TestOpenAIResponsesFallsBackToFullReplayForCrossProviderHistory(t *testing.
 				message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
 			}, "anthropic", "claude-sonnet-4-6", "", "", nil, nil),
 			message.BuildMessage("user", []message.Block{
-				message.ToolResultBlock("call_1", "42", "42", false, nil, nil),
+				message.ToolResultBlock("call_1", "42", nil, false, nil, nil),
 			}, nil),
 		},
 		MaxTokens: 4096,
@@ -567,7 +567,7 @@ func TestOpenAIResponsesSerializesToolResultImages(t *testing.T) {
 				message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.png"}, nil),
 			}, "", "", "", "", nil, nil),
 			message.BuildMessage("user", []message.Block{
-				message.ToolResultBlock("call_1", "Read image file [image/png]", "Read image file [image/png]", false, []message.Block{
+				message.ToolResultBlock("call_1", "Read image file [image/png]", nil, false, []message.Block{
 					message.TextBlock("Read image file [image/png]", nil),
 					message.ImageBlock(base64.StdEncoding.EncodeToString(pngBytes), "image/png", "tiny.png", nil),
 				}, nil),
@@ -740,7 +740,7 @@ func TestDeepSeekReplaysReasoningAcrossTurns(t *testing.T) {
 				message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
 			}, "", "", "", "", nil, nil),
 			message.BuildMessage("user", []message.Block{
-				message.ToolResultBlock("call_1", "done", "done", false, nil, nil),
+				message.ToolResultBlock("call_1", "done", nil, false, nil, nil),
 			}, nil),
 		},
 		MaxTokens: 2048,
@@ -777,8 +777,8 @@ func TestAnthropicPrepareMessagesNormalizesToolIDs(t *testing.T) {
 				message.ToolUseBlock("a|b", "write", map[string]any{"path": "y.py"}, nil),
 			}, "anthropic", "claude-sonnet-4-6", "", "", nil, nil),
 			message.BuildMessage("user", []message.Block{
-				message.ToolResultBlock("a/b", "done a", "done a", false, nil, nil),
-				message.ToolResultBlock("a|b", "done b", "done b", false, nil, nil),
+				message.ToolResultBlock("a/b", "done a", nil, false, nil, nil),
+				message.ToolResultBlock("a|b", "done b", nil, false, nil, nil),
 			}, nil),
 		},
 	}, adapter.projectToolCallID)
@@ -817,6 +817,12 @@ func TestAnthropicBuildPayloadMapsReasoningConfig(t *testing.T) {
 			effort:       "xhigh",
 			thinking:     map[string]any{"type": "adaptive"},
 			outputConfig: map[string]any{"effort": "max"},
+		},
+		{
+			model:        "claude-opus-4-7",
+			effort:       "high",
+			thinking:     map[string]any{"type": "adaptive", "display": "summarized"},
+			outputConfig: map[string]any{"effort": "high"},
 		},
 	}
 
@@ -859,7 +865,7 @@ func TestAnthropicBuildPayloadAddsCacheControlToLatestUserBlock(t *testing.T) {
 			}, "", "", "", "", nil, nil),
 			message.BuildMessage("user", []message.Block{
 				message.TextBlock("latest user message", nil),
-				message.ToolResultBlock("call_1", "tool output", "tool output", false, nil, nil),
+				message.ToolResultBlock("call_1", "tool output", nil, false, nil, nil),
 			}, nil),
 		},
 	})

@@ -37,9 +37,20 @@ func TestShouldCompactAcceptsProviderSpecificUsageShapes(t *testing.T) {
 	}
 }
 
+func TestCreateSessionDoesNotPrecreateToolOutputDir(t *testing.T) {
+	store := NewStore(t.TempDir())
+	data, err := store.CreateSession("", "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(store.SessionDir(data.Session.ID), "tool-output")); !os.IsNotExist(err) {
+		t.Fatalf("expected no tool-output dir, got err=%v", err)
+	}
+}
+
 func TestLoadSessionRepairsInterruptedToolLoop(t *testing.T) {
 	store := NewStore(t.TempDir())
-	data, err := store.CreateSession("Test", "", "anthropic", "gpt-5.4", "/tmp", "")
+	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +58,7 @@ func TestLoadSessionRepairsInterruptedToolLoop(t *testing.T) {
 
 	if err := store.AppendMessage(sessionID, message.AssistantMessage([]message.Block{
 		message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
-	}, "anthropic", "gpt-5.4", "", "", nil, nil), "anthropic", "gpt-5.4", "/tmp", ""); err != nil {
+	}, "anthropic", "gpt-5.4", "", "", nil, nil), "/tmp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -102,7 +113,7 @@ func TestApplyRewindMultipleMarkers(t *testing.T) {
 
 func TestLoadSessionAppliesLatestCompactSummary(t *testing.T) {
 	store := NewStore(t.TempDir())
-	data, err := store.CreateSession("Test", "", "p", "m", "/tmp", "")
+	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +127,7 @@ func TestLoadSessionAppliesLatestCompactSummary(t *testing.T) {
 		BuildCompactEvent("new summary", "p", "m", 4, nil),
 		message.AssistantMessage([]message.Block{message.TextBlock("latest reply", nil)}, "p", "m", "", "", nil, nil),
 	} {
-		if err := store.AppendMessage(sessionID, msg, "p", "m", "/tmp", ""); err != nil {
+		if err := store.AppendMessage(sessionID, msg, "/tmp"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -138,7 +149,7 @@ func TestLoadSessionAppliesLatestCompactSummary(t *testing.T) {
 
 func TestRewindAfterCompactPreservesSummary(t *testing.T) {
 	store := NewStore(t.TempDir())
-	data, err := store.CreateSession("Test", "", "p", "m", "/tmp", "")
+	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +162,7 @@ func TestRewindAfterCompactPreservesSummary(t *testing.T) {
 		message.UserTextMessage("explain X", nil),
 		message.AssistantMessage([]message.Block{message.TextBlock("X is...", nil)}, "p", "m", "", "", nil, nil),
 	} {
-		if err := store.AppendMessage(sessionID, msg, "p", "m", "/tmp", ""); err != nil {
+		if err := store.AppendMessage(sessionID, msg, "/tmp"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -167,7 +178,7 @@ func TestRewindAfterCompactPreservesSummary(t *testing.T) {
 	if err := store.AppendRewind(sessionID, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendMessage(sessionID, message.UserTextMessage("explain Y instead", nil), "p", "m", "/tmp", ""); err != nil {
+	if err := store.AppendMessage(sessionID, message.UserTextMessage("explain Y instead", nil), "/tmp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -185,7 +196,7 @@ func TestRewindAfterCompactPreservesSummary(t *testing.T) {
 
 func TestRewindPastInterruptedToolLoopSkipsRepair(t *testing.T) {
 	store := NewStore(t.TempDir())
-	data, err := store.CreateSession("Test", "", "p", "m", "/tmp", "")
+	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +209,7 @@ func TestRewindPastInterruptedToolLoopSkipsRepair(t *testing.T) {
 			message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
 		}, "p", "m", "", "", nil, nil),
 	} {
-		if err := store.AppendMessage(sessionID, msg, "p", "m", "/tmp", ""); err != nil {
+		if err := store.AppendMessage(sessionID, msg, "/tmp"); err != nil {
 			t.Fatal(err)
 		}
 	}

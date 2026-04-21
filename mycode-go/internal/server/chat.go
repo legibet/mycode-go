@@ -16,7 +16,6 @@ import (
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/message"
 	"github.com/legibet/mycode-go/internal/provider"
-	"github.com/legibet/mycode-go/internal/session"
 	"github.com/legibet/mycode-go/internal/tools"
 )
 
@@ -69,6 +68,10 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 		req.ReasoningEffort,
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "unsupported reasoning_effort") {
+			writeDetailError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeDetailError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -104,15 +107,7 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 			writeDetailError(w, http.StatusBadRequest, "rewind_to requires an existing session")
 			return
 		}
-		title := buildSessionTitle(userMessage)
-		created, err := a.store.CreateSession(
-			title,
-			sessionID,
-			resolved.ProviderType,
-			resolved.Model,
-			cwd,
-			resolved.APIBase,
-		)
+		created, err := a.store.CreateSession(sessionID, cwd)
 		if err != nil {
 			writeDetailError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -136,6 +131,10 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		baseMessages = baseMessages[:rewindTo]
+		if err := a.store.AppendRewind(sessionID, rewindTo); err != nil {
+			writeDetailError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	agent, err := agentpkg.New(agentpkg.Options{
@@ -159,22 +158,8 @@ func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rewindPersisted := false
 	onPersist := func(msg message.Message) error {
-		if req.RewindTo != nil && !rewindPersisted {
-			if err := a.store.AppendRewind(sessionID, *req.RewindTo); err != nil {
-				return err
-			}
-			rewindPersisted = true
-		}
-		return a.store.AppendMessage(
-			sessionID,
-			msg,
-			resolved.ProviderType,
-			resolved.Model,
-			cwd,
-			resolved.APIBase,
-		)
+		return a.store.AppendMessage(sessionID, msg, cwd)
 	}
 
 	run, err := a.runs.startRun(sessionID, userMessage, baseMessages, agent, onPersist)
@@ -491,17 +476,6 @@ func validateUserMessage(userMessage message.Message, resolved config.ResolvedPr
 		}
 	}
 	return nil
-}
-
-func buildSessionTitle(msg message.Message) string {
-	title := strings.TrimSpace(strings.ReplaceAll(message.FlattenText(msg, false), "\n", " "))
-	if title == "" {
-		return session.DefaultSessionTitle
-	}
-	if len(title) <= 48 {
-		return title
-	}
-	return strings.TrimSpace(title[:48])
 }
 
 func escapeAttachmentAttr(value string) string {

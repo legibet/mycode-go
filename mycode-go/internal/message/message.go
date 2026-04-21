@@ -8,19 +8,19 @@ import (
 
 // Block is the canonical content block persisted in sessions and used in API responses.
 type Block struct {
-	Type        string         `json:"type"`
-	Text        string         `json:"text,omitempty"`
-	Data        string         `json:"data,omitempty"`
-	MIMEType    string         `json:"mime_type,omitempty"`
-	Name        string         `json:"name,omitempty"`
-	ID          string         `json:"id,omitempty"`
-	Input       map[string]any `json:"input,omitempty"`
-	ToolUseID   string         `json:"tool_use_id,omitempty"`
-	ModelText   string         `json:"model_text,omitempty"`
-	DisplayText string         `json:"display_text,omitempty"`
-	IsError     *bool          `json:"is_error,omitempty"`
-	Content     []Block        `json:"content,omitempty"`
-	Meta        map[string]any `json:"meta,omitempty"`
+	Type      string         `json:"type"`
+	Text      string         `json:"text,omitempty"`
+	Data      string         `json:"data,omitempty"`
+	MIMEType  string         `json:"mime_type,omitempty"`
+	Name      string         `json:"name,omitempty"`
+	ID        string         `json:"id,omitempty"`
+	Input     map[string]any `json:"input,omitempty"`
+	ToolUseID string         `json:"tool_use_id,omitempty"`
+	Output    string         `json:"output,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	IsError   *bool          `json:"is_error,omitempty"`
+	Content   []Block        `json:"content,omitempty"`
+	Meta      map[string]any `json:"meta,omitempty"`
 }
 
 // Message is the single runtime and persistence message format.
@@ -79,13 +79,15 @@ func ToolUseBlock(id, name string, input map[string]any, meta map[string]any) Bl
 }
 
 // ToolResultBlock returns a tool result block.
-func ToolResultBlock(toolUseID, modelText, displayText string, isError bool, content []Block, meta map[string]any) Block {
+func ToolResultBlock(toolUseID, output string, metadata map[string]any, isError bool, content []Block, meta map[string]any) Block {
 	block := Block{
-		Type:        "tool_result",
-		ToolUseID:   toolUseID,
-		ModelText:   modelText,
-		DisplayText: displayText,
-		IsError:     Bool(isError),
+		Type:      "tool_result",
+		ToolUseID: toolUseID,
+		Output:    output,
+		IsError:   Bool(isError),
+	}
+	if len(metadata) > 0 {
+		block.Metadata = maps.Clone(metadata)
 	}
 	if len(content) > 0 {
 		block.Content = slices.Clone(content)
@@ -180,6 +182,9 @@ func CloneBlock(block Block) Block {
 		for i, child := range block.Content {
 			out.Content[i] = CloneBlock(child)
 		}
+	}
+	if len(block.Metadata) > 0 {
+		out.Metadata = maps.Clone(block.Metadata)
 	}
 	if len(block.Meta) > 0 {
 		out.Meta = maps.Clone(block.Meta)

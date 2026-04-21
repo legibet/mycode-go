@@ -227,6 +227,20 @@ func TestNewRejectsUnsupportedProviderAdapter(t *testing.T) {
 	}
 }
 
+func TestNewDefaultsCWDToCurrentDirectory(t *testing.T) {
+	agent, err := New(Options{
+		Model:    "gpt-5.4",
+		Provider: "openai",
+		Adapter:  &fakeAdapter{spec: provider.Spec{ID: "openai"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.CWD == "" || !filepath.IsAbs(agent.CWD) {
+		t.Fatalf("unexpected cwd: %q", agent.CWD)
+	}
+}
+
 func collectEvents(stream <-chan Event) []Event {
 	events := []Event{}
 	for event := range stream {

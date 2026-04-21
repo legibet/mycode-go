@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -62,7 +63,7 @@ func Build(cwd, home string) string {
 	if skills := loadSkills(resolvedCWD, home); skills != "" {
 		parts = append(parts, skills)
 	}
-	parts = append(parts, "Current working directory: "+resolvedCWD)
+	parts = append(parts, "Current working directory: "+resolvedCWD+"\nCurrent date: "+time.Now().Format("2006-01"))
 	return strings.Join(parts, "\n\n")
 }
 

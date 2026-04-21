@@ -4,17 +4,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/message"
-	"github.com/legibet/mycode-go/internal/session"
 )
 
 type sessionCreateRequest struct {
-	Title    string `json:"title"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	CWD      string `json:"cwd"`
-	APIBase  string `json:"api_base"`
+	CWD string `json:"cwd"`
 }
 
 type sessionResponse struct {
@@ -25,8 +19,13 @@ type sessionResponse struct {
 }
 
 type sessionListItem struct {
-	session.Meta
-	IsRunning bool `json:"is_running"`
+	ID                   string `json:"id"`
+	Title                string `json:"title"`
+	CWD                  string `json:"cwd"`
+	CreatedAt            string `json:"created_at"`
+	UpdatedAt            string `json:"updated_at"`
+	MessageFormatVersion int    `json:"message_format_version"`
+	IsRunning            bool   `json:"is_running"`
 }
 
 func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
@@ -37,18 +36,7 @@ func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cwd := requestCWD(req.CWD)
-	settings, err := config.Load(cwd)
-	if err != nil {
-		writeDetailError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	resolved, err := config.ResolveProvider(settings, req.Provider, req.Model, "", req.APIBase, "")
-	if err != nil {
-		writeDetailError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	data, err := a.store.CreateSession(req.Title, "", resolved.ProviderType, resolved.Model, cwd, resolved.APIBase)
+	data, err := a.store.CreateSession("", cwd)
 	if err != nil {
 		writeDetailError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -67,8 +55,13 @@ func (a *app) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	sessions := make([]sessionListItem, 0, len(items))
 	for _, item := range items {
 		sessions = append(sessions, sessionListItem{
-			Meta:      item,
-			IsRunning: a.runs.hasActiveRun(item.ID),
+			ID:                   item.ID,
+			Title:                item.Title,
+			CWD:                  item.CWD,
+			CreatedAt:            item.CreatedAt,
+			UpdatedAt:            item.UpdatedAt,
+			MessageFormatVersion: item.MessageFormatVersion,
+			IsRunning:            a.runs.hasActiveRun(item.ID),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})

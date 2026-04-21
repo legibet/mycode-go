@@ -3,7 +3,6 @@ package tools
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -37,10 +36,10 @@ type ToolSpec struct {
 
 // Result is the canonical tool execution result.
 type Result struct {
-	ModelText   string          `json:"model_text"`
-	DisplayText string          `json:"display_text"`
-	IsError     bool            `json:"is_error"`
-	Content     []message.Block `json:"content,omitempty"`
+	Output   string          `json:"output"`
+	Content  []message.Block `json:"content,omitempty"`
+	Metadata map[string]any  `json:"metadata,omitempty"`
+	IsError  bool            `json:"is_error"`
 }
 
 // Truncation reports text truncation details.
@@ -155,7 +154,6 @@ func NewExecutor(cwd, sessionDir string, supportsImageInput bool) *Executor {
 		sessionDir = absoluteCWD
 	}
 	toolOutputDir := filepath.Join(sessionDir, "tool-output")
-	_ = os.MkdirAll(toolOutputDir, 0o755)
 	return &Executor{
 		cwd:                absoluteCWD,
 		toolOutputDir:      toolOutputDir,
@@ -222,6 +220,6 @@ func ParseToolArguments(raw string) (map[string]any, error) {
 	return object, nil
 }
 
-func errorResult(modelText, displayText string) Result {
-	return Result{ModelText: modelText, DisplayText: displayText, IsError: true}
+func errorResult(output string) Result {
+	return Result{Output: output, IsError: true}
 }

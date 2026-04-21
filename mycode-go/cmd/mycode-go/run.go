@@ -64,10 +64,7 @@ func runCommand(args []string) int {
 	store := session.NewStore("")
 	resolvedSession, err := resolveSession(
 		store,
-		resolvedProvider.ProviderType,
 		cwd,
-		resolvedProvider.Model,
-		resolvedProvider.APIBase,
 		*sessionID,
 		*continueLast,
 	)
@@ -104,14 +101,7 @@ func runCommand(args []string) int {
 			cloned := message.Clone(msg)
 			latestAssistant = &cloned
 		}
-		return store.AppendMessage(
-			resolvedSession.ID,
-			msg,
-			resolvedProvider.ProviderType,
-			resolvedProvider.Model,
-			cwd,
-			resolvedProvider.APIBase,
-		)
+		return store.AppendMessage(resolvedSession.ID, msg, cwd)
 	}
 
 	userMessage := message.UserTextMessage(prompt, nil)
@@ -138,7 +128,7 @@ func runCommand(args []string) int {
 	return 0
 }
 
-func resolveSession(store *session.Store, providerType, cwd, model, apiBase, requestedSessionID string, continueLast bool) (resolvedSession, error) {
+func resolveSession(store *session.Store, cwd, requestedSessionID string, continueLast bool) (resolvedSession, error) {
 	if requestedSessionID != "" {
 		data, err := store.LoadSession(requestedSessionID)
 		if err != nil {
@@ -167,7 +157,7 @@ func resolveSession(store *session.Store, providerType, cwd, model, apiBase, req
 		}
 	}
 
-	draft := store.DraftSession("", providerType, model, cwd, apiBase)
+	draft := store.DraftSession(cwd)
 	return resolvedSession{ID: draft.Session.ID, Messages: nil}, nil
 }
 

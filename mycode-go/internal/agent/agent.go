@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 
 	"github.com/legibet/mycode-go/internal/config"
@@ -70,9 +71,21 @@ type Agent struct {
 
 // New creates an agent from options.
 func New(opts Options) (*Agent, error) {
+	cwd := opts.CWD
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			cwd = "."
+		}
+	}
+	if absolute, err := filepath.Abs(cwd); err == nil {
+		cwd = absolute
+	}
+
 	sessionDir := opts.SessionDir
 	if sessionDir == "" {
-		sessionDir = opts.CWD
+		sessionDir = cwd
 	}
 	sessionID := opts.SessionID
 	if sessionID == "" {
@@ -81,7 +94,7 @@ func New(opts Options) (*Agent, error) {
 
 	toolExecutor := opts.Tools
 	if toolExecutor == nil {
-		toolExecutor = tools.NewExecutor(opts.CWD, sessionDir, opts.SupportsImageInput)
+		toolExecutor = tools.NewExecutor(cwd, sessionDir, opts.SupportsImageInput)
 	}
 
 	adapter := opts.Adapter
@@ -95,7 +108,7 @@ func New(opts Options) (*Agent, error) {
 
 	system := opts.System
 	if system == "" {
-		system = prompt.Build(opts.CWD, config.ResolveHome())
+		system = prompt.Build(cwd, config.ResolveHome())
 	}
 
 	cloned := make([]message.Message, len(opts.Messages))
@@ -106,7 +119,7 @@ func New(opts Options) (*Agent, error) {
 	return &Agent{
 		Model:              opts.Model,
 		Provider:           opts.Provider,
-		CWD:                opts.CWD,
+		CWD:                cwd,
 		SessionDir:         sessionDir,
 		SessionID:          sessionID,
 		APIKey:             opts.APIKey,
@@ -245,25 +258,27 @@ func (a *Agent) Chat(ctx context.Context, userInput message.Message, onPersist P
 				result := a.runTool(toolCall, out)
 				toolResults = append(toolResults, message.ToolResultBlock(
 					toolCall.ID,
-					result.ModelText,
-					result.DisplayText,
+					result.Output,
+					result.Metadata,
 					result.IsError,
 					result.Content,
 					nil,
 				))
 
 				data := map[string]any{
-					"tool_use_id":  toolCall.ID,
-					"model_text":   result.ModelText,
-					"display_text": result.DisplayText,
-					"is_error":     result.IsError,
+					"tool_use_id": toolCall.ID,
+					"output":      result.Output,
+					"is_error":    result.IsError,
+				}
+				if len(result.Metadata) > 0 {
+					data["metadata"] = result.Metadata
 				}
 				if len(result.Content) > 0 {
 					data["content"] = result.Content
 				}
 				out <- Event{Type: "tool_done", Data: data}
 
-				if result.ModelText == "error: cancelled" && ctx.Err() != nil {
+				if result.Output == "error: cancelled" && ctx.Err() != nil {
 					toolMessage := message.BuildMessage("user", toolResults, nil)
 					a.Messages = append(a.Messages, toolMessage)
 					if onPersist != nil {
@@ -318,7 +333,7 @@ func (a *Agent) runTool(toolCall message.Block, out chan<- Event) tools.Result {
 			}}
 		})
 	default:
-		return tools.Result{ModelText: "error: unknown tool: " + toolCall.Name, DisplayText: "Unknown tool: " + toolCall.Name, IsError: true}
+		return tools.Result{Output: "error: unknown tool: " + toolCall.Name, IsError: true}
 	}
 }
 

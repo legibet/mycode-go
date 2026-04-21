@@ -243,7 +243,7 @@ func ToolResultContentBlocks(block message.Block) []message.Block {
 		}
 		return out
 	}
-	return []message.Block{message.TextBlock(block.ModelText, nil)}
+	return []message.Block{message.TextBlock(block.Output, nil)}
 }
 
 func interruptedToolResultMessage(toolUseIDs []string) message.Message {
@@ -252,7 +252,7 @@ func interruptedToolResultMessage(toolUseIDs []string) message.Message {
 		blocks = append(blocks, message.ToolResultBlock(
 			toolUseID,
 			"error: tool call was interrupted",
-			"Tool call was interrupted",
+			nil,
 			true,
 			nil,
 			nil,
