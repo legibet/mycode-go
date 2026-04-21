@@ -2,118 +2,113 @@
 
 Source: `mycode-go/internal/session/store.go`
 
+The on-disk format matches Python `mycode-sdk` / `mycode-cli` message format version 6.
+
 ## Storage Layout
 
 ```text
-~/.mycode/sessions/<session_id>/
+$MYCODE_HOME/sessions/<session_id>/
   meta.json        # session metadata
-  messages.jsonl   # one JSON record per line (append-only)
-  tool-output/     # large bash outputs spilled to disk
+  messages.jsonl   # one JSON record per line, append-only
+  tool-output/     # bash spill files, created lazily
 ```
 
-Sessions directory is resolved by `ResolveSessionsDir()` → `$MYCODE_HOME/sessions/` (default `~/.mycode/sessions/`).
+`$MYCODE_HOME` defaults to `~/.mycode`. `tool-output/` is created only when bash output is actually spilled.
 
 ## meta.json
 
 ```json
 {
-  "id": "...",
-  "title": "...",
-  "provider": "anthropic",
-  "model": "claude-sonnet-4-6",
   "cwd": "/path/to/workspace",
-  "api_base": null,
-  "message_format_version": 5,
+  "title": "New chat",
   "created_at": "...",
-  "updated_at": "..."
+  "updated_at": "...",
+  "message_format_version": 6
 }
 ```
 
-- `title` — auto-set from the first user message text (first 48 chars)
-- `provider`, `model`, `api_base` — fixed at session creation; request-time overrides are runtime-only
-- `message_format_version` — written as `5` when missing; no version check on load
+- `id` is not persisted. API responses add it from the directory name.
+- `provider`, `model`, and `api_base` are not persisted in meta. Per-turn provider state lives on assistant message `meta`.
+- `title` starts as `"New chat"` and is promoted to the first readable user message, truncated to 48 chars.
+- `updated_at` is bumped on every appended message.
+- `message_format_version` is written as `6`.
 
-## messages.jsonl Record Types
+## Message Blocks
 
-Each line is a JSON object. The `role` field acts as a discriminator.
-
-### Regular message
-
-Standard `user` or `assistant` message in the internal block format.
+Canonical messages are block-based:
 
 ```json
-{"role": "user", "content": [{"type": "text", "text": "..."}], "meta": {...}}
-{"role": "user", "content": [{"type": "text", "text": "..."}, {"type": "image", "data": "...", "mime_type": "image/png"}], "meta": {...}}
-{"role": "assistant", "content": [{"type": "thinking", "text": "..."}, {"type": "text", "text": "..."}, {"type": "tool_use", "id": "...", "name": "...", "input": {...}}], "meta": {"provider": "...", "model": "...", "stop_reason": "...", "usage": {...}}}
+{"role": "user", "content": [{"type": "text", "text": "..."}]}
+{"role": "assistant", "content": [{"type": "thinking", "text": "..."}, {"type": "text", "text": "..."}, {"type": "tool_use", "id": "call_1", "name": "read", "input": {"path": "x.go"}}], "meta": {"provider": "...", "model": "...", "usage": {...}}}
+{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "output": "...", "metadata": {...}, "is_error": false}]}
 ```
 
-`tool_result.content` may store `text` and `image` blocks.
+`tool_result.output` is replayed to providers. `tool_result.metadata` is structured UI data. The `edit` tool stores line numbers and `added_lines` / `removed_lines` in `metadata.edits`.
 
-### Compact event
+## Record Types
+
+### Regular Message
+
+`role` is `user` or `assistant`. User messages may contain `text`, `image`, `document`, and `tool_result`. Assistant messages may contain `thinking`, `text`, and `tool_use`.
+
+### Compact Event
 
 ```json
 {"role": "compact", "content": [{"type": "text", "text": "<summary>"}], "meta": {"provider": "...", "model": "...", "compacted_count": 12}}
 ```
 
-Marks a context compaction point. The agent loop writes a compact event when token usage ≥ `compact_threshold × context window`. See "Context Compaction" below.
-
-### Rewind event
+### Rewind Event
 
 ```json
 {"role": "rewind", "meta": {"rewind_to": 5, "created_at": "..."}}
 ```
 
-Marks an undo point. See "Rewind" below.
-
 ## Load Order
 
-When a session is loaded (`Store.LoadSession`):
+`Store.LoadSession(sessionID)` applies the same replay order as Python:
 
-1. Read all JSONL lines into a raw list
-2. `ApplyCompact()` — find the last `role: "compact"` record, replace everything before it with a synthetic user summary + assistant ack, keep messages after it
-3. `ApplyRewind()` — scan sequentially; when a rewind record is found, truncate the accumulated list to `meta.rewind_to` and continue loading subsequent lines
-4. `repairInterruptedToolLoop()` — if the latest assistant tool loop has unmatched `tool_use` blocks (no corresponding `tool_result` user message), append one synthetic error result message
+1. Read raw JSONL records.
+2. Apply latest compact summary.
+3. Apply rewind markers sequentially.
+4. Repair an interrupted final tool loop by appending synthetic error `tool_result` blocks.
 
 ## Context Compaction
 
-Triggered in the agent loop after a successful turn completes:
+After a successful turn, the agent checks the last assistant usage. Compaction triggers when:
 
-1. Check `ShouldCompact()` — true when the last assistant message's `usage.input_tokens` ≥ `context_window × compact_threshold`
-2. Ask the same provider for a summary (no tools, just text, max 8192 tokens)
-3. Build a compact event with the summary text and `compacted_count`
-4. Persist the compact event (append-only — original messages stay in JSONL)
-5. Apply `ApplyCompact()` in memory to rebuild the visible message list
-6. Emit SSE `compact` event to the web UI
+```text
+usage.input_tokens >= context_window * compact_threshold
+```
 
-`ShouldCompact()` checks multiple usage field names: `input_tokens`, `prompt_tokens`, `prompt_token_count`.
+Fallback usage fields are `prompt_tokens` and `prompt_token_count`.
+
+The compact request uses the same provider/model, no tools, and no explicit reasoning effort. The compact event is appended; older JSONL records are never rewritten.
 
 ## Rewind
 
-Triggered by `POST /api/chat` with `rewind_to`:
+`POST /api/chat` with `rewind_to` validates that the target visible message is a real user prompt. The server appends a rewind marker before starting the replacement run. Loading the session later produces the same visible history in Python and Go.
 
-1. Server validates the target message is a real user message
-2. Optimistically truncates visible messages in memory
-3. On first persist, appends a rewind event to JSONL
-4. On load, `ApplyRewind()` processes rewind markers inline
+## Bash Output Spill
 
-## tool-output Spill
+Bash keeps up to 5 MB in memory. Larger output spills to:
 
-Bash output exceeding 5MB in memory (`BashMaxInMemoryBytes`) is written to `tool-output/bash-<tool_call_id>.log`. The tool result keeps the last 2000 lines in memory. When output is truncated, the result text includes the saved log path and instructions to read it with offset or limit.
+```text
+<session_dir>/tool-output/bash-<tool_call_id>.log
+```
 
-## Current Format Version
+The returned `output` contains the visible tail and a "Full output" path.
 
-`MessageFormatVersion = 5`
+## Store API
 
-Stored in `meta.json`. The field is written when missing but not validated on load.
+Important methods:
 
-## Session Store API
+- `CreateSession(sessionID, cwd)` creates `meta.json` and `messages.jsonl`.
+- `DraftSession(cwd)` creates an in-memory summary with a fresh id.
+- `ListSessions(cwd)` returns summaries sorted by `updated_at` descending.
+- `LoadSession(sessionID)` returns visible messages after replay.
+- `AppendMessage(sessionID, msg, cwd)` appends one message and refreshes meta.
+- `AppendRewind(sessionID, rewindTo)` appends a rewind marker if the session exists.
+- `ClearSession(sessionID)` truncates messages and resets title.
+- `DeleteSession(sessionID)` removes the session directory.
 
-`Store` (in `mycode-go/internal/session/store.go`) provides:
-
-- `CreateSession(title, sessionID, provider, model, cwd, apiBase)` → create on disk
-- `ListSessions(cwd)` → list by workspace, sorted by `updated_at` descending
-- `LoadSession(sessionID)` → load with full replay pipeline
-- `DeleteSession(sessionID)` → recursive directory delete
-- `ClearSession(sessionID)` → truncate `messages.jsonl`, keep meta
-- `AppendMessage(sessionID, message, provider, model, cwd, apiBase)` → append one line; auto-creates a session on first message
-- `AppendRewind(sessionID, rewindTo)` → append rewind marker when the session already exists
+The store remains append-only for conversation history. Only `meta.json` and explicit clear/delete operations mutate existing files.

@@ -1,14 +1,16 @@
 # Server API
 
-Base prefix: `/api`. Handlers live in `mycode-go/internal/server/` with routing wired in `mycode-go/internal/server/app.go`.
+Base prefix: `/api`. Routes are wired in `mycode-go/internal/server/app.go`; request parsing and handlers live in `mycode-go/internal/server/*.go`.
+
+The API intentionally matches the Python `mycode-cli` web contract so the same browser session can switch between Python and Go backends.
 
 ## Chat
 
 ### `POST /api/chat`
 
-Start an agent run. Returns JSON immediately while the run streams asynchronously.
+Start one agent run. The handler returns JSON immediately; output streams later through `/api/runs/{run_id}/stream`.
 
-Request body (`chatRequest`, `mycode-go/internal/server/types.go`):
+Request body (`chatRequest` in `mycode-go/internal/server/chat.go`):
 
 ```json
 {
@@ -27,11 +29,11 @@ Request body (`chatRequest`, `mycode-go/internal/server/types.go`):
 
 Exactly one of `message` or `input` is required.
 
-- `provider` — provider id or configured alias name
-- `reasoning_effort` — overrides config for this request only; `null` or `"auto"` means use config default
-- `rewind_to` — visible message index to rewind to before sending the new message; target must be a real user message
+- `provider` is either a configured provider alias or a raw provider id.
+- `reasoning_effort` overrides config for this request only. Empty string, `null`, or `"auto"` means "use server/config default".
+- `rewind_to` is a visible message index. It must point at a real user message, not an assistant message, synthetic compact summary, or tool-result-only message.
 
-Structured `input` uses `chatInputBlock`:
+Structured `input` accepts the same block shape as Python:
 
 ```json
 [
@@ -44,49 +46,54 @@ Structured `input` uses `chatInputBlock`:
 ]
 ```
 
-- `type: "text"` — uses `text`
-- `type: "text"` with `is_attachment=true` — wraps UTF-8 file content as the same `<file ...>` attachment text used by the original CLI `@file`
-- `type: "image"` — uses `path` or inline base64 `data`
-- `type: "document"` — uses `path` or inline base64 `data`
-- `mime_type` is required when `data` is provided
-- `path` accepts `image/png`, `image/jpeg`, `image/gif`, `image/webp`
-- `path` accepts `application/pdf` for `type: "document"`
-- The resolved model must have `supports_image_input=true`
-- The resolved model must have `supports_pdf_input=true` for `type: "document"`
+- Text attachments are wrapped as `<file name="...">...</file>` with `meta.attachment=true`.
+- Image paths accept PNG, JPEG, GIF, and WebP.
+- Documents currently accept PDF only.
+- Inline `data` requires `mime_type`.
+- The resolved model must support image input for `image` blocks and PDF input for `document` blocks.
 
 Response:
 
 ```json
 {
   "run": { "id": "...", "session_id": "...", "status": "running", "last_seq": 0 },
-  "session": { "id": "...", "title": "...", "...": "..." }
+  "session": {
+    "id": "...",
+    "cwd": "...",
+    "title": "...",
+    "created_at": "...",
+    "updated_at": "...",
+    "message_format_version": 6
+  }
 }
 ```
 
-Error responses:
+Errors:
 
-- `400` — invalid request or invalid `rewind_to`; body is `{"detail": "..."}`
-- `409` — session already has a running task; body is `{"detail": {"message": "...", "run": {...}}}`
-- `500` — provider resolution and runtime errors bubble up as `{"detail": "..."}`
+- `400` for invalid request data, invalid `rewind_to`, unsupported attachment type, unsupported model capability, or unsupported `reasoning_effort`.
+- `409` when the session already has a running task. Body shape: `{"detail": {"message": "...", "run": {...}}}`.
+- `500` for config/runtime failures other than invalid request values.
 
 ### `GET /api/runs/{run_id}/stream?after=0`
 
-Stream events for a run as SSE (`text/event-stream`).
+Stream run events as SSE (`text/event-stream`).
 
-- `after` — resume from a sequence number (for reconnects)
-- Each event is a JSON-encoded `StreamEvent` as an SSE `data:` line
-- Stream ends with `data: [DONE]`
-- All events carry a monotonically increasing `seq` integer
+- `after` resumes from a sequence number.
+- Each event is JSON encoded as one SSE `data:` line.
+- Stream completion is `data: [DONE]`.
+- Every event carries monotonically increasing `seq`.
 
 ### `POST /api/runs/{run_id}/cancel`
 
-Cancel a running agent run. Returns `{status: "ok", run: {...}}`.
+Cancel a running task. Returns:
+
+```json
+{"status": "ok", "run": {...}}
+```
 
 ### `GET /api/config?cwd=...`
 
-Returns current provider configuration for the web UI.
-
-Response:
+Return provider, model, and capability metadata for the web UI.
 
 ```json
 {
@@ -116,72 +123,66 @@ Response:
 }
 ```
 
-`reasoning_models` is returned only when `supports_reasoning_effort` is true. `image_input_models` lists models with `supports_image_input=true`. `pdf_input_models` lists models with `supports_pdf_input=true`.
+`GET /api/config` returns `503` when no provider can be resolved.
 
 ## Sessions
 
-All session endpoints are routed from `mycode-go/internal/server/app.go` and implemented in `mycode-go/internal/server/sessions.go`.
+Session routes are implemented in `mycode-go/internal/server/sessions.go`.
 
 ### `GET /api/sessions?cwd=...`
 
-List sessions. Optional `cwd` filters by workspace. Each session includes `is_running` boolean.
+List sessions. Optional `cwd` filters by workspace. Each session includes `is_running`.
 
-Response: `{sessions: [...]}`
+```json
+{"sessions": [{"id": "...", "title": "...", "cwd": "...", "message_format_version": 6, "is_running": false}]}
+```
 
 ### `POST /api/sessions`
 
-Create a new session.
+Create a new empty session.
 
-Request body (`sessionCreateRequest`, `mycode-go/internal/server/types.go`):
+Request:
 
 ```json
-{
-  "title": null,
-  "provider": null,
-  "model": null,
-  "cwd": null,
-  "api_base": null
-}
+{"cwd": null}
 ```
+
+`cwd` defaults to the server's current working directory. The server allocates a uuid-like hex session id.
 
 ### `GET /api/sessions/{id}`
 
-Load session with full message history. If the session has an active run, overlays in-memory state:
+Load a session. If the session has an active run, the response overlays in-memory state:
 
 ```json
 {
   "session": {...},
   "messages": [...],
-  "active_run": {...} | null,
+  "active_run": {...},
   "pending_events": [...]
 }
 ```
 
-`pending_events` contains the active run's buffered SSE events. The web UI reapplies them, then reconnects with `after=<last seq>`.
+Missing sessions return `{"session": null, "messages": [], "active_run": null, "pending_events": []}`.
 
 ### `DELETE /api/sessions/{id}`
 
-Delete session. Returns `409` if session has a running task.
+Delete a session directory. Returns `409` if the session has a running task.
 
 ### `POST /api/sessions/{id}/clear`
 
-Clear message history (keeps meta). Returns `409` if session has a running task.
+Truncate `messages.jsonl`, reset the title, and keep `meta.json`. Returns `409` if the session has a running task.
 
 ## Workspaces
 
-All workspace endpoints are routed from `mycode-go/internal/server/app.go` and implemented in `mycode-go/internal/server/workspaces.go`.
+Workspace routes are implemented in `mycode-go/internal/server/workspaces.go`.
 
 ### `GET /api/workspaces/roots`
 
-List allowed workspace roots. Roots are read from `MYCODE_WORKSPACE_ROOTS` or `WORKSPACE_ROOTS` env vars (comma-separated paths). Defaults to `$HOME` and `/`.
-
-Response: `{roots: [...]}`
+List allowed workspace roots from `MYCODE_WORKSPACE_ROOTS` or `WORKSPACE_ROOTS` (comma-separated). Defaults to `$HOME` and `/`.
 
 ### `GET /api/workspaces/browse?root=...&path=...`
 
-Browse directories within a root. Returns subdirs only, no dotfiles.
-
-Response:
+Browse directories within a root. Returns subdirectories only, skipping dotfiles.
 
 ```json
 {
@@ -195,15 +196,15 @@ Response:
 
 ### `GET /api/workspaces/cwd`
 
-Returns current working directory of the server process.
+Return the server process cwd:
 
-Response: `{cwd: "...", exists: true}`
+```json
+{"cwd": "...", "exists": true}
+```
 
 ## SSE Contract
 
-`GET /api/runs/{run_id}/stream` produces the following event types.
-
-**Do not change event names or payload shapes without updating server, CLI, and web UI.**
+`GET /api/runs/{run_id}/stream` emits the same event names and payload fields as Python `mycode-cli`.
 
 | event         | payload fields                                                               |
 | ------------- | ---------------------------------------------------------------------------- |
@@ -211,17 +212,17 @@ Response: `{cwd: "...", exists: true}`
 | `text`        | `delta: str`                                                                 |
 | `tool_start`  | `tool_call: {id, name, input}`                                               |
 | `tool_output` | `tool_use_id: str`, `output: str`                                            |
-| `tool_done`   | `tool_use_id: str`, `model_text: str`, `display_text: str`, `is_error: bool` |
+| `tool_done`   | `tool_use_id: str`, `output: str`, `is_error: bool`, `metadata?`, `content?` |
 | `compact`     | `message: str`                                                               |
 | `error`       | `message: str`                                                               |
 
-Every event also carries `seq: int` for reconnect support. The web UI uses the `after` parameter to resume from a specific sequence number.
+The web UI replays `pending_events` from `GET /api/sessions/{id}`, then reconnects with `after=<last seq>`.
 
 ## Run Manager
 
 `mycode-go/internal/server/run_manager.go` manages concurrent runs:
 
-- One active run per session (enforced by `activeRunError` on conflict)
-- `runState` tracks events, status, reconnect state, and cleanup
-- Finished runs are pruned after 300 seconds
-- `snapshotSession()` returns reconnect data (base messages + buffered events) for active runs
+- One active run per session.
+- Events are buffered for reconnect.
+- Finished runs are pruned after 300 seconds.
+- `snapshotSession()` returns base messages plus buffered events for active-run recovery.

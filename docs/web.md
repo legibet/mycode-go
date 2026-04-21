@@ -1,127 +1,115 @@
 # Web UI
 
-React + Vite app in `web/`. The built web assets are copied into `mycode-go/internal/server/webdist/` and embedded into the CLI binary.
+`web/` is React + Vite. Its source must stay byte-for-byte synced with Python main's `web/` directory.
+
+## Sync Rule
+
+Do not manually port web changes. Sync by cherry-picking main-branch web commits:
+
+```bash
+git fetch /Users/legibet/projects/mycode main:refs/remotes/local-main/main
+git log --reverse --oneline <last-sync>..refs/remotes/local-main/main -- web/
+git cherry-pick <web-commit>
+```
+
+After syncing, verify:
+
+```bash
+git diff --stat refs/remotes/local-main/main -- web
+```
+
+Expected output is empty, except when the Go branch intentionally carries a documented web-only patch.
 
 ## Serving Modes
 
-- `mycode-go web` — serves embedded web assets by default, or `MYCODE_WEB_DIST` when explicitly set
-- `mycode-go web --dev` — API only; no static files (pair with `pnpm --dir web dev`)
+- `mycode-go web` serves `web/dist` in local development when available, otherwise embedded assets from `mycode-go/internal/server/webdist`.
+- `mycode-go web --dev` serves API only; pair it with `pnpm --dir web dev`.
+- `MYCODE_WEB_DIST` can point the server at a custom built asset directory.
 
-CORS is enabled for all origins in the HTTP handler.
+Built assets are synced into the Go embed directory with:
 
-## Component Structure
+```bash
+pnpm --dir web build
+./scripts/sync_web_dist.sh
+```
+
+## Source Layout
 
 ```text
 web/src/
-  App.tsx                # root layout, config loading, session init
-  main.tsx               # React entry
-  types.ts               # shared TypeScript types
-  index.css              # global styles
+  App.tsx
+  main.tsx
+  types.ts
   components/
     Chat/
-      MessageList.tsx      # scrollable message history
-      MessageBubble.tsx    # single message, role-based styling
-      InputArea.tsx        # user input, image attachment, submit
-      ToolCard.tsx         # tool execution block (start/output/done)
-      ReasoningBlock.tsx   # thinking block — expanded while streaming, collapses after
-      MarkdownBlock.tsx    # markdown rendering
-      CodeBlock.tsx        # syntax-highlighted code
-      HighlightedCode.tsx  # shared highlighting wrapper
-      EditDiff.tsx         # diff view for edit tool results
-    Layout.tsx             # main layout shell
-    Sidebar.tsx            # session list + settings panel
-    WorkspacePicker.tsx    # workspace browser using /api/workspaces
-    MobileHeader.tsx       # mobile nav header
-    ThemeProvider.tsx      # theme management
-    UI/                    # shared UI primitives
+      InputArea.tsx
+      MessageBubble.tsx
+      MessageList.tsx
+      ToolCard.tsx
+      EditDiff.tsx
+      ReasoningBlock.tsx
+      MarkdownBlock.tsx
+      CodeBlock.tsx
+    Sidebar.tsx
+    WorkspacePicker.tsx
+    MobileHeader.tsx
+    ThemeProvider.tsx
   hooks/
-    useChat.ts             # main chat state + SSE streaming
-    sessionSelection.ts    # session picker state
-    *.test.ts(x)           # focused unit and hook tests
-  test/
-    setup.ts               # Vitest + Testing Library setup
+    useChat.ts
+    sessionSelection.ts
   utils/
-    messages.ts            # buildRenderMessages() + streaming message builders
-    highlighter.ts         # code syntax highlighting
-    storage.ts             # localStorage helpers
-    config.ts              # reasoning effort defaults + provider normalization with remote config
-    clipboard.ts           # clipboard copy helper
-    cn.ts                  # CSS class merging
+    messages.ts
+    storage.ts
+    config.ts
+    highlighter.ts
 ```
 
-## Message State Model
+## Message Rendering Contract
 
-`useChat.ts` stores three related pieces of state:
+The web consumes canonical session messages and SSE events:
+
+- `tool_use` blocks render as `ToolCard`.
+- Persisted `tool_result` user messages are folded into the preceding assistant message.
+- Live tool state is tracked in `ToolRuntime`.
+- `tool_done.output` is the final display/provider text.
+- `tool_done.metadata` carries structured UI payloads such as `metadata.edits`.
+
+The reducer keeps:
 
 - `rawMessages` — canonical block messages
 - `messages` — render-ready messages
-- `toolRuntimeById` — ephemeral tool runtime state
+- `toolRuntimeById` — live per-tool state
 
-State is managed via `useReducer` with actions:
+State updates are immutable; keep reducers simple and deterministic.
 
-- `set_messages` — load session history from server
-- `start_turn` — optimistic user message + empty assistant
-- `rewind_and_start_turn` — rewind + optimistic new turn
-- `apply_event` — apply one SSE event to state
+## Streaming Flow
 
-`buildRenderMessages()` in `utils/messages.ts` is used when loading or rebuilding from canonical messages. During streaming, the reducer updates both `rawMessages` and `messages` incrementally.
+1. `POST /api/chat` returns `{run, session}`.
+2. `GET /api/runs/{run_id}/stream` streams SSE.
+3. The reducer applies each event.
+4. On disconnect, the client reloads `GET /api/sessions/{id}`.
+5. If a run is still active, the client applies `pending_events` and reconnects with `after=<last_seq>`.
+6. `409` conflict attaches to the existing active run.
 
-Key design decisions:
+## Local Storage
 
-- Tool results persisted as `user` messages with `tool_result` blocks are visually folded into the preceding assistant message during rendering
-- Each render message and block gets a stable `renderKey` for React reconciliation
-- `sourceIndex` tracks the original message position for scroll targeting
+The web persists:
 
-Rendering rules:
+- provider
+- model
+- cwd
+- reasoningEffort
+- active session per cwd
+- cwd history
 
-- `thinking` blocks → `ReasoningBlock`
-- `tool_use` blocks → `ToolCard`
-- `text` blocks → `MarkdownBlock`
-- `image` blocks → inline image preview in `MessageBubble`
+Empty reasoning effort and `auto` both mean "do not send a per-request effort override".
 
-## Streaming
-
-1. `POST /api/chat` → get `{run, session}`
-2. `GET /api/runs/{run_id}/stream` → SSE reader
-3. Each `data:` line is parsed as one stream event and dispatched to the reducer
-4. `data: [DONE]` ends the stream
-5. On disconnect, the client reloads session state from `GET /api/sessions/{id}`
-6. `409` conflict attaches to the existing run stream
-
-Streaming state tracking:
-
-- `streamTokenRef` — incremented to invalidate stale streams
-- `pendingRequestTokenRef` — deduplicates concurrent send requests
-- `activeRunRef` — tracks the current run for cancel
-
-Attachments:
-
-- `InputArea` always shows the attachment button and supports file picker and drag-and-drop
-- UTF-8 text, code, and config files are attached as the same text snapshot format used by the original CLI `@file`
-- Images and PDFs are sent as structured `input` blocks
-- The attachment button uses `image_input_models` and `pdf_input_models`; unsupported pending attachments are cleared on model switch
-
-## Config Persistence
-
-Web UI config is persisted to `localStorage`:
-
-- `provider`
-- `model`
-- `cwd`
-- `reasoningEffort`
-
-`auto` and empty string both mean "do not send `reasoning_effort` to the server".
-
-The reasoning effort selector in the sidebar only renders when `supports_reasoning_effort` is true and the current model appears in `reasoning_models` from `GET /api/config`.
-
-## Build
+## Verification
 
 ```bash
+pnpm --dir web typecheck
 pnpm --dir web test:run
-pnpm --dir web dev
 pnpm --dir web build
 ```
 
-Run `make web-build` to build `web/dist` and sync it into `mycode-go/internal/server/webdist/`.
-
-The server prefers `MYCODE_WEB_DIST` when set. Otherwise it serves the embedded assets compiled into the binary.
+The Go server should work with the same `web/` source as Python main. Backend differences must be handled in Go API compatibility, not in web forks.

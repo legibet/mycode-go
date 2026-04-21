@@ -6,6 +6,12 @@ Authoritative context for agent runs. Keep this file in sync with the Go code.
 
 `mycode-go` is a personal minimal coding agent with a web UI and a small CLI. It keeps `.mycode` config and session compatibility with the original Python version.
 
+This branch is the Go rewrite of the Python backend of `main` branch. It tracks Python `main` externally, not structurally:
+
+- `web/` is synced directly from Python `main` by cherry-picking web commits.
+- Go backend code mirrors Python `mycode-cli` / `mycode-sdk` external behavior and disk/API contracts.
+- Go backend code does not need to copy Python's package split or internal architecture.
+
 Priorities:
 
 - small readable core
@@ -13,8 +19,7 @@ Priorities:
 - one agent loop
 - append-only sessions
 - provider adapters at the boundary
-
-It is not a general agent framework.
+- Python-compatible message/session/API contracts
 
 ## Core Rules
 
@@ -23,6 +28,8 @@ It is not a general agent framework.
 - Keep the runtime explicit and easy to inspect
 - Prefer simple Go over framework-heavy designs
 - Do not add abstraction layers unless they remove real complexity
+- New session writes use the current Python-compatible format only; do not add legacy session compatibility paths unless explicitly requested
+- Keep `web/` byte-for-byte aligned with Python `main` unless a web-only Go branch patch is explicitly documented
 
 ## Source Map
 
@@ -50,7 +57,6 @@ Server:
 
 - `mycode-go/internal/server/app.go` + `mycode-go/internal/server/*.go` — HTTP API, SSE, static web serving, request parsing
 - `mycode-go/internal/server/run_manager.go` — concurrent run manager
-- `mycode-go/internal/server/types.go` — request/response payload types
 - `mycode-go/internal/workspace/workspace.go` — workspace browser
 
 CLI:
@@ -72,7 +78,8 @@ All runtime, persistence, and API data use the same block-based JSON format:
   "content": [
     {"type": "thinking", "text": "..."},
     {"type": "text", "text": "..."},
-    {"type": "tool_use", "id": "call_1", "name": "read", "input": {"path": "x.go"}}
+    {"type": "tool_use", "id": "call_1", "name": "read", "input": {"path": "x.go"}},
+    {"type": "tool_result", "tool_use_id": "call_1", "output": "...", "metadata": {}, "is_error": false}
   ],
   "meta": {
     "provider": "anthropic",
@@ -94,6 +101,10 @@ Block types:
 - `tool_result`
 
 Tool results are stored as a `user` message with `tool_result` blocks. `thinking` blocks are first-class session data.
+
+`tool_result.output` is provider-facing text. `tool_result.metadata` is structured UI data and is optional. Do not write `model_text` or `display_text`.
+
+Session `meta.json` stores only `cwd`, `title`, `created_at`, `updated_at`, and `message_format_version=6`. The API adds `id` from the directory name. Provider/model/api_base live on per-turn messages, not in session meta.
 
 ## Agent Loop
 
@@ -129,7 +140,7 @@ Do not change these event names or shapes without updating server and web UI.
 - `text` — `delta`
 - `tool_start` — `tool_call: {id, name, input}`
 - `tool_output` — `tool_use_id`, `output`
-- `tool_done` — `tool_use_id`, `model_text`, `display_text`, `is_error`
+- `tool_done` — `tool_use_id`, `output`, `is_error`, optional `metadata`, optional `content`
 - `compact` — `message`
 - `error` — `message`
 
@@ -144,7 +155,7 @@ CLI:
 - `mycode-go web [--dev]` — web server
 - `mycode-go session list` — list sessions
 
-This Go rewrite does not include the old terminal TUI.
+This Go rewrite does not include terminal TUI.
 
 Server:
 
@@ -171,12 +182,26 @@ Scopes:
 When syncing web changes from `main`:
 
 ```bash
-# find web-only commits on main since last sync
-git log main --oneline -- web/
+# fetch Python main into this repository
+git fetch /Users/legibet/projects/mycode main:refs/remotes/local-main/main
+
+# find web commits since last sync
+git log --reverse --oneline <last-sync>..refs/remotes/local-main/main -- web/
 
 # cherry-pick a specific web commit
 git cherry-pick <hash>
+
+# verify web is fully synced
+git diff --stat refs/remotes/local-main/main -- web
 ```
+
+Backend sync rules:
+
+- Compare Python `main` behavior after the last synced commit.
+- Match the external API, SSE, message format, session format, provider behavior, config semantics, and web expectations.
+- Implement the behavior idiomatically in Go.
+- Keep the four-tool core and single agent loop unless explicitly asked to change them.
+- Update `docs/` and this file when contracts change.
 
 ## Dev Workflow
 
@@ -198,6 +223,15 @@ pnpm --dir web typecheck
 pnpm --dir web test:run
 pnpm --dir web dev
 pnpm --dir web build
+./scripts/sync_web_dist.sh
+```
+
+Compatibility smoke:
+
+```bash
+# Python writes a v6 session and Go must read it.
+# Go writes a v6 session and Python must read it.
+# Check tool_result.output and tool_result.metadata.edits both ways.
 ```
 
 ## Guardrails
