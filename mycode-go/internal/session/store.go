@@ -362,8 +362,9 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string)
 	meta.UpdatedAt = now()
 	if meta.Title == DefaultSessionTitle && msg.Role == "user" {
 		if title := strings.TrimSpace(strings.ReplaceAll(message.FlattenText(msg, false), "\n", " ")); title != "" {
-			if len(title) > 48 {
-				title = title[:48]
+			titleRunes := []rune(title)
+			if len(titleRunes) > 48 {
+				title = string(titleRunes[:48])
 			}
 			meta.Title = title
 		}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/legibet/mycode-go/internal/message"
@@ -103,6 +104,26 @@ func TestAppendMessageNormalizesSessionTitle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if meta.Title != "first line second line" {
+		t.Fatalf("unexpected title: %q", meta.Title)
+	}
+}
+
+func TestAppendMessageTruncatesSessionTitleByRune(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	title := "prefix " + strings.Repeat("界", 60)
+	if err := store.AppendMessage("s1", message.UserTextMessage(title, nil), "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := store.readMeta("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := "prefix " + strings.Repeat("界", 41)
+	if meta.Title != expected {
 		t.Fatalf("unexpected title: %q", meta.Title)
 	}
 }
