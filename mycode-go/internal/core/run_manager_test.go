@@ -1,4 +1,4 @@
-package server
+package core
 
 import (
 	"context"
@@ -91,7 +91,7 @@ func waitFor(t *testing.T, deadline time.Duration, fn func() bool) {
 }
 
 func TestRunManagerSnapshotIncludesUserMessageAndPendingEvents(t *testing.T) {
-	manager := newRunManager()
+	manager := NewRunManager(nil)
 	adapter := &blockingAdapter{
 		spec:    provider.Spec{ID: "openai"},
 		release: make(chan struct{}),
@@ -131,7 +131,7 @@ func TestRunManagerSnapshotIncludesUserMessageAndPendingEvents(t *testing.T) {
 }
 
 func TestRunManagerSameSessionCannotStartSecondRun(t *testing.T) {
-	manager := newRunManager()
+	manager := NewRunManager(nil)
 	first := newTestAgent(t, &blockingAdapter{
 		spec:    provider.Spec{ID: "openai"},
 		release: make(chan struct{}),
@@ -145,7 +145,7 @@ func TestRunManagerSameSessionCannotStartSecondRun(t *testing.T) {
 
 	second := newTestAgent(t, &completeAdapter{spec: provider.Spec{ID: "openai"}})
 	if _, err := manager.startRun("session-1", message.UserTextMessage("second", nil), nil, second, func(message.Message) error { return nil }); err == nil {
-		t.Fatal("expected activeRunError")
+		t.Fatal("expected ActiveRunError")
 	}
 
 	state := manager.getRun(run["id"].(string))
@@ -156,7 +156,7 @@ func TestRunManagerSameSessionCannotStartSecondRun(t *testing.T) {
 }
 
 func TestRunManagerCancelOnlyMarksTargetRunCancelled(t *testing.T) {
-	manager := newRunManager()
+	manager := NewRunManager(nil)
 	firstAdapter := &blockingAdapter{spec: provider.Spec{ID: "openai"}, release: make(chan struct{})}
 	secondAdapter := &blockingAdapter{spec: provider.Spec{ID: "openai"}, release: make(chan struct{})}
 	first := newTestAgent(t, firstAdapter)
@@ -198,7 +198,7 @@ func TestRunManagerCancelOnlyMarksTargetRunCancelled(t *testing.T) {
 }
 
 func TestRunManagerFinishedRunStaysAvailableForReconnectWindow(t *testing.T) {
-	manager := newRunManager()
+	manager := NewRunManager(nil)
 	agent := newTestAgent(t, &completeAdapter{spec: provider.Spec{ID: "openai"}})
 
 	run, err := manager.startRun("session-1", message.UserTextMessage("done", nil), nil, agent, func(message.Message) error { return nil })

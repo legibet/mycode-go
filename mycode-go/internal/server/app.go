@@ -7,17 +7,14 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/legibet/mycode-go/internal/core"
 	"github.com/legibet/mycode-go/internal/session"
 )
 
-var reasoningEffortOptions = []string{"auto", "none", "low", "medium", "high", "xhigh"}
-
 type app struct {
-	store    *session.Store
-	runs     *runManager
+	svc      *core.Service
 	serveWeb bool
 	webRoot  string
 	webFS    fs.FS
@@ -29,13 +26,7 @@ func NewHandler(serveWeb bool) http.Handler {
 	return newApp(serveWeb, "", nil, nil)
 }
 
-func newApp(serveWeb bool, webRoot string, store *session.Store, runs *runManager) *app {
-	if store == nil {
-		store = session.NewStore("")
-	}
-	if runs == nil {
-		runs = newRunManager()
-	}
+func newApp(serveWeb bool, webRoot string, store *session.Store, runs *core.RunManager) *app {
 	resolvedWebRoot := webRoot
 	var webFS fs.FS
 	if serveWeb {
@@ -49,8 +40,7 @@ func newApp(serveWeb bool, webRoot string, store *session.Store, runs *runManage
 
 	mux := http.NewServeMux()
 	app := &app{
-		store:    store,
-		runs:     runs,
+		svc:      core.NewService(core.Options{Store: store, Runs: runs}),
 		serveWeb: serveWeb,
 		webRoot:  resolvedWebRoot,
 		webFS:    webFS,
@@ -141,26 +131,4 @@ func eventSeq(event map[string]any, fallback int) int {
 	default:
 		return fallback
 	}
-}
-
-func requestCWD(value string) string {
-	resolved := strings.TrimSpace(value)
-	if resolved == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "."
-		}
-		resolved = cwd
-	}
-	if absolute, err := filepath.Abs(resolved); err == nil {
-		return absolute
-	}
-	return resolved
-}
-
-func responseReasoningEffort(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "auto"
-	}
-	return value
 }

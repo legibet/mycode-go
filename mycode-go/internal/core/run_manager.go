@@ -1,4 +1,4 @@
-package server
+package core
 
 import (
 	"context"
@@ -24,15 +24,24 @@ const (
 	finishedRunTTL = 5 * time.Minute
 )
 
-type activeRunError struct {
+// EventPayload is emitted by desktop adapters for live run updates.
+type EventPayload struct {
+	RunID     string         `json:"run_id"`
+	SessionID string         `json:"session_id"`
+	Event     map[string]any `json:"event"`
+}
+
+// EventSink receives normalized run events after they are buffered.
+type EventSink func(EventPayload)
+
+type ActiveRunError struct {
 	RunID string
 }
 
-func (e activeRunError) Error() string {
+func (e ActiveRunError) Error() string {
 	return e.RunID
 }
 
-// runSnapshot is the typed view of an active run returned to callers.
 type runSnapshot struct {
 	Run           map[string]any
 	Messages      []message.Message
@@ -84,7 +93,6 @@ func newRunState(id, sessionID string, userMessage message.Message, baseMessages
 	}
 }
 
-// infoLocked builds the run summary map. Caller must hold r.mu.
 func (r *runState) infoLocked() map[string]any {
 	out := map[string]any{
 		"id":         r.id,
@@ -104,20 +112,32 @@ func (r *runState) info() map[string]any {
 	return r.infoLocked()
 }
 
-func (r *runState) appendEvent(event agentpkg.Event) {
+func (r *runState) appendEvent(event agentpkg.Event) map[string]any {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	payload := maps.Clone(event.Data)
 	r.nextSeq++
-	r.events = append(r.events, runEvent{seq: r.nextSeq - 1, typ: event.Type, data: payload})
+	stored := runEvent{seq: r.nextSeq - 1, typ: event.Type, data: payload}
+	r.events = append(r.events, stored)
+	return stored.payload()
 }
 
-func (r *runState) finish(status runStatus, errText string) {
+func (r *runState) finish(status runStatus, errText string) map[string]any {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.status = status
 	r.errorText = errText
 	r.finishedAt = time.Now()
+	r.nextSeq++
+	payload := map[string]any{
+		"seq":    r.nextSeq - 1,
+		"type":   "done",
+		"status": string(status),
+	}
+	if errText != "" {
+		payload["error"] = errText
+	}
+	return payload
 }
 
 func (r *runState) pendingAfter(after int) ([]map[string]any, bool) {
@@ -150,26 +170,28 @@ func (r *runState) snapshot() runSnapshot {
 	}
 }
 
-type runManager struct {
+type RunManager struct {
 	mu              sync.Mutex
 	activeBySession map[string]*runState
 	runsByID        map[string]*runState
+	sink            EventSink
 }
 
-func newRunManager() *runManager {
-	return &runManager{
+func NewRunManager(sink EventSink) *RunManager {
+	return &RunManager{
 		activeBySession: map[string]*runState{},
 		runsByID:        map[string]*runState{},
+		sink:            sink,
 	}
 }
 
-func (m *runManager) startRun(sessionID string, userMessage message.Message, baseMessages []message.Message, agent *agentpkg.Agent, onPersist func(message.Message) error) (map[string]any, error) {
+func (m *RunManager) startRun(sessionID string, userMessage message.Message, baseMessages []message.Message, agent *agentpkg.Agent, onPersist func(message.Message) error) (map[string]any, error) {
 	m.pruneFinishedRuns()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing := m.activeBySession[sessionID]; existing != nil {
-		return nil, activeRunError{RunID: existing.id}
+		return nil, ActiveRunError{RunID: existing.id}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -181,14 +203,14 @@ func (m *runManager) startRun(sessionID string, userMessage message.Message, bas
 	return state.info(), nil
 }
 
-func (m *runManager) getRun(runID string) *runState {
+func (m *RunManager) getRun(runID string) *runState {
 	m.pruneFinishedRuns()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.runsByID[runID]
 }
 
-func (m *runManager) snapshotSession(sessionID string) *runSnapshot {
+func (m *RunManager) snapshotSession(sessionID string) *runSnapshot {
 	m.mu.Lock()
 	state := m.activeBySession[sessionID]
 	m.mu.Unlock()
@@ -199,7 +221,7 @@ func (m *runManager) snapshotSession(sessionID string) *runSnapshot {
 	return &snap
 }
 
-func (m *runManager) cancelRun(runID string) map[string]any {
+func (m *RunManager) cancelRun(runID string) map[string]any {
 	state := m.getRun(runID)
 	if state == nil {
 		return nil
@@ -211,13 +233,33 @@ func (m *runManager) cancelRun(runID string) map[string]any {
 	return state.info()
 }
 
-func (m *runManager) hasActiveRun(sessionID string) bool {
+func (m *RunManager) hasActiveRun(sessionID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.activeBySession[sessionID] != nil
 }
 
-func (m *runManager) run(ctx context.Context, state *runState, onPersist func(message.Message) error) {
+func (m *RunManager) pendingAfter(runID string, after int) ([]map[string]any, bool, bool) {
+	state := m.getRun(runID)
+	if state == nil {
+		return nil, false, false
+	}
+	pending, finished := state.pendingAfter(after)
+	return pending, finished, true
+}
+
+func (m *RunManager) emit(state *runState, event map[string]any) {
+	if m.sink == nil {
+		return
+	}
+	m.sink(EventPayload{
+		RunID:     state.id,
+		SessionID: state.sessionID,
+		Event:     event,
+	})
+}
+
+func (m *RunManager) run(ctx context.Context, state *runState, onPersist func(message.Message) error) {
 	var lastError string
 	for event := range state.agent.Chat(ctx, state.userMessage, onPersist) {
 		if event.Type == "error" {
@@ -225,17 +267,18 @@ func (m *runManager) run(ctx context.Context, state *runState, onPersist func(me
 				lastError = messageText
 			}
 		}
-		state.appendEvent(event)
+		m.emit(state, state.appendEvent(event))
 	}
 
+	status := runStatusCompleted
 	switch lastError {
 	case "cancelled":
-		state.finish(runStatusCancelled, lastError)
+		status = runStatusCancelled
 	case "":
-		state.finish(runStatusCompleted, "")
 	default:
-		state.finish(runStatusFailed, lastError)
+		status = runStatusFailed
 	}
+	m.emit(state, state.finish(status, lastError))
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -244,7 +287,7 @@ func (m *runManager) run(ctx context.Context, state *runState, onPersist func(me
 	}
 }
 
-func (m *runManager) pruneFinishedRuns() {
+func (m *RunManager) pruneFinishedRuns() {
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/legibet/mycode-go/internal/core"
 	"github.com/legibet/mycode-go/internal/message"
 	"github.com/legibet/mycode-go/internal/provider"
 	"github.com/legibet/mycode-go/internal/session"
@@ -26,7 +27,7 @@ func TestWorkspaceRoutes(t *testing.T) {
 	}
 
 	t.Setenv("MYCODE_WORKSPACE_ROOTS", root)
-	handler := newApp(false, "", session.NewStore(t.TempDir()), newRunManager())
+	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
 
 	t.Run("roots", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
@@ -93,7 +94,7 @@ func TestServeStaticFromConfiguredWebRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler := newApp(true, webRoot, session.NewStore(t.TempDir()), newRunManager())
+	handler := newApp(true, webRoot, session.NewStore(t.TempDir()), core.NewRunManager(nil))
 
 	t.Run("asset", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
@@ -124,7 +125,7 @@ func TestServeStaticFromConfiguredWebRoot(t *testing.T) {
 
 func TestSessionLifecycle(t *testing.T) {
 	store := session.NewStore(t.TempDir())
-	handler := newApp(false, "", store, newRunManager())
+	handler := newApp(false, "", store, core.NewRunManager(nil))
 	cwd := t.TempDir()
 
 	recorder := performJSON(
@@ -197,7 +198,7 @@ func TestSessionLifecycle(t *testing.T) {
 }
 
 func TestChatRejectsMutuallyExclusiveMessageAndInput(t *testing.T) {
-	handler := newApp(false, "", session.NewStore(t.TempDir()), newRunManager())
+	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
 
 	recorder := performJSON(
 		t,
@@ -225,29 +226,12 @@ func TestChatRejectsMutuallyExclusiveMessageAndInput(t *testing.T) {
 	}
 }
 
-func TestBuildUserMessageEscapesAttachmentNameLikePython(t *testing.T) {
-	msg, err := buildUserMessage(chatRequest{
-		Input: []chatInputBlock{
-			{Type: "text", Text: "print(1)", Name: `report <"draft">.py`, IsAttachment: true},
-		},
-	}, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(msg.Content) != 1 {
-		t.Fatalf("unexpected message: %#v", msg)
-	}
-	if got := msg.Content[0].Text; got != "<file name=\"report &lt;&quot;draft&quot;&gt;.py\">\nprint(1)\n</file>" {
-		t.Fatalf("unexpected attachment block: %q", got)
-	}
-}
-
 func TestChatRejectsRewindForNewSessionWithoutCreatingFiles(t *testing.T) {
 	isolateServerConfigTest(t)
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	store := session.NewStore(t.TempDir())
-	handler := newApp(false, "", store, newRunManager())
+	handler := newApp(false, "", store, core.NewRunManager(nil))
 
 	recorder := performJSON(
 		t,
@@ -284,7 +268,7 @@ func TestChatRejectsUnsupportedReasoningEffortAsBadRequest(t *testing.T) {
 	isolateServerConfigTest(t)
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
-	handler := newApp(false, "", session.NewStore(t.TempDir()), newRunManager())
+	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
 	recorder := performJSON(
 		t,
 		handler,
@@ -309,7 +293,7 @@ func TestChatRejectsRewindToCompactSummary(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	store := session.NewStore(t.TempDir())
-	handler := newApp(false, "", store, newRunManager())
+	handler := newApp(false, "", store, core.NewRunManager(nil))
 	created, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)
@@ -358,7 +342,7 @@ func TestConfigRoute(t *testing.T) {
 	isolateServerConfigTest(t)
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
-	handler := newApp(false, "", session.NewStore(t.TempDir()), newRunManager())
+	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/config?cwd="+t.TempDir(), nil)
 	handler.ServeHTTP(recorder, request)

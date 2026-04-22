@@ -8,21 +8,19 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	"github.com/legibet/mycode-go/internal/workspace"
 )
 
 func (a *app) handleWorkspaceRoots(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"roots": workspace.Roots()})
+	writeJSON(w, http.StatusOK, a.svc.WorkspaceRoots())
 }
 
 func (a *app) handleWorkspaceBrowse(w http.ResponseWriter, r *http.Request) {
-	root := strings.TrimSpace(r.URL.Query().Get("root"))
-	if root == "" {
-		writeDetailError(w, http.StatusBadRequest, "root is required")
+	resp, err := a.svc.WorkspaceBrowse(r.URL.Query().Get("root"), r.URL.Query().Get("path"))
+	if err != nil {
+		writeCoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, workspace.Browse(root, r.URL.Query().Get("path")))
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (a *app) handleWorkspaceCWD(w http.ResponseWriter, _ *http.Request) {
