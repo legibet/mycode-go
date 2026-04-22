@@ -12,6 +12,12 @@ This branch is the Go rewrite of the Python backend of `main` branch. It tracks 
 - Go backend code mirrors Python `mycode-cli` / `mycode-sdk` external behavior and disk/API contracts, but should be implemented idiomatically in Go and may have a different internal structure.
 - Go backend code does not need to copy Python's package split or internal architecture.
 
+Repository branch model (three-tier, see `docs/branching.md`):
+
+- `main` — Python implementation, primary development branch, source of truth for web/ and external contracts.
+- `mycode-go` (**this branch**) — Go rewrite that exposes HTTP + web UI only. Tracks `main`. Internal `core` service layer is transport-agnostic so the desktop branch can reuse it.
+- `mycode-go-wails` — adds a Wails desktop adapter on top of `mycode-go`. Tracks `mycode-go`. Wails toolchain, `main.go`/`app.go`, and the `web/utils/transport.ts` abstraction live only there.
+
 Priorities:
 
 - small readable core
@@ -35,6 +41,7 @@ Priorities:
 
 Core runtime:
 
+- `mycode-go/internal/core/*.go` — transport-agnostic service layer (chat/sessions/runs/config/workspace) shared by HTTP and future adapters; owns `RunManager`
 - `mycode-go/internal/agent/agent.go` — the only orchestration loop
 - `mycode-go/internal/message/message.go` — canonical message/block format
 - `mycode-go/internal/tools/*.go` — 4 built-in tools and execution
@@ -55,8 +62,7 @@ Providers:
 
 Server:
 
-- `mycode-go/internal/server/app.go` + `mycode-go/internal/server/*.go` — HTTP API, SSE, static web serving, request parsing
-- `mycode-go/internal/server/run_manager.go` — concurrent run manager
+- `mycode-go/internal/server/app.go` + `mycode-go/internal/server/*.go` — thin HTTP adapter over `internal/core.Service`; owns SSE framing and request parsing only
 - `mycode-go/internal/workspace/workspace.go` — workspace browser
 
 CLI:
