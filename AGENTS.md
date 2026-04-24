@@ -1,21 +1,33 @@
-# mycode-go — Project Context
+# mycode-go — Agent Context
 
-Authoritative context for agent runs. Keep this file in sync with the Go code.
+Authoritative context for agent runs. Keep this file short and in sync with the Go branch.
 
 ## Product
 
 `mycode-go` is a personal minimal coding agent with a web UI and a small CLI. It keeps `.mycode` config and session compatibility with the original Python version.
 
-This branch is the Go rewrite of the Python backend of `main` branch. It tracks the Python `main` branch but is not a line-by-line port:
+This branch is the Go rewrite of the Python backend on `main`. It tracks Python `main` for external behavior, but it is not a line-by-line port:
 
-- `web/` is synced directly from Python `main` by cherry-picking web commits.
-- Go backend code mirrors Python `mycode-cli` / `mycode-sdk` external behavior and disk/API contracts, but should be implemented idiomatically in Go and may have a different internal structure.
-- Go backend code does not need to copy Python's package split or internal architecture.
+- `web/` is synced directly from Python `main` by cherry-picking web-only commits.
+- Go backend code mirrors Python `mycode-cli` / `mycode-sdk` external behavior, disk formats, and API contracts.
+- Go backend internals should stay idiomatic Go. Do not copy Python package layout or implementation details unless it simplifies compatibility.
+
+## Current Sync
+
+Synced with Python `main` through:
+
+- `ea34082 fix(web): prevent iOS filter input zoom`
+
+State at this sync point:
+
+- `web/` is byte-for-byte aligned with `origin/main`.
+- Backend behavior from Python commits after `199692a` has been implemented in Go where applicable.
+- Python-only release/package commits are intentionally not ported unless they affect Go behavior or shared docs.
 
 Repository branch model (three-tier, see `docs/branching.md`):
 
 - `main` — Python implementation, primary development branch, source of truth for web/ and external contracts.
-- `mycode-go` (**this branch**) — Go rewrite that exposes HTTP + web UI only. Tracks `main`. Internal `core` service layer is transport-agnostic so the desktop branch can reuse it.
+- `mycode-go` (**this branch**) — Go rewrite with HTTP, web UI, and a small non-interactive CLI. Tracks `main`. Internal `core` service layer is transport-agnostic so the desktop branch can reuse it.
 - `mycode-go-wails` — adds a Wails desktop adapter on top of `mycode-go`. Tracks `mycode-go`. Wails toolchain, `main.go`/`app.go`, and the `web/utils/transport.ts` abstraction live only there.
 
 Priorities:
@@ -35,7 +47,7 @@ Priorities:
 - Prefer simple Go over framework-heavy designs
 - Do not add abstraction layers unless they remove real complexity
 - New session writes use the current Python-compatible format only; do not add legacy session compatibility paths unless explicitly requested
-- Keep `web/` byte-for-byte aligned with Python `main` unless a web-only Go branch patch is explicitly documented
+- Keep `web/` byte-for-byte aligned with Python `main` unless a Go-branch-only web patch is explicitly documented
 
 ## Source Map
 
@@ -67,7 +79,7 @@ Server:
 
 CLI:
 
-- `mycode-go/cmd/mycode-go/*.go` — `run`, `web`, `session list`, and bare-message convenience mode
+- `mycode-go/cmd/mycode-go/*.go` — `run`, `web`, `session list`, `--version`, and bare-message convenience mode
 
 Web UI:
 
@@ -203,11 +215,11 @@ git diff --stat refs/remotes/local-main/main -- web
 
 Backend sync rules:
 
-- Compare Python `main` behavior after the last synced commit.
-- Match the external API, SSE, message format, session format, provider behavior, config semantics, and web expectations.
-- Implement the behavior idiomatically in Go.
-- Keep the four-tool core and single agent loop unless explicitly asked to change them.
-- Update `docs/` and this file when contracts change.
+- Compare Python `main` behavior after the recorded sync commit.
+- Directly cherry-pick `web/` commits.
+- Reimplement backend commits in Go when they affect CLI behavior, API/SSE contracts, message/session formats, tools, providers, config, models, prompts, or web expectations.
+- Skip Python-only release/package/TUI work unless it changes shared behavior.
+- Update `docs/` and this file when contracts or sync status change.
 
 ## Dev Workflow
 
