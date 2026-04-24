@@ -43,7 +43,7 @@ Canonical messages are block-based:
 {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "output": "...", "metadata": {...}, "is_error": false}]}
 ```
 
-`tool_result.output` is replayed to providers. `tool_result.metadata` is structured UI data. The `edit` tool stores line numbers and `added_lines` / `removed_lines` in `metadata.edits`.
+`tool_result.output` is replayed to providers. `tool_result.metadata` is structured UI data. The `edit` tool stores a unified `patch` plus `added_lines` / `removed_lines`.
 
 ## Record Types
 

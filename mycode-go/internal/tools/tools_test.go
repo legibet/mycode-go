@@ -2,7 +2,6 @@ package tools
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -151,7 +150,7 @@ func TestEdit(t *testing.T) {
 			"oldText": "def f():\n    return 1\n",
 			"newText": "def f():\n    return 2\n",
 		}})
-		assertEditOK(t, result, []int{1}, []int{2}, []int{2})
+		assertEditOK(t, result)
 		data, err := osReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -172,7 +171,7 @@ func TestEdit(t *testing.T) {
 			"oldText": "line1\nline2\n",
 			"newText": "line1\nlineX\n",
 		}})
-		assertEditOK(t, result, []int{1}, []int{2}, []int{2})
+		assertEditOK(t, result)
 		data, err := osReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -209,13 +208,66 @@ func TestEdit(t *testing.T) {
 			{"oldText": "a", "newText": "a1\na2"},
 			{"oldText": "c", "newText": "C"},
 		})
-		assertEditOK(t, result, []int{1, 4}, []int{1, 1}, []int{2, 1})
+		assertEditOK(t, result)
 		data, err := osReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if string(data) != "a1\na2\nb\nC\n" {
 			t.Fatalf("unexpected file: %q", string(data))
+		}
+	})
+
+	t.Run("multi edit patch uses file order", func(t *testing.T) {
+		dir := t.TempDir()
+		executor := NewExecutor(dir, dir, false)
+		path := filepath.Join(dir, "test.txt")
+		if err := osWriteFile(path, []byte("line 1\nline 2\nline 3\nline 4\nline 5\n")); err != nil {
+			t.Fatal(err)
+		}
+		result := executor.Edit("test.txt", []map[string]string{
+			{"oldText": "line 5", "newText": "LINE 5"},
+			{"oldText": "line 2", "newText": "LINE 2"},
+		})
+		assertEditOK(t, result)
+		patch := result.Metadata["patch"].(string)
+		if strings.Index(patch, "-line 2") >= strings.Index(patch, "-line 5") {
+			t.Fatalf("unexpected patch order:\n%s", patch)
+		}
+	})
+
+	t.Run("line stats", func(t *testing.T) {
+		cases := []struct {
+			name    string
+			initial string
+			oldText string
+			newText string
+			added   int
+			removed int
+		}{
+			{name: "replace", initial: "foo\n", oldText: "foo", newText: "bar", added: 1, removed: 1},
+			{name: "insert", initial: "foo\n", oldText: "foo", newText: "foo\nbar\nbaz", added: 2, removed: 0},
+			{name: "delete", initial: "a\nb\nc\n", oldText: "a\nb\nc", newText: "a\nc", added: 0, removed: 1},
+			{name: "multiline replace", initial: "x\nold1\nold2\ny\n", oldText: "old1\nold2", newText: "new1\nnew2\nnew3", added: 3, removed: 2},
+			{name: "reorder", initial: "A\nB\n", oldText: "A\nB", newText: "B\nA", added: 1, removed: 1},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				dir := t.TempDir()
+				executor := NewExecutor(dir, dir, false)
+				path := filepath.Join(dir, "test.txt")
+				if err := osWriteFile(path, []byte(tc.initial)); err != nil {
+					t.Fatal(err)
+				}
+				result := executor.Edit("test.txt", []map[string]string{{
+					"oldText": tc.oldText,
+					"newText": tc.newText,
+				}})
+				assertEditOK(t, result)
+				if result.Metadata["added_lines"] != tc.added || result.Metadata["removed_lines"] != tc.removed {
+					t.Fatalf("unexpected stats: %#v", result.Metadata)
+				}
+			})
 		}
 	})
 }
@@ -276,25 +328,19 @@ func TestBash(t *testing.T) {
 	})
 }
 
-func assertEditOK(t *testing.T, result Result, startLines, oldLineCounts, newLineCounts []int) {
+func assertEditOK(t *testing.T, result Result) {
 	t.Helper()
-	rawEdits := result.Metadata["edits"]
-	data, err := json.Marshal(rawEdits)
-	if err != nil {
-		t.Fatalf("unexpected metadata: %#v", result.Metadata)
+	if result.IsError {
+		t.Fatalf("unexpected error result: %#v", result)
 	}
-	var edits []struct {
-		StartLine    int `json:"start_line"`
-		OldLineCount int `json:"old_line_count"`
-		NewLineCount int `json:"new_line_count"`
+	if _, ok := result.Metadata["patch"].(string); !ok {
+		t.Fatalf("missing patch metadata: %#v", result.Metadata)
 	}
-	if err := json.Unmarshal(data, &edits); err != nil || len(edits) != len(startLines) {
-		t.Fatalf("unexpected metadata: %#v", result.Metadata)
+	if _, ok := result.Metadata["added_lines"].(int); !ok {
+		t.Fatalf("missing added_lines metadata: %#v", result.Metadata)
 	}
-	for i, edit := range edits {
-		if edit.StartLine != startLines[i] || edit.OldLineCount != oldLineCounts[i] || edit.NewLineCount != newLineCounts[i] {
-			t.Fatalf("unexpected edit %d: %#v", i, edit)
-		}
+	if _, ok := result.Metadata["removed_lines"].(int); !ok {
+		t.Fatalf("missing removed_lines metadata: %#v", result.Metadata)
 	}
 }
 

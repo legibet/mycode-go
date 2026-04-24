@@ -300,19 +300,6 @@ func trimTailLines(lines []string) []string {
 	return slices.Clone(lines[len(lines)-DefaultMaxLines:])
 }
 
-func splitLineCount(text string) int {
-	if text == "" {
-		return 0
-	}
-	normalized := strings.ReplaceAll(text, "\r\n", "\n")
-	normalized = strings.TrimSuffix(normalized, "\n")
-	normalized = strings.TrimSuffix(normalized, "\r")
-	if normalized == "" {
-		return 1
-	}
-	return len(strings.Split(normalized, "\n"))
-}
-
 func shellQuote(text string) string {
 	return "'" + strings.ReplaceAll(text, "'", "'\"'\"'") + "'"
 }

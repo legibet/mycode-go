@@ -50,6 +50,35 @@ func TestAllBuiltInProvidersRegisterAdapters(t *testing.T) {
 }
 
 func TestOpenAIChatPayloadUsesExtraBody(t *testing.T) {
+	deepSeek := newOpenAIChatAdapter("deepseek").(openAIChatAdapter)
+	deepSeekNone := deepSeek.buildPayload(Request{
+		Model:           "deepseek-v4-pro",
+		ReasoningEffort: "none",
+	})
+	deepSeekNoneExtra, _ := deepSeekNone["extra_body"].(map[string]any)
+	deepSeekNoneThinking, _ := deepSeekNoneExtra["thinking"].(map[string]any)
+	if deepSeekNoneThinking == nil || deepSeekNoneThinking["type"] != "disabled" {
+		t.Fatalf("unexpected DeepSeek none payload: %#v", deepSeekNone)
+	}
+
+	deepSeekHigh := deepSeek.buildPayload(Request{
+		Model:           "deepseek-v4-pro",
+		ReasoningEffort: "high",
+	})
+	deepSeekHighExtra, _ := deepSeekHigh["extra_body"].(map[string]any)
+	deepSeekHighThinking, _ := deepSeekHighExtra["thinking"].(map[string]any)
+	if deepSeekHigh["reasoning_effort"] != "high" || deepSeekHighThinking == nil || deepSeekHighThinking["type"] != "enabled" {
+		t.Fatalf("unexpected DeepSeek high payload: %#v", deepSeekHigh)
+	}
+
+	deepSeekXHigh := deepSeek.buildPayload(Request{
+		Model:           "deepseek-v4-pro",
+		ReasoningEffort: "xhigh",
+	})
+	if deepSeekXHigh["reasoning_effort"] != "max" {
+		t.Fatalf("unexpected DeepSeek xhigh payload: %#v", deepSeekXHigh)
+	}
+
 	zai := newOpenAIChatAdapter("zai").(openAIChatAdapter)
 	zaiPayload := zai.buildPayload(Request{
 		Model: "glm-5.1",

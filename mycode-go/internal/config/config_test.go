@@ -177,6 +177,32 @@ func TestResolveProviderPrefersFirstConfiguredProviderWithCredentials(t *testing
 	}
 }
 
+func TestResolveProviderDeepSeekDefaultsToV4(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home", ".mycode")
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	isolateConfigTest(t, home)
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-env-key")
+
+	settings, err := Load(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ResolveProvider(settings, "deepseek", "", "", "", "high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ProviderName != "deepseek" || resolved.ProviderType != "deepseek" {
+		t.Fatalf("unexpected provider: %#v", resolved)
+	}
+	if resolved.Model != "deepseek-v4-pro" || resolved.ReasoningEffort != "high" || !resolved.SupportsEffortToggle {
+		t.Fatalf("unexpected DeepSeek defaults: %#v", resolved)
+	}
+}
+
 func TestResolveProviderPreservesConfiguredModelOrder(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home", ".mycode")

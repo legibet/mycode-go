@@ -177,6 +177,22 @@ func (a openAIChatAdapter) buildPayload(req Request) map[string]any {
 	}
 
 	switch a.Spec().ID {
+	case "deepseek":
+		switch req.ReasoningEffort {
+		case "none":
+			payload["extra_body"] = map[string]any{
+				"thinking": map[string]any{"type": "disabled"},
+			}
+		case "low", "medium", "high", "xhigh":
+			effort := "high"
+			if req.ReasoningEffort == "xhigh" {
+				effort = "max"
+			}
+			payload["reasoning_effort"] = effort
+			payload["extra_body"] = map[string]any{
+				"thinking": map[string]any{"type": "enabled"},
+			}
+		}
 	case "zai":
 		payload["extra_body"] = map[string]any{
 			"thinking": map[string]any{

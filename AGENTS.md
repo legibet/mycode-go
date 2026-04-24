@@ -237,7 +237,7 @@ Compatibility smoke:
 ```bash
 # Python writes a v6 session and Go must read it.
 # Go writes a v6 session and Python must read it.
-# Check tool_result.output and tool_result.metadata.edits both ways.
+# Check tool_result.output and edit metadata patch/stats both ways.
 ```
 
 ## Guardrails

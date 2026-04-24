@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/anthropics/anthropic-sdk-go v1.33.0
 	github.com/openai/openai-go/v3 v3.31.0
+	github.com/pmezard/go-difflib v1.0.0
 	google.golang.org/genai v1.53.0
 	gopkg.in/yaml.v3 v3.0.1
 )

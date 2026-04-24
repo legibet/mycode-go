@@ -7,17 +7,9 @@ import (
 	"os"
 	"slices"
 	"strings"
-)
 
-type editMeta struct {
-	StartLine     int      `json:"start_line"`
-	OldLineCount  int      `json:"old_line_count"`
-	NewLineCount  int      `json:"new_line_count"`
-	AddedLines    int      `json:"added_lines"`
-	RemovedLines  int      `json:"removed_lines"`
-	ContextBefore []string `json:"context_before"`
-	ContextAfter  []string `json:"context_after"`
-}
+	"github.com/pmezard/go-difflib/difflib"
+)
 
 type editSpec struct {
 	oldText string
@@ -151,6 +143,16 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 		return errorResult("error: edits produced no changes")
 	}
 
+	patch, addedLines, removedLines, err := buildEditPatch(path, text, updated)
+	if err != nil {
+		return errorResult(fmt.Sprintf("error: failed to build edit patch: %v", err))
+	}
+
+	summary := "Updated " + path
+	if len(items) > 1 {
+		summary = fmt.Sprintf("Updated %s (%d edits)", path, len(items))
+	}
+
 	infoAfterRead, err := os.Stat(filePath)
 	if err == nil && infoAfterRead.ModTime().UnixNano() != readMTime {
 		return errorResult("error: file changed while editing; read it again and retry")
@@ -159,42 +161,42 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 		return errorResult(fmt.Sprintf("error: failed to write file: %v", err))
 	}
 
-	metas := buildEditMetas(text, updated, matches)
-
-	summary := "Updated " + path
-	if len(items) > 1 {
-		summary = fmt.Sprintf("Updated %s (%d edits)", path, len(items))
-	}
 	return Result{
-		Output:   summary,
-		Metadata: map[string]any{"edits": metas},
+		Output: summary,
+		Metadata: map[string]any{
+			"patch":         patch,
+			"added_lines":   addedLines,
+			"removed_lines": removedLines,
+		},
 	}
 }
 
-func buildEditMetas(original, updated string, matches []editMatch) []editMeta {
-	updatedLines := strings.Split(updated, "\n")
-	metas := make([]editMeta, 0, len(matches))
-	shift := 0
-	for _, match := range matches {
-		oldSnippet := original[match.start:match.end]
-		newStart := match.start + shift
-		startLine := strings.Count(updated[:newStart], "\n") + 1
-		oldLineCount := max(1, splitLineCount(oldSnippet))
-		newLineCount := max(1, splitLineCount(match.newText))
-		lineIndex := startLine - 1
-		addedLines, removedLines := lineEditStats(strings.Split(oldSnippet, "\n"), strings.Split(match.newText, "\n"))
-		metas = append(metas, editMeta{
-			StartLine:     startLine,
-			OldLineCount:  oldLineCount,
-			NewLineCount:  newLineCount,
-			AddedLines:    addedLines,
-			RemovedLines:  removedLines,
-			ContextBefore: slices.Clone(updatedLines[max(0, lineIndex-3):lineIndex]),
-			ContextAfter:  slices.Clone(updatedLines[min(len(updatedLines), lineIndex+newLineCount):min(len(updatedLines), lineIndex+newLineCount+3)]),
-		})
-		shift += len(match.newText) - (match.end - match.start)
+func buildEditPatch(path, original, updated string) (string, int, int, error) {
+	patch, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
+		A:        difflib.SplitLines(original),
+		B:        difflib.SplitLines(updated),
+		FromFile: "a/" + path,
+		ToFile:   "b/" + path,
+		Context:  3,
+		Eol:      "\n",
+	})
+	if err != nil {
+		return "", 0, 0, err
 	}
-	return metas
+
+	addedLines := 0
+	removedLines := 0
+	for i, line := range strings.Split(patch, "\n") {
+		if i < 2 {
+			continue
+		}
+		if strings.HasPrefix(line, "+") {
+			addedLines++
+		} else if strings.HasPrefix(line, "-") {
+			removedLines++
+		}
+	}
+	return patch, addedLines, removedLines, nil
 }
 
 func closestLineHint(text, needle string) string {
@@ -253,34 +255,6 @@ func similarityRatio(a, b string) float64 {
 	}
 	maxLen := max(len(ar), len(br))
 	return 1 - float64(prev[len(br)])/float64(maxLen)
-}
-
-func lineEditStats(oldLines, newLines []string) (added int, removed int) {
-	if len(oldLines) > 0 && oldLines[len(oldLines)-1] == "" {
-		oldLines = oldLines[:len(oldLines)-1]
-	}
-	if len(newLines) > 0 && newLines[len(newLines)-1] == "" {
-		newLines = newLines[:len(newLines)-1]
-	}
-	if len(oldLines) == 0 && len(newLines) == 0 {
-		return 0, 0
-	}
-
-	lcs := make([][]int, len(oldLines)+1)
-	for i := range lcs {
-		lcs[i] = make([]int, len(newLines)+1)
-	}
-	for i := len(oldLines) - 1; i >= 0; i-- {
-		for j := len(newLines) - 1; j >= 0; j-- {
-			if oldLines[i] == newLines[j] {
-				lcs[i][j] = lcs[i+1][j+1] + 1
-				continue
-			}
-			lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
-		}
-	}
-	common := lcs[0][0]
-	return len(newLines) - common, len(oldLines) - common
 }
 
 func normalizeText(text string) (string, []int) {

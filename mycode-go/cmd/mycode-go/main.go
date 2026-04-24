@@ -19,6 +19,9 @@ func runMain(args []string) int {
 	case "-h", "--help", "help":
 		printUsage(os.Stdout)
 		return 0
+	case "-V", "--version", "version":
+		printVersion(os.Stdout)
+		return 0
 	case "run":
 		return runCommand(args[1:])
 	case "web":

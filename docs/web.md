@@ -72,7 +72,7 @@ The web consumes canonical session messages and SSE events:
 - Persisted `tool_result` user messages are folded into the preceding assistant message.
 - Live tool state is tracked in `ToolRuntime`.
 - `tool_done.output` is the final display/provider text.
-- `tool_done.metadata` carries structured UI payloads such as `metadata.edits`.
+- `tool_done.metadata` carries structured UI payloads such as edit `patch` and line stats.
 
 The reducer keeps:
 

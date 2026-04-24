@@ -44,8 +44,8 @@ var specs = []Spec{
 		Label:                   "DeepSeek Chat Completions",
 		DefaultBaseURL:          "https://api.deepseek.com",
 		EnvAPIKeyNames:          []string{"DEEPSEEK_API_KEY"},
-		DefaultModels:           []string{"deepseek-chat", "deepseek-reasoner"},
-		SupportsReasoningEffort: false,
+		DefaultModels:           []string{"deepseek-v4-pro", "deepseek-v4-flash"},
+		SupportsReasoningEffort: true,
 		AutoDiscoverable:        true,
 	},
 	{

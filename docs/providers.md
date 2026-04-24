@@ -37,7 +37,7 @@ Tool results are stored and replayed as:
   "type": "tool_result",
   "tool_use_id": "call_1",
   "output": "Updated file.go",
-  "metadata": {"edits": []},
+  "metadata": {"patch": "...", "added_lines": 1, "removed_lines": 1},
   "is_error": false
 }
 ```
@@ -118,8 +118,8 @@ Tool results are stored and replayed as:
 - Chat Completions adapter
 - Base URL: `https://api.deepseek.com`
 - Env: `DEEPSEEK_API_KEY`
-- Default models: `deepseek-chat`, `deepseek-reasoner`
-- Reasoning effort: not exposed; DeepSeek controls thinking natively
+- Default models: `deepseek-v4-pro`, `deepseek-v4-flash`
+- Reasoning effort: `none` sends `thinking: {type: "disabled"}`, `low`/`medium`/`high` map to `reasoning_effort=high`, and `xhigh` maps to `reasoning_effort=max`
 
 ### `zai`
 
@@ -140,13 +140,13 @@ Tool results are stored and replayed as:
 
 ## Reasoning Effort Mapping
 
-| effort   | anthropic / moonshotai / minimax      | google (Gemini 3)    | openai / openrouter |
-| -------- | ------------------------------------- | -------------------- | ------------------- |
-| `none`   | disabled                              | `LOW` or `MINIMAL`   | `none`              |
-| `low`    | low budget                            | `LOW` or `MINIMAL`   | `low`               |
-| `medium` | medium budget                         | `MEDIUM`             | `medium`            |
-| `high`   | high budget                           | `HIGH`               | `high`              |
-| `xhigh`  | provider-specific high/max behaviour  | `HIGH`               | `xhigh`             |
+| effort   | anthropic / moonshotai / minimax     | google (Gemini 3)  | openai / openrouter | deepseek |
+| -------- | ------------------------------------ | ------------------ | ------------------- | -------- |
+| `none`   | disabled                             | `LOW` or `MINIMAL` | `none`              | disabled |
+| `low`    | low budget                           | `LOW` or `MINIMAL` | `low`               | `high`   |
+| `medium` | medium budget                        | `MEDIUM`           | `medium`            | `high`   |
+| `high`   | high budget                          | `HIGH`             | `high`              | `high`   |
+| `xhigh`  | provider-specific high/max behaviour | `HIGH`             | `xhigh`             | `max`    |
 
 Effort is only applied when both `Spec.SupportsReasoningEffort` and catalog `supports_reasoning` are true.
 
