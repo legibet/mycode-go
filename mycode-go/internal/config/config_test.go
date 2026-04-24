@@ -407,8 +407,8 @@ func TestResolveProviderUsesMetadataOverrides(t *testing.T) {
 			Model:              model,
 			ContextWindow:      400000,
 			MaxOutputTokens:    128000,
-			SupportsReasoning:  boolPtr(true),
-			SupportsImageInput: boolPtr(false),
+			SupportsReasoning:  new(true),
+			SupportsImageInput: new(false),
 		}
 	}
 	t.Cleanup(func() {
@@ -461,7 +461,7 @@ func TestResolveProviderUsesGlobalDefaultReasoningEffort(t *testing.T) {
 			Model:             model,
 			ContextWindow:     400000,
 			MaxOutputTokens:   128000,
-			SupportsReasoning: boolPtr(true),
+			SupportsReasoning: new(true),
 		}
 	}
 	t.Cleanup(func() {
@@ -496,10 +496,6 @@ func writeJSON(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func boolPtr(v bool) *bool {
-	return &v
 }
 
 func contains(text, needle string) bool {

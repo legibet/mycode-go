@@ -31,8 +31,10 @@ type Message struct {
 }
 
 // Bool returns a stable pointer for JSON optional booleans.
+//
+//go:fix inline
 func Bool(v bool) *bool {
-	return &v
+	return new(v)
 }
 
 // TextBlock returns a plain text block.
@@ -91,7 +93,7 @@ func ToolResultBlock(toolUseID, output string, metadata map[string]any, isError 
 		Type:      "tool_result",
 		ToolUseID: toolUseID,
 		Output:    output,
-		IsError:   Bool(isError),
+		IsError:   new(isError),
 	}
 	if len(metadata) > 0 {
 		block.Metadata = maps.Clone(metadata)

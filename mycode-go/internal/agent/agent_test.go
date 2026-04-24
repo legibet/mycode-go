@@ -54,7 +54,7 @@ func TestChatPersistsReasoningBlocks(t *testing.T) {
 			turns: [][]provider.StreamEvent{{
 				{Type: "thinking_delta", Text: "hidden "},
 				{Type: "text_delta", Text: "Visible answer"},
-				{Type: "message_done", Msg: ptrMessage(message.AssistantMessage([]message.Block{
+				{Type: "message_done", Msg: new(message.AssistantMessage([]message.Block{
 					message.ThinkingBlock("hidden ", nil),
 					message.TextBlock("Visible answer", nil),
 				}, "openai", "gpt-5.4", "", "", nil, nil))},
@@ -98,13 +98,13 @@ func TestChatRespectsExplicitTurnLimit(t *testing.T) {
 			turns: [][]provider.StreamEvent{
 				{{
 					Type: "message_done",
-					Msg: ptrMessage(message.AssistantMessage([]message.Block{
+					Msg: new(message.AssistantMessage([]message.Block{
 						message.ToolUseBlock("call-1", "read", map[string]any{"path": "missing.txt"}, nil),
 					}, "openai", "gpt-5.4", "", "", nil, nil)),
 				}},
 				{{
 					Type: "message_done",
-					Msg: ptrMessage(message.AssistantMessage([]message.Block{
+					Msg: new(message.AssistantMessage([]message.Block{
 						message.ToolUseBlock("call-2", "read", map[string]any{"path": "missing.txt"}, nil),
 					}, "openai", "gpt-5.4", "", "", nil, nil)),
 				}},
@@ -129,7 +129,7 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 		turns: [][]provider.StreamEvent{{
 			{
 				Type: "message_done",
-				Msg:  ptrMessage(message.AssistantMessage([]message.Block{message.TextBlock("ok", nil)}, "openai", "gpt-5.4", "", "", nil, nil)),
+				Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("ok", nil)}, "openai", "gpt-5.4", "", "", nil, nil)),
 			},
 		}},
 	}
@@ -164,13 +164,13 @@ func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 		turns: [][]provider.StreamEvent{
 			{{
 				Type: "message_done",
-				Msg: ptrMessage(message.AssistantMessage([]message.Block{
+				Msg: new(message.AssistantMessage([]message.Block{
 					message.TextBlock("answer", nil),
 				}, "openai", "gpt-5.4", "", "", map[string]any{"input_tokens": 90}, nil)),
 			}},
 			{{
 				Type: "message_done",
-				Msg: ptrMessage(message.AssistantMessage([]message.Block{
+				Msg: new(message.AssistantMessage([]message.Block{
 					message.TextBlock("summary", nil),
 				}, "openai", "gpt-5.4", "", "", nil, nil)),
 			}},
@@ -247,8 +247,4 @@ func collectEvents(stream <-chan Event) []Event {
 		events = append(events, event)
 	}
 	return events
-}
-
-func ptrMessage(msg message.Message) *message.Message {
-	return &msg
 }
