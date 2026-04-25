@@ -104,6 +104,21 @@ func (a *app) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (a *app) handleDecideRun(w http.ResponseWriter, r *http.Request) {
+	var req core.DecideRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeDetailError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	resp, err := a.svc.DecideRun(r.PathValue("run_id"), req)
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (a *app) handleConfig(w http.ResponseWriter, r *http.Request) {
 	resp, err := a.svc.Config(r.URL.Query().Get("cwd"))
 	if err != nil {

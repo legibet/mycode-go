@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/internal/permissions"
 	"github.com/legibet/mycode-go/internal/provider"
 )
 
@@ -154,6 +156,60 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 
 	if len(adapter.requests) != 1 || adapter.requests[0].SessionID != "session-explicit" {
 		t.Fatalf("unexpected requests: %#v", adapter.requests)
+	}
+}
+
+func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
+	dir := t.TempDir()
+	agent, err := New(Options{
+		Model:              "gpt-5.4",
+		Provider:           "openai",
+		CWD:                dir,
+		SessionDir:         filepath.Join(dir, "session"),
+		SessionID:          "session",
+		MaxTokens:          4096,
+		ContextWindow:      128000,
+		CompactThreshold:   0.8,
+		SupportsImageInput: true,
+		SupportsPDFInput:   true,
+		Permission:         config.PermissionConfig{Level: "readonly", Mode: "deny"},
+		Adapter: &fakeAdapter{
+			spec: provider.Spec{ID: "openai"},
+			turns: [][]provider.StreamEvent{
+				{{
+					Type: "message_done",
+					Msg: new(message.AssistantMessage([]message.Block{
+						message.ToolUseBlock("call-1", "edit", map[string]any{
+							"path": "file.txt",
+							"edits": []map[string]any{{
+								"oldText": "a",
+								"newText": "b",
+							}},
+						}, nil),
+					}, "openai", "gpt-5.4", "", "", nil, nil)),
+				}},
+				{{
+					Type: "message_done",
+					Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("blocked", nil)}, "openai", "gpt-5.4", "", "", nil, nil)),
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events := collectEvents(agent.Chat(context.Background(), message.UserTextMessage("hello", nil), nil))
+
+	found := false
+	for _, event := range events {
+		if event.Type == "tool_done" && event.Data["output"] == permissions.DeniedOutput {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected denied tool_done event: %#v", events)
 	}
 }
 

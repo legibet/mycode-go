@@ -2,6 +2,7 @@ package core
 
 import (
 	"cmp"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	agentpkg "github.com/legibet/mycode-go/internal/agent"
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/internal/permissions"
 	"github.com/legibet/mycode-go/internal/provider"
 	"github.com/legibet/mycode-go/internal/session"
 	"github.com/legibet/mycode-go/internal/tools"
@@ -105,6 +107,15 @@ type SessionsResponse struct {
 type CancelRunResponse struct {
 	Status string         `json:"status"`
 	Run    map[string]any `json:"run"`
+}
+
+type DecideRequest struct {
+	RequestID string `json:"request_id"`
+	Decision  string `json:"decision"`
+}
+
+type DecideResponse struct {
+	Status string `json:"status"`
 }
 
 func NewService(opts Options) *Service {
@@ -209,6 +220,11 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		ReasoningEffort:    resolved.ReasoningEffort,
 		SupportsImageInput: resolved.SupportsImageInput,
 		SupportsPDFInput:   resolved.SupportsPDFInput,
+		Permission:         settings.Permission,
+		PermissionReviewer: func(ctx context.Context, req permissions.ReviewRequest) permissions.ReviewDecision {
+			return s.runs.requestDecision(ctx, sessionID, req)
+		},
+		SkillRoots: permissions.SkillRoots(cwd, config.ResolveHome()),
 	})
 	if err != nil {
 		return ChatResponse{}, statusError(http.StatusInternalServerError, err.Error())
@@ -246,6 +262,28 @@ func (s *Service) CancelRun(runID string) (CancelRunResponse, error) {
 		return CancelRunResponse{}, statusError(http.StatusNotFound, "run not found")
 	}
 	return CancelRunResponse{Status: "ok", Run: run}, nil
+}
+
+func (s *Service) DecideRun(runID string, req DecideRequest) (DecideResponse, error) {
+	requestID := strings.TrimSpace(req.RequestID)
+	if requestID == "" {
+		return DecideResponse{}, statusError(http.StatusBadRequest, "request_id is required")
+	}
+
+	var decision permissions.ReviewDecision
+	switch req.Decision {
+	case string(permissions.ReviewAllow):
+		decision = permissions.ReviewAllow
+	case string(permissions.ReviewDeny):
+		decision = permissions.ReviewDeny
+	default:
+		return DecideResponse{}, statusError(http.StatusBadRequest, "decision must be allow or deny")
+	}
+
+	if !s.runs.resolveDecision(runID, requestID, decision) {
+		return DecideResponse{}, statusError(http.StatusNotFound, "permission request not found")
+	}
+	return DecideResponse{Status: "ok"}, nil
 }
 
 func (s *Service) Config(cwd string) (map[string]any, error) {
@@ -321,7 +359,6 @@ func (s *Service) Config(cwd string) (map[string]any, error) {
 		"default_reasoning_effort": ResponseReasoningEffort(settings.DefaultReasoningEffort),
 		"reasoning_effort_options": ReasoningEffortOptions,
 		"cwd":                      cwd,
-		"workspace_root":           settings.WorkspaceRoot,
 		"config_paths":             settings.ConfigPaths,
 	}, nil
 }

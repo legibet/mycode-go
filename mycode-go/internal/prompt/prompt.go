@@ -110,7 +110,7 @@ func discoverInstructionFiles(cwd, home string) []string {
 }
 
 func loadSkills(cwd, home string) string {
-	skills := discoverSkills(cwd, home)
+	skills := DiscoverSkills(cwd, home)
 	if len(skills) == 0 {
 		return ""
 	}
@@ -130,7 +130,8 @@ func loadSkills(cwd, home string) string {
 	return strings.Join(lines, "\n")
 }
 
-func discoverSkills(cwd, home string) []Skill {
+// DiscoverSkills returns the skill files visible to the runtime prompt.
+func DiscoverSkills(cwd, home string) []Skill {
 	cwdPath := absPath(cwd)
 	homePath := absPath(home)
 	compatHome := absPath(userHomeDir())

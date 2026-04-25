@@ -26,6 +26,8 @@ const (
 )
 
 var validReasoningEfforts = []string{"none", "low", "medium", "high", "xhigh"}
+var validPermissionLevels = []string{"readonly", "safe", "standard", "yolo"}
+var validPermissionModes = []string{"ask", "deny"}
 
 var lookupModelMetadata = models.Lookup
 
@@ -52,16 +54,22 @@ type ProviderConfig struct {
 	ReasoningEffort string                 `json:"reasoning_effort"`
 }
 
-// Settings is the resolved config view for one workspace.
+// PermissionConfig controls automatic tool execution.
+type PermissionConfig struct {
+	Level string `json:"level"`
+	Mode  string `json:"mode"`
+}
+
+// Settings is the resolved config view for one cwd.
 type Settings struct {
 	Providers              map[string]ProviderConfig
 	DefaultProvider        string
 	DefaultModel           string
 	DefaultReasoningEffort string
 	CompactThreshold       float64
+	Permission             PermissionConfig
 	Port                   int
 	CWD                    string
-	WorkspaceRoot          string
 	ConfigPaths            []string
 
 	providerOrder []string
@@ -108,32 +116,16 @@ func ResolveSessionsDir() string {
 	return filepath.Join(ResolveHome(), "sessions")
 }
 
-// FindWorkspaceRoot returns the nearest git root or cwd.
-func FindWorkspaceRoot(cwd string) string {
-	current := absPath(cmp.Or(cwd, mustGetwd()))
-	for {
-		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil {
-			return current
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return current
-		}
-		current = parent
-	}
-}
-
 // Load returns merged config for one cwd.
 func Load(cwd string) (Settings, error) {
 	resolvedCWD := absPath(cmp.Or(cwd, mustGetwd()))
-	workspaceRoot := FindWorkspaceRoot(resolvedCWD)
 
 	settings := Settings{
 		Providers:        map[string]ProviderConfig{},
 		CompactThreshold: defaultCompactThreshold,
+		Permission:       DefaultPermissionConfig(),
 		Port:             defaultPort,
 		CWD:              resolvedCWD,
-		WorkspaceRoot:    workspaceRoot,
 	}
 
 	mergedProviders := map[string]map[string]any{}
@@ -143,7 +135,7 @@ func Load(cwd string) (Settings, error) {
 
 	configPaths := []string{
 		filepath.Join(ResolveHome(), "config.json"),
-		filepath.Join(FindWorkspaceRoot(resolvedCWD), ".mycode", "config.json"),
+		filepath.Join(resolvedCWD, ".mycode", "config.json"),
 	}
 	for _, path := range configPaths {
 		loaded, ok := loadConfig(path)
@@ -166,6 +158,14 @@ func Load(cwd string) (Settings, error) {
 			if threshold, ok := parseCompactThreshold(rawDefault["compact_threshold"]); ok {
 				settings.CompactThreshold = threshold
 			}
+		}
+
+		if rawPermission, exists := raw["permission"]; exists {
+			permission, err := parsePermissionConfig(rawPermission, settings.Permission)
+			if err != nil {
+				return Settings{}, err
+			}
+			settings.Permission = permission
 		}
 
 		rawProviders, _ := raw["providers"].(map[string]any)
@@ -232,6 +232,10 @@ func Load(cwd string) (Settings, error) {
 	return settings, nil
 }
 
+func DefaultPermissionConfig() PermissionConfig {
+	return PermissionConfig{Level: "safe", Mode: "ask"}
+}
+
 // ResolveProvider resolves one provider alias or built-in provider id.
 func ResolveProvider(settings Settings, providerName, model, apiKey, apiBase, reasoningEffort string) (ResolvedProvider, error) {
 	selected := strings.TrimSpace(providerName)
@@ -266,7 +270,7 @@ func ResolveProvider(settings Settings, providerName, model, apiKey, apiBase, re
 	if len(envNames) > 0 {
 		checked = strings.Join(envNames, ", ")
 	}
-	return ResolvedProvider{}, fmt.Errorf("no available providers found; set one of the supported API key env vars (%s) or configure a provider in ~/.mycode/config.json or <workspace>/.mycode/config.json", checked)
+	return ResolvedProvider{}, fmt.Errorf("no available providers found; set one of the supported API key env vars (%s) or configure a provider in ~/.mycode/config.json or <cwd>/.mycode/config.json", checked)
 }
 
 // AvailableProviders returns currently selectable providers in stable order.
@@ -591,6 +595,58 @@ func normalizeReasoningEffort(value any) string {
 	default:
 		return text
 	}
+}
+
+func parsePermissionConfig(value any, current PermissionConfig) (PermissionConfig, error) {
+	if current.Level == "" {
+		current = DefaultPermissionConfig()
+	}
+
+	switch raw := value.(type) {
+	case nil:
+		return current, nil
+	case string:
+		level, err := normalizePermissionLevel(raw)
+		if err != nil {
+			return PermissionConfig{}, err
+		}
+		return PermissionConfig{Level: level, Mode: current.Mode}, nil
+	case map[string]any:
+		next := current
+		if value, exists := raw["level"]; exists {
+			level, err := normalizePermissionLevel(value)
+			if err != nil {
+				return PermissionConfig{}, err
+			}
+			next.Level = level
+		}
+		if value, exists := raw["mode"]; exists {
+			mode, err := normalizePermissionMode(value)
+			if err != nil {
+				return PermissionConfig{}, err
+			}
+			next.Mode = mode
+		}
+		return next, nil
+	default:
+		return PermissionConfig{}, fmt.Errorf("permission must be a string or object, got %T", value)
+	}
+}
+
+func normalizePermissionLevel(value any) (string, error) {
+	level := strings.TrimSpace(strings.ToLower(asString(value)))
+	if slices.Contains(validPermissionLevels, level) {
+		return level, nil
+	}
+	return "", fmt.Errorf("unsupported permission level %q; supported: %s", asString(value), strings.Join(validPermissionLevels, ", "))
+}
+
+func normalizePermissionMode(value any) (string, error) {
+	mode := strings.TrimSpace(strings.ToLower(asString(value)))
+	if slices.Contains(validPermissionModes, mode) {
+		return mode, nil
+	}
+	return "", fmt.Errorf("unsupported permission mode %q; supported: %s", asString(value), strings.Join(validPermissionModes, ", "))
 }
 
 func parseConfigAPIKey(value any) (literal string, envVar string) {

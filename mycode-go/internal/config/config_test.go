@@ -10,14 +10,10 @@ import (
 	"github.com/legibet/mycode-go/internal/provider"
 )
 
-func TestLoadMergesGlobalAndProjectConfigs(t *testing.T) {
+func TestLoadMergesGlobalAndCurrentDirectoryConfigs(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home", ".mycode")
-	project := filepath.Join(root, "project")
-	cwd := filepath.Join(project, "apps", "api")
-	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	cwd := filepath.Join(root, "project", "apps", "api")
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +32,7 @@ func TestLoadMergesGlobalAndProjectConfigs(t *testing.T) {
 			"model": "gpt-5-mini"
 		}
 	}`)
-	writeJSON(t, filepath.Join(project, ".mycode", "config.json"), `{
+	writeJSON(t, filepath.Join(cwd, ".mycode", "config.json"), `{
 		"default": {
 			"provider": "shared",
 			"model": "gpt-5.4"
@@ -53,7 +49,7 @@ func TestLoadMergesGlobalAndProjectConfigs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.CWD != filepath.Clean(cwd) || settings.WorkspaceRoot != filepath.Clean(project) {
+	if settings.CWD != filepath.Clean(cwd) {
 		t.Fatalf("unexpected settings: %#v", settings)
 	}
 	if settings.DefaultProvider != "shared" || settings.DefaultModel != "gpt-5.4" {
@@ -91,6 +87,84 @@ func TestLoadCompactThresholdParsing(t *testing.T) {
 	}
 	if settings.CompactThreshold != 0 {
 		t.Fatalf("unexpected compact threshold: %v", settings.CompactThreshold)
+	}
+}
+
+func TestLoadIgnoresParentGitConfig(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home", ".mycode")
+	project := filepath.Join(root, "project")
+	cwd := filepath.Join(project, "apps", "api")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	isolateConfigTest(t, home)
+
+	writeJSON(t, filepath.Join(project, ".mycode", "config.json"), `{
+		"default": {"provider": "openai", "model": "gpt-5.4"},
+		"providers": {"openai": {"api_key": "project-key"}}
+	}`)
+
+	settings, err := Load(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settings.ConfigPaths) != 0 {
+		t.Fatalf("unexpected config paths: %#v", settings.ConfigPaths)
+	}
+	if len(settings.Providers) != 0 || settings.DefaultProvider != "" {
+		t.Fatalf("unexpected settings from parent git config: %#v", settings)
+	}
+}
+
+func TestLoadPermissionConfig(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home", ".mycode")
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	isolateConfigTest(t, home)
+
+	settings, err := Load(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Permission != (PermissionConfig{Level: "safe", Mode: "ask"}) {
+		t.Fatalf("unexpected default permission: %#v", settings.Permission)
+	}
+
+	writeJSON(t, filepath.Join(home, "config.json"), `{"permission":{"level":"readonly","mode":"deny"}}`)
+	settings, err = Load(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Permission != (PermissionConfig{Level: "readonly", Mode: "deny"}) {
+		t.Fatalf("unexpected permission: %#v", settings.Permission)
+	}
+}
+
+func TestLoadPermissionStringKeepsCurrentMode(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home", ".mycode")
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(filepath.Join(workspace, ".mycode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	isolateConfigTest(t, home)
+
+	writeJSON(t, filepath.Join(home, "config.json"), `{"permission":{"level":"standard","mode":"deny"}}`)
+	writeJSON(t, filepath.Join(workspace, ".mycode", "config.json"), `{"permission":"readonly"}`)
+
+	settings, err := Load(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Permission != (PermissionConfig{Level: "readonly", Mode: "deny"}) {
+		t.Fatalf("unexpected permission: %#v", settings.Permission)
 	}
 }
 

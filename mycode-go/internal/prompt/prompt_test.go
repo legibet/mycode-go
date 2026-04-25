@@ -147,7 +147,7 @@ func TestSkills(t *testing.T) {
 		writeText(t, filepath.Join(root, "home", ".agents", "skills", "shared", "SKILL.md"), "---\nname: shared\ndescription: Compat.\n---\n")
 		writeText(t, filepath.Join(home, "skills", "shared", "SKILL.md"), "---\nname: shared\ndescription: Native.\n---\n")
 		writeText(t, filepath.Join(cwd, ".mycode", "skills", "shared", "SKILL.md"), "---\nname: shared\ndescription: Project.\n---\n")
-		skills := discoverSkills(cwd, home)
+		skills := DiscoverSkills(cwd, home)
 		if len(skills) != 1 || skills[0].Description != "Project." || skills[0].Source != "project" {
 			t.Fatalf("unexpected skills: %#v", skills)
 		}

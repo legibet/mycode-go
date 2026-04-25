@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
 	agentpkg "github.com/legibet/mycode-go/internal/agent"
 	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/internal/permissions"
 )
 
 type runStatus string
@@ -78,18 +80,21 @@ type runState struct {
 	nextSeq    int
 	finishedAt time.Time
 	cancel     context.CancelFunc
+
+	pendingDecisions map[string]chan permissions.ReviewDecision
 }
 
 func newRunState(id, sessionID string, userMessage message.Message, baseMessages []message.Message, agent *agentpkg.Agent, cancel context.CancelFunc) *runState {
 	return &runState{
-		id:           id,
-		sessionID:    sessionID,
-		userMessage:  message.Clone(userMessage),
-		baseMessages: message.CloneMessages(baseMessages),
-		agent:        agent,
-		status:       runStatusRunning,
-		nextSeq:      1,
-		cancel:       cancel,
+		id:               id,
+		sessionID:        sessionID,
+		userMessage:      message.Clone(userMessage),
+		baseMessages:     message.CloneMessages(baseMessages),
+		agent:            agent,
+		status:           runStatusRunning,
+		nextSeq:          1,
+		cancel:           cancel,
+		pendingDecisions: map[string]chan permissions.ReviewDecision{},
 	}
 }
 
@@ -120,6 +125,45 @@ func (r *runState) appendEvent(event agentpkg.Event) map[string]any {
 	stored := runEvent{seq: r.nextSeq - 1, typ: event.Type, data: payload}
 	r.events = append(r.events, stored)
 	return stored.payload()
+}
+
+func (r *runState) addDecision(requestID string, ch chan permissions.ReviewDecision) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pendingDecisions[requestID] = ch
+}
+
+func (r *runState) removeDecision(requestID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.pendingDecisions, requestID)
+}
+
+func (r *runState) resolveDecision(requestID string, decision permissions.ReviewDecision) bool {
+	r.mu.RLock()
+	ch := r.pendingDecisions[requestID]
+	r.mu.RUnlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case ch <- decision:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *runState) denyPendingDecisions() {
+	r.mu.RLock()
+	channels := slices.Collect(maps.Values(r.pendingDecisions))
+	r.mu.RUnlock()
+	for _, ch := range channels {
+		select {
+		case ch <- permissions.ReviewDeny:
+		default:
+		}
+	}
 }
 
 func (r *runState) finish(status runStatus, errText string) map[string]any {
@@ -227,10 +271,58 @@ func (m *RunManager) cancelRun(runID string) map[string]any {
 		return nil
 	}
 	state.agent.Cancel()
+	state.denyPendingDecisions()
 	if state.cancel != nil {
 		state.cancel()
 	}
 	return state.info()
+}
+
+func (m *RunManager) requestDecision(ctx context.Context, sessionID string, request permissions.ReviewRequest) permissions.ReviewDecision {
+	m.mu.Lock()
+	state := m.activeBySession[sessionID]
+	m.mu.Unlock()
+	if state == nil {
+		return permissions.ReviewDeny
+	}
+
+	requestID := newID()
+	ch := make(chan permissions.ReviewDecision, 1)
+	state.addDecision(requestID, ch)
+
+	m.emit(state, state.appendEvent(agentpkg.Event{
+		Type: "permission_request",
+		Data: map[string]any{
+			"request_id":  requestID,
+			"tool_use_id": request.ToolCallID,
+			"tool_name":   request.ToolName,
+			"preview":     request.Preview,
+		},
+	}))
+
+	decision := permissions.ReviewDeny
+	select {
+	case decision = <-ch:
+	case <-ctx.Done():
+	}
+
+	state.removeDecision(requestID)
+	m.emit(state, state.appendEvent(agentpkg.Event{
+		Type: "permission_resolved",
+		Data: map[string]any{
+			"request_id": requestID,
+			"decision":   string(decision),
+		},
+	}))
+	return decision
+}
+
+func (m *RunManager) resolveDecision(runID, requestID string, decision permissions.ReviewDecision) bool {
+	state := m.getRun(runID)
+	if state == nil {
+		return false
+	}
+	return state.resolveDecision(requestID, decision)
 }
 
 func (m *RunManager) hasActiveRun(sessionID string) bool {

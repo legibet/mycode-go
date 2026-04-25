@@ -50,6 +50,7 @@ func newApp(serveWeb bool, webRoot string, store *session.Store, runs *core.RunM
 	mux.HandleFunc("POST /api/chat", app.handleChat)
 	mux.HandleFunc("GET /api/runs/{run_id}/stream", app.handleRunStream)
 	mux.HandleFunc("POST /api/runs/{run_id}/cancel", app.handleCancelRun)
+	mux.HandleFunc("POST /api/runs/{run_id}/decide", app.handleDecideRun)
 	mux.HandleFunc("GET /api/config", app.handleConfig)
 
 	mux.HandleFunc("POST /api/sessions", app.handleCreateSession)

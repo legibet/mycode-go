@@ -12,6 +12,7 @@ import (
 
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/internal/permissions"
 	"github.com/legibet/mycode-go/internal/prompt"
 	"github.com/legibet/mycode-go/internal/provider"
 	"github.com/legibet/mycode-go/internal/session"
@@ -45,6 +46,9 @@ type Options struct {
 	ReasoningEffort    string
 	SupportsImageInput bool
 	SupportsPDFInput   bool
+	Permission         config.PermissionConfig
+	PermissionReviewer permissions.Reviewer
+	SkillRoots         []string
 	Adapter            provider.Adapter
 	Tools              *tools.Executor
 }
@@ -65,6 +69,9 @@ type Agent struct {
 	ReasoningEffort    string
 	SupportsImageInput bool
 	SupportsPDFInput   bool
+	Permission         config.PermissionConfig
+	PermissionReviewer permissions.Reviewer
+	SkillRoots         []string
 	System             string
 	Messages           []message.Message
 	Tools              *tools.Executor
@@ -87,6 +94,14 @@ func New(opts Options) (*Agent, error) {
 
 	sessionDir := cmp.Or(opts.SessionDir, cwd)
 	sessionID := cmp.Or(opts.SessionID, filepath.Base(sessionDir))
+	permission := opts.Permission
+	if permission.Level == "" {
+		permission = config.DefaultPermissionConfig()
+	}
+	skillRoots := append([]string(nil), opts.SkillRoots...)
+	if skillRoots == nil {
+		skillRoots = permissions.SkillRoots(cwd, config.ResolveHome())
+	}
 
 	toolExecutor := opts.Tools
 	if toolExecutor == nil {
@@ -122,6 +137,9 @@ func New(opts Options) (*Agent, error) {
 		ReasoningEffort:    opts.ReasoningEffort,
 		SupportsImageInput: opts.SupportsImageInput,
 		SupportsPDFInput:   opts.SupportsPDFInput,
+		Permission:         permission,
+		PermissionReviewer: opts.PermissionReviewer,
+		SkillRoots:         skillRoots,
 		System:             system,
 		Messages:           message.CloneMessages(opts.Messages),
 		Tools:              toolExecutor,
@@ -274,7 +292,12 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 			},
 		}}
 
-		result := a.runTool(toolCall, out)
+		toolCall.Input = input
+		result, stop := a.authorizeTool(ctx, toolCall, input)
+		if result == nil {
+			runResult := a.runTool(toolCall, out)
+			result = &runResult
+		}
 		toolResults = append(toolResults, message.ToolResultBlock(
 			toolCall.ID,
 			result.Output,
@@ -297,12 +320,38 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 		}
 		out <- Event{Type: "tool_done", Data: data}
 
+		if stop {
+			return message.BuildMessage("user", toolResults, nil), true
+		}
 		if result.Output == "error: cancelled" && ctx.Err() != nil {
 			return message.BuildMessage("user", toolResults, nil), true
 		}
 	}
 
 	return message.BuildMessage("user", toolResults, nil), false
+}
+
+func (a *Agent) authorizeTool(ctx context.Context, toolCall message.Block, input map[string]any) (*tools.Result, bool) {
+	check := permissions.ClassifyTool(toolCall.Name, input, a.CWD, a.SkillRoots)
+	switch permissions.DecisionFor(a.Permission, check.Tier) {
+	case permissions.DecisionAllow:
+		return nil, false
+	case permissions.DecisionDeny:
+		return &tools.Result{Output: permissions.DeniedOutput, IsError: true}, false
+	default:
+		if a.PermissionReviewer == nil {
+			return &tools.Result{Output: permissions.DeniedOutput, IsError: true}, false
+		}
+		decision := a.PermissionReviewer(ctx, permissions.ReviewRequest{
+			ToolCallID: toolCall.ID,
+			ToolName:   toolCall.Name,
+			Preview:    check.Preview,
+		})
+		if decision == permissions.ReviewAllow {
+			return nil, false
+		}
+		return &tools.Result{Output: permissions.DeniedByUserOutput, IsError: true}, true
+	}
 }
 
 func (a *Agent) emitError(out chan<- Event, msg string) {
