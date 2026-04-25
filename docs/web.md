@@ -47,6 +47,7 @@ web/src/
       MessageList.tsx
       ToolCard.tsx
       EditDiff.tsx
+      PermissionPrompt.tsx
       ReasoningBlock.tsx
       MarkdownBlock.tsx
       CodeBlock.tsx
@@ -73,6 +74,7 @@ The web consumes canonical session messages and SSE events:
 - Live tool state is tracked in `ToolRuntime`.
 - `tool_done.output` is the final display/provider text.
 - `tool_done.metadata` carries structured UI payloads such as edit `patch` and line stats.
+- `permission_request` shows the approval panel; `permission_resolved` clears it, including after reconnect.
 
 The reducer keeps:
 
@@ -90,6 +92,7 @@ State updates are immutable; keep reducers simple and deterministic.
 4. On disconnect, the client reloads `GET /api/sessions/{id}`.
 5. If a run is still active, the client applies `pending_events` and reconnects with `after=<last_seq>`.
 6. `409` conflict attaches to the existing active run.
+7. Tool approval decisions are sent with `POST /api/runs/{run_id}/decide`.
 
 ## Local Storage
 

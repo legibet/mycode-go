@@ -6,7 +6,7 @@ A minimal coding agent. Inspired by [pi](https://github.com/badlogic/pi-mono).
 
 - Minimal core.
 - Unified message format and robust cross-provider replay.
-- 4 built-in tools: `read`, `write`, `edit`, `bash`, expanded via skills.
+- 4 built-in tools: `read`, `write`, `edit`, `bash`.
 - Inspectable runtime, append-only JSONL sessions.
 - Native image and pdf input support.
 - Mobile-friendly web UI.
@@ -34,7 +34,7 @@ Single message, non-interactive:
 ./dist/mycode-go run "explain how the session store works"
 ```
 
-Resume the latest session in the current workspace:
+Resume the latest session for the current cwd:
 
 ```bash
 ./dist/mycode-go run --continue "continue the last task"
@@ -77,8 +77,9 @@ No config file is required. It is only used for:
 2. Overriding built-in provider settings
 3. Adding custom providers with any built-in provider type
 4. Customizing model metadata for built-in and custom models
+5. Controlling tool execution permissions
 
-Config is loaded from `~/.mycode/config.json` (global) and `<workspace>/.mycode/config.json` (project-specific, takes precedence).
+Config is loaded from `~/.mycode/config.json` (global) and `{cwd}/.mycode/config.json` (project-specific, takes precedence).
 
 ```json
 {
@@ -86,6 +87,10 @@ Config is loaded from `~/.mycode/config.json` (global) and `<workspace>/.mycode/
     "provider": "anthropic",
     "model": "claude-sonnet-4-6",
     "reasoning_effort": "medium"
+  },
+  "permission": {
+    "level": "safe",
+    "mode": "ask"
   },
   "providers": {
     "openrouter": {
@@ -119,6 +124,8 @@ Config is loaded from `~/.mycode/config.json` (global) and `<workspace>/.mycode/
 
 - Built-in provider ids can be overridden by key without specifying `type`. Custom providers must set `type`.
 - `reasoning_effort` controls extended thinking for supported models: `auto` (default) · `none` · `low` · `medium` · `high` · `xhigh`.
+- `permission.level` controls automatic tool execution: `readonly` · `safe` · `standard` · `yolo`; default `safe`.
+- `permission.mode` is `ask` or `deny`; web prompts on `ask`, while non-interactive CLI runs treat `ask` as `deny`.
 - API keys in config accept `${ENV_VAR}` references.
 - Model metadata is bundled locally and can be overridden per model in config.
 
@@ -129,12 +136,12 @@ Config is loaded from `~/.mycode/config.json` (global) and `<workspace>/.mycode/
 ```bash
 mycode-go "..."                      send one message, non-interactive
 mycode-go run "..."                  send one message, non-interactive
-mycode-go run --continue "..."       resume the most recent session in the current workspace
+mycode-go run --continue "..."       resume the most recent session for the current cwd
 mycode-go run --session <id> "..."   resume a specific session
 mycode-go web                        start web server (default port 8000)
 mycode-go web --dev                  API only, no static files
-mycode-go session list               list saved sessions in the current workspace
-mycode-go session list --all         list saved sessions from all workspaces
+mycode-go session list               list saved sessions for the current cwd
+mycode-go session list --all         list saved sessions for all cwd values
 ```
 
 ## Development

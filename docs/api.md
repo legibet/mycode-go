@@ -2,7 +2,7 @@
 
 Base prefix: `/api`. Routes are wired in `mycode-go/internal/server/app.go`; request parsing and handlers live in `mycode-go/internal/server/*.go`.
 
-The API intentionally matches the Python `mycode-cli` web contract so the same browser session can switch between Python and Go backends.
+The API matches the Python web contract from `main` so the same browser session can switch between Python and Go backends.
 
 ## Chat
 
@@ -10,7 +10,7 @@ The API intentionally matches the Python `mycode-cli` web contract so the same b
 
 Start one agent run. The handler returns JSON immediately; output streams later through `/api/runs/{run_id}/stream`.
 
-Request body (`chatRequest` in `mycode-go/internal/server/chat.go`):
+Request body (`core.ChatRequest` in `mycode-go/internal/core/service.go`):
 
 ```json
 {
@@ -19,7 +19,7 @@ Request body (`chatRequest` in `mycode-go/internal/server/chat.go`):
   "session_id": "default",
   "provider": "anthropic",
   "model": "claude-sonnet-4-6",
-  "cwd": "/path/to/workspace",
+  "cwd": "/path/to/current-dir",
   "api_key": null,
   "api_base": null,
   "reasoning_effort": "medium",
@@ -91,6 +91,23 @@ Cancel a running task. Returns:
 {"status": "ok", "run": {...}}
 ```
 
+### `POST /api/runs/{run_id}/decide`
+
+Resolve one pending tool permission request emitted by `permission_request`.
+
+Request:
+
+```json
+{"request_id": "...", "decision": "allow"}
+```
+
+`decision` must be `"allow"` or `"deny"`. Returns `{"status": "ok"}`.
+
+Errors:
+
+- `400` for a missing `request_id` or invalid `decision`.
+- `404` when the run or permission request is no longer pending.
+
 ### `GET /api/config?cwd=...`
 
 Return provider, model, and capability metadata for the web UI.
@@ -118,7 +135,6 @@ Return provider, model, and capability metadata for the web UI.
   "default_reasoning_effort": "auto",
   "reasoning_effort_options": ["auto", "none", "low", "medium", "high", "xhigh"],
   "cwd": "...",
-  "workspace_root": "...",
   "config_paths": ["..."]
 }
 ```
@@ -131,7 +147,7 @@ Session routes are implemented in `mycode-go/internal/server/sessions.go`.
 
 ### `GET /api/sessions?cwd=...`
 
-List sessions. Optional `cwd` filters by workspace. Each session includes `is_running`.
+List sessions. Optional `cwd` filters by the exact stored cwd. Each session includes `is_running`.
 
 ```json
 {"sessions": [{"id": "...", "title": "...", "cwd": "...", "message_format_version": 6, "is_running": false}]}
@@ -204,25 +220,28 @@ Return the server process cwd:
 
 ## SSE Contract
 
-`GET /api/runs/{run_id}/stream` emits the same event names and payload fields as Python `mycode-cli`.
+`GET /api/runs/{run_id}/stream` emits the same event names and payload fields as Python `main`.
 
-| event         | payload fields                                                               |
-| ------------- | ---------------------------------------------------------------------------- |
-| `reasoning`   | `delta: str`                                                                 |
-| `text`        | `delta: str`                                                                 |
-| `tool_start`  | `tool_call: {id, name, input}`                                               |
-| `tool_output` | `tool_use_id: str`, `output: str`                                            |
-| `tool_done`   | `tool_use_id: str`, `output: str`, `is_error: bool`, `metadata?`, `content?` |
-| `compact`     | `message: str`                                                               |
-| `error`       | `message: str`                                                               |
+| event                 | payload fields                                                               |
+| --------------------- | ---------------------------------------------------------------------------- |
+| `reasoning`           | `delta: str`                                                                 |
+| `text`                | `delta: str`                                                                 |
+| `tool_start`          | `tool_call: {id, name, input}`                                               |
+| `tool_output`         | `tool_use_id: str`, `output: str`                                            |
+| `tool_done`           | `tool_use_id: str`, `output: str`, `is_error: bool`, `metadata?`, `content?` |
+| `compact`             | `message: str`                                                               |
+| `error`               | `message: str`                                                               |
+| `permission_request`  | `request_id: str`, `tool_use_id: str`, `tool_name: str`, `preview: str`      |
+| `permission_resolved` | `request_id: str`, `decision: "allow" \| "deny"`                             |
 
 The web UI replays `pending_events` from `GET /api/sessions/{id}`, then reconnects with `after=<last seq>`.
 
 ## Run Manager
 
-`mycode-go/internal/server/run_manager.go` manages concurrent runs:
+`mycode-go/internal/core/run_manager.go` manages concurrent runs:
 
 - One active run per session.
 - Events are buffered for reconnect.
+- Pending permission decisions are tracked per active run.
 - Finished runs are pruned after 300 seconds.
 - `snapshotSession()` returns base messages plus buffered events for active-run recovery.

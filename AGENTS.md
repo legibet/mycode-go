@@ -9,14 +9,14 @@ Authoritative context for agent runs. Keep this file short and in sync with the 
 This branch is the Go rewrite of the Python backend on `main`. It tracks Python `main` for external behavior, but it is not a line-by-line port:
 
 - `web/` is synced directly from Python `main` by cherry-picking web-only commits.
-- Go backend code mirrors Python `mycode-cli` / `mycode-sdk` external behavior, disk formats, and API contracts.
+- Go backend code mirrors external behavior, disk formats, and API contracts from Python `main` (`cli/` and `mycode/`).
 - Go backend internals should stay idiomatic Go. Do not copy Python package layout or implementation details unless it simplifies compatibility.
 
 ## Current Sync
 
 Synced with Python `main` through:
 
-- `ea34082 fix(web): prevent iOS filter input zoom`
+- `d7217e7 fix(web): drop workspace_root config field`
 
 State at this sync point:
 
@@ -57,6 +57,7 @@ Core runtime:
 - `mycode-go/internal/agent/agent.go` — the only orchestration loop
 - `mycode-go/internal/message/message.go` — canonical message/block format
 - `mycode-go/internal/tools/*.go` — 4 built-in tools and execution
+- `mycode-go/internal/permissions/*.go` — CLI/web tool permission policy and conservative bash classification
 - `mycode-go/internal/session/store.go` — append-only JSONL storage, compact, rewind, repair
 - `mycode-go/internal/config/*.go` — layered config loading and provider resolution
 - `mycode-go/internal/models/catalog.go` — bundled model metadata lookup
@@ -161,6 +162,8 @@ Do not change these event names or shapes without updating server and web UI.
 - `tool_done` — `tool_use_id`, `output`, `is_error`, optional `metadata`, optional `content`
 - `compact` — `message`
 - `error` — `message`
+- `permission_request` — `request_id`, `tool_use_id`, `tool_name`, `preview`
+- `permission_resolved` — `request_id`, `decision` (`"allow"` or `"deny"`)
 
 Every event also carries `seq`.
 
@@ -180,6 +183,7 @@ Server:
 - `POST /api/chat`
 - `GET /api/runs/{run_id}/stream`
 - `POST /api/runs/{run_id}/cancel`
+- `POST /api/runs/{run_id}/decide`
 - `GET /api/config`
 - session CRUD at `/api/sessions`
 - workspace browser at `/api/workspaces`
@@ -195,7 +199,6 @@ Scopes:
 - `web` — changes under `web/` only
 - `backend` — Go backend changes only
 - `cli` — CLI changes only
-- no scope — cross-cutting (document both sides in commit body)
 
 When syncing web changes from `main`:
 

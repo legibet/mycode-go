@@ -2,14 +2,14 @@
 
 Source: `mycode-go/internal/config/`
 
-The config format and resolution order intentionally match Python `mycode-cli`. The Go implementation keeps the logic in Go structs and functions rather than Python dataclasses.
+The config format and resolution order match the Python CLI under `main`'s `cli/` tree. The Go implementation keeps the logic in Go structs and functions.
 
 ## Config Files
 
 Loaded in order, later values overriding earlier values:
 
 1. `~/.mycode/config.json`
-2. `<workspace>/.mycode/config.json`, where `<workspace>` is the nearest parent containing `.git`
+2. `{cwd}/.mycode/config.json`
 
 Explicit CLI flags or API request fields override both config files.
 
@@ -22,6 +22,10 @@ Explicit CLI flags or API request fields override both config files.
     "model": "claude-sonnet-4-6",
     "reasoning_effort": "auto",
     "compact_threshold": 0.8
+  },
+  "permission": {
+    "level": "safe",
+    "mode": "ask"
   },
   "providers": {
     "<name>": {
@@ -50,6 +54,9 @@ Explicit CLI flags or API request fields override both config files.
 - `default.model` is used when no provider model is selected.
 - `default.reasoning_effort` accepts `auto`, `none`, `low`, `medium`, `high`, `xhigh`, plus `default`/empty as aliases for `auto`.
 - `default.compact_threshold` is a fraction in `[0, 1]`; `false` or `0` disables compaction.
+- `permission` controls automatic tool execution. String shorthand such as `"safe"` sets the level and keeps the current/default mode.
+- `permission.level` accepts `readonly`, `safe`, `standard`, or `yolo`; default `safe`.
+- `permission.mode` accepts `ask` or `deny`; default `ask`. Non-interactive `mycode-go run` treats `ask` as `deny`.
 - `providers.<name>.type` is required for custom aliases. Built-in providers can omit it when the provider key matches the adapter id.
 - `providers.<name>.models` controls UI model order and per-model capability overrides.
 - `providers.<name>.api_key` is either a literal key or `${ENV_NAME}`.
@@ -91,9 +98,27 @@ Options: `auto`, `none`, `low`, `medium`, `high`, `xhigh`.
 
 Provider-specific mapping is documented in `docs/providers.md`.
 
+## Tool Permissions
+
+The Go branch implements the Python web/CLI permission behavior directly in Go. It does not expose a general hooks system.
+
+Levels:
+
+- `readonly` allows `cwd`-local `read`, discovered skill reads, and simple read-only shell commands such as `ls`, `rg`, `git status`, and `git diff`.
+- `safe` adds `cwd`-local `write` and `edit`.
+- `standard` adds ordinary single shell commands unless they are dangerous or compound.
+- `yolo` allows all tool calls.
+
+Modes:
+
+- `ask` prompts in the web UI for calls outside the configured level. In non-interactive CLI runs, `ask` is handled as `deny`.
+- `deny` returns `error: permission denied` to the model without prompting.
+
+The bash classifier is conservative. Compound commands, shell redirection, command substitution, destructive programs, `sed -i`, dangerous `find` flags, `git reset`, `git clean`, `git checkout`, `git restore`, and force pushes require `yolo` or web approval.
+
 ## Model Metadata
 
-`mycode-go/internal/models/models_catalog.json` is copied from the Python SDK catalog and looked up through `mycode-go/internal/models/catalog.go`.
+`mycode-go/internal/models/models_catalog.json` is copied from Python `main`'s `mycode/src/mycode/models_catalog.json` and looked up through `mycode-go/internal/models/catalog.go`.
 
 Metadata fields:
 
@@ -145,7 +170,7 @@ Each `SKILL.md` requires YAML frontmatter with `name` and `description`. Later r
 
 `config.ResolveSessionsDir()` returns `$MYCODE_HOME/sessions`, defaulting to `~/.mycode/sessions`.
 
-The SDK split in Python made persistence opt-in at SDK level. This Go branch is the CLI/server backend, so it still resolves the CLI session directory by default.
+Python's SDK layer makes persistence opt-in. This Go branch is the CLI/server backend, so it resolves the session directory by default.
 
 ## Port
 

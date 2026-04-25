@@ -2,7 +2,7 @@
 
 Source: `mycode-go/internal/session/store.go`
 
-The on-disk format matches Python `mycode-sdk` / `mycode-cli` message format version 6.
+The on-disk format matches Python `main` message format version 6.
 
 ## Storage Layout
 
@@ -19,7 +19,7 @@ $MYCODE_HOME/sessions/<session_id>/
 
 ```json
 {
-  "cwd": "/path/to/workspace",
+  "cwd": "/path/to/current-dir",
   "title": "New chat",
   "created_at": "...",
   "updated_at": "...",
@@ -104,7 +104,7 @@ Important methods:
 
 - `CreateSession(sessionID, cwd)` creates `meta.json` and `messages.jsonl`.
 - `DraftSession(cwd)` creates an in-memory summary with a fresh id.
-- `ListSessions(cwd)` returns summaries sorted by `updated_at` descending.
+- `ListSessions(cwd)` filters by exact cwd and returns summaries sorted by `updated_at` descending.
 - `LoadSession(sessionID)` returns visible messages after replay.
 - `AppendMessage(sessionID, msg, cwd)` appends one message and refreshes meta.
 - `AppendRewind(sessionID, rewindTo)` appends a rewind marker if the session exists.
