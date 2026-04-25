@@ -11,6 +11,7 @@ import (
 	agentpkg "github.com/legibet/mycode-go/internal/agent"
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/internal/permissions"
 	"github.com/legibet/mycode-go/internal/session"
 )
 
@@ -90,6 +91,8 @@ func runCommand(args []string) int {
 		ReasoningEffort:    resolvedProvider.ReasoningEffort,
 		SupportsImageInput: resolvedProvider.SupportsImageInput,
 		SupportsPDFInput:   resolvedProvider.SupportsPDFInput,
+		Permission:         settings.Permission,
+		SkillRoots:         permissions.SkillRoots(cwd, config.ResolveHome()),
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
