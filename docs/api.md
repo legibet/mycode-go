@@ -135,6 +135,7 @@ Return provider, model, and capability metadata for the web UI.
   "default_reasoning_effort": "auto",
   "reasoning_effort_options": ["auto", "none", "low", "medium", "high", "xhigh"],
   "cwd": "...",
+  "project": "...",
   "config_paths": ["..."]
 }
 ```
@@ -225,6 +226,7 @@ Return the server process cwd:
 | event                 | payload fields                                                               |
 | --------------------- | ---------------------------------------------------------------------------- |
 | `reasoning`           | `delta: str`                                                                 |
+| `reasoning_done`      | `duration_ms: int`                                                           |
 | `text`                | `delta: str`                                                                 |
 | `tool_start`          | `tool_call: {id, name, input}`                                               |
 | `tool_output`         | `tool_use_id: str`, `output: str`                                            |

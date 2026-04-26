@@ -16,13 +16,7 @@ This branch is the Go rewrite of the Python backend on `main`. It tracks Python 
 
 Synced with Python `main` through:
 
-- `d7217e7 fix(web): drop workspace_root config field`
-
-State at this sync point:
-
-- `web/` is byte-for-byte aligned with `origin/main`.
-- Backend behavior from Python commits after `199692a` has been implemented in Go where applicable.
-- Python-only release/package commits are intentionally not ported unless they affect Go behavior or shared docs.
+- `cd1dd9f Release 0.7.2`
 
 Repository branch model (three-tier, see `docs/branching.md`):
 
@@ -156,6 +150,7 @@ See `docs/providers.md` for details. All provider ids are preserved:
 Do not change these event names or shapes without updating server and web UI.
 
 - `reasoning` — `delta`
+- `reasoning_done` — `duration_ms`
 - `text` — `delta`
 - `tool_start` — `tool_call: {id, name, input}`
 - `tool_output` — `tool_use_id`, `output`

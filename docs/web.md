@@ -69,6 +69,7 @@ web/src/
 
 The web consumes canonical session messages and SSE events:
 
+- `thinking` blocks → `ReasoningBlock` (expanded while streaming, uses `meta.duration_ms` when present)
 - `tool_use` blocks render as `ToolCard`.
 - Persisted `tool_result` user messages are folded into the preceding assistant message.
 - Live tool state is tracked in `ToolRuntime`.

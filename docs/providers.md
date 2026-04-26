@@ -24,7 +24,7 @@ type Adapter interface {
 
 - skip failed/aborted/cancelled assistant messages
 - project tool call ids when a provider restricts ids
-- preserve `block.meta.native`
+- preserve `block.meta.native` for provider-specific replay data; local metadata such as `duration_ms` is not sent upstream
 - replace images/PDFs with text notices when the target model cannot accept them
 - synthesize interrupted tool results when needed
 

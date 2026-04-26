@@ -9,7 +9,9 @@ The config format and resolution order match the Python CLI under `main`'s `cli/
 Loaded in order, later values overriding earlier values:
 
 1. `~/.mycode/config.json`
-2. `{cwd}/.mycode/config.json`
+2. `.mycode/config.json` files from `project` to `cwd`
+
+`project` is the nearest parent directory containing `.git`. When no `.git` is found, `project` is `cwd`.
 
 Explicit CLI flags or API request fields override both config files.
 
@@ -104,8 +106,8 @@ The Go branch implements the Python web/CLI permission behavior directly in Go. 
 
 Levels:
 
-- `readonly` allows `cwd`-local `read`, discovered skill reads, and simple read-only shell commands such as `ls`, `rg`, `git status`, and `git diff`.
-- `safe` adds `cwd`-local `write` and `edit`.
+- `readonly` allows `project`-local `read`, discovered skill reads, and simple read-only shell commands such as `ls`, `rg`, `git status`, and `git diff`.
+- `safe` adds `project`-local `write` and `edit`.
 - `standard` adds ordinary single shell commands unless they are dangerous or compound.
 - `yolo` allows all tool calls.
 
@@ -147,7 +149,7 @@ uv run --no-project python ./scripts/update_models_catalog.py
 It includes:
 
 - base mycode instructions
-- `<workspace_instructions>` from AGENTS files
+- `<project_instructions>` from AGENTS files
 - `<available_skills>` from discovered skills
 - current working directory
 - current date as `YYYY-MM`
@@ -155,14 +157,14 @@ It includes:
 Instruction files checked:
 
 1. `~/.mycode/AGENTS.md`, falling back to `~/.agents/AGENTS.md`
-2. `{cwd}/AGENTS.md`
+2. all `AGENTS.md` files from `project` to `cwd`
 
 Skill roots, lowest to highest priority:
 
 1. `~/.agents/skills/`
 2. `~/.mycode/skills/`
-3. `{cwd}/.agents/skills/`
-4. `{cwd}/.mycode/skills/`
+3. `.agents/skills/` from `project` to `cwd`
+4. `.mycode/skills/` from `project` to `cwd`
 
 Each `SKILL.md` requires YAML frontmatter with `name` and `description`. Later roots override earlier roots by skill name.
 

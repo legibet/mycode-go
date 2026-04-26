@@ -39,7 +39,7 @@ Canonical messages are block-based:
 
 ```json
 {"role": "user", "content": [{"type": "text", "text": "..."}]}
-{"role": "assistant", "content": [{"type": "thinking", "text": "..."}, {"type": "text", "text": "..."}, {"type": "tool_use", "id": "call_1", "name": "read", "input": {"path": "x.go"}}], "meta": {"provider": "...", "model": "...", "usage": {...}}}
+{"role": "assistant", "content": [{"type": "thinking", "text": "...", "meta": {"duration_ms": 1200}}, {"type": "text", "text": "..."}, {"type": "tool_use", "id": "call_1", "name": "read", "input": {"path": "x.go"}}], "meta": {"provider": "...", "model": "...", "usage": {...}}}
 {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "output": "...", "metadata": {...}, "is_error": false}]}
 ```
 
