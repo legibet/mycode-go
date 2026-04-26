@@ -120,13 +120,15 @@ func ResolveSessionsDir() string {
 // ResolveProject returns the nearest Git project root, or cwd when no .git is found.
 func ResolveProject(cwd string) string {
 	cwdPath := absPath(cwd)
-	for path := cwdPath; path != "" && path != "." && path != "/"; path = filepath.Dir(path) {
-		if info, err := os.Stat(filepath.Join(path, ".git")); err == nil && info.IsDir() {
+	for path := cwdPath; path != "" && path != "."; {
+		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 			return path
 		}
-		if path == filepath.Dir(path) {
+		parent := filepath.Dir(path)
+		if parent == path {
 			break
 		}
+		path = parent
 	}
 	return cwdPath
 }
@@ -135,6 +137,9 @@ func ResolveProject(cwd string) string {
 func ProjectDirs(cwd, project string) []string {
 	cwdPath := absPath(cwd)
 	projectPath := absPath(project)
+	if projectPath == "" {
+		projectPath = ResolveProject(cwdPath)
+	}
 
 	dirs := []string{cwdPath}
 	for dirs[len(dirs)-1] != projectPath {

@@ -138,6 +138,7 @@ func TestSkills(t *testing.T) {
 	t.Run("scan root matches python rules", func(t *testing.T) {
 		root := t.TempDir()
 		writeText(t, filepath.Join(root, "deploy.md"), "---\nname: deploy\ndescription: Deploy.\n---\n")
+		writeText(t, filepath.Join(root, ".hidden.md"), "---\nname: hidden-md\ndescription: Hidden md.\n---\n")
 		writeText(t, filepath.Join(root, "nested", "SKILL.md"), "---\nname: nested\ndescription: Nested.\n---\n")
 		writeText(t, filepath.Join(root, "nested", "extra.md"), "---\nname: extra\ndescription: Extra.\n---\n")
 		writeText(t, filepath.Join(root, ".hidden", "SKILL.md"), "---\nname: hidden\ndescription: Hidden.\n---\n")

@@ -228,6 +228,9 @@ func scanSkillRoot(root, source string) []Skill {
 	}
 
 	for _, entry := range rootEntries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
 		if entry.Type().IsRegular() && filepath.Ext(entry.Name()) == ".md" {
 			addSkill(filepath.Join(root, entry.Name()), strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())))
 		}

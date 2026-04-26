@@ -147,6 +147,41 @@ func TestLoadMergesGlobalAndProjectConfigsFromProjectToCwd(t *testing.T) {
 	}
 }
 
+func TestLoadTreatsGitFileAsProjectRoot(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home", ".mycode")
+	project := filepath.Join(root, "project")
+	cwd := filepath.Join(project, "apps", "api")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	isolateConfigTest(t, home)
+
+	if err := os.WriteFile(filepath.Join(project, ".git"), []byte("gitdir: ../.git/worktrees/project\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(project, ".mycode", "config.json"), `{"default": {"provider": "parent"}}`)
+	writeJSON(t, filepath.Join(cwd, ".mycode", "config.json"), `{"default": {"provider": "local"}}`)
+
+	settings, err := Load(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Project != absPath(project) {
+		t.Fatalf("expected project %q, got %q", absPath(project), settings.Project)
+	}
+	if settings.DefaultProvider != "local" {
+		t.Fatalf("expected local to win, got %q", settings.DefaultProvider)
+	}
+	expectedPaths := []string{
+		absPath(filepath.Join(project, ".mycode", "config.json")),
+		absPath(filepath.Join(cwd, ".mycode", "config.json")),
+	}
+	if !slices.Equal(settings.ConfigPaths, expectedPaths) {
+		t.Fatalf("unexpected config paths: %#v, want %#v", settings.ConfigPaths, expectedPaths)
+	}
+}
+
 func TestLoadUsesCwdAsProjectWhenNoGit(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
