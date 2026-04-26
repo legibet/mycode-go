@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/message"
@@ -33,6 +34,7 @@ type Options struct {
 	Model              string
 	Provider           string
 	CWD                string
+	Project            string
 	SessionDir         string
 	SessionID          string
 	APIKey             string
@@ -58,6 +60,7 @@ type Agent struct {
 	Model              string
 	Provider           string
 	CWD                string
+	Project            string
 	SessionDir         string
 	SessionID          string
 	APIKey             string
@@ -98,9 +101,11 @@ func New(opts Options) (*Agent, error) {
 	if permission.Level == "" {
 		permission = config.DefaultPermissionConfig()
 	}
+	project := cmp.Or(opts.Project, config.ResolveProject(cwd))
+
 	skillRoots := append([]string(nil), opts.SkillRoots...)
 	if skillRoots == nil {
-		skillRoots = permissions.SkillRoots(cwd, config.ResolveHome())
+		skillRoots = permissions.SkillRoots(cwd, project, config.ResolveHome())
 	}
 
 	toolExecutor := opts.Tools
@@ -119,13 +124,14 @@ func New(opts Options) (*Agent, error) {
 
 	system := opts.System
 	if system == "" {
-		system = prompt.Build(cwd, config.ResolveHome())
+		system = prompt.Build(cwd, project, config.ResolveHome())
 	}
 
 	return &Agent{
 		Model:              opts.Model,
 		Provider:           opts.Provider,
 		CWD:                cwd,
+		Project:            project,
 		SessionDir:         sessionDir,
 		SessionID:          sessionID,
 		APIKey:             opts.APIKey,
@@ -245,17 +251,30 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 	}
 
 	var assistant *message.Message
+	var thinkingStartedAt time.Time
+	thinkingDurationMs := -1
 	for event := range a.Adapter.StreamTurn(ctx, req) {
 		switch event.Type {
 		case "thinking_delta":
 			if event.Text != "" {
+				if thinkingStartedAt.IsZero() {
+					thinkingStartedAt = time.Now()
+				}
 				out <- Event{Type: "reasoning", Data: map[string]any{"delta": event.Text}}
 			}
 		case "text_delta":
 			if event.Text != "" {
+				if !thinkingStartedAt.IsZero() && thinkingDurationMs < 0 {
+					thinkingDurationMs = max(0, int(time.Since(thinkingStartedAt).Milliseconds()))
+					out <- Event{Type: "reasoning_done", Data: map[string]any{"duration_ms": thinkingDurationMs}}
+				}
 				out <- Event{Type: "text", Data: map[string]any{"delta": event.Text}}
 			}
 		case "message_done":
+			if !thinkingStartedAt.IsZero() && thinkingDurationMs < 0 {
+				thinkingDurationMs = max(0, int(time.Since(thinkingStartedAt).Milliseconds()))
+				out <- Event{Type: "reasoning_done", Data: map[string]any{"duration_ms": thinkingDurationMs}}
+			}
 			assistant = event.Msg
 		case "provider_error":
 			if event.Err != nil {
@@ -270,6 +289,20 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 	if assistant == nil {
 		return nil, errors.New("provider produced no assistant message")
 	}
+
+	if thinkingDurationMs >= 0 {
+		for i := len(assistant.Content) - 1; i >= 0; i-- {
+			if assistant.Content[i].Type != "thinking" {
+				continue
+			}
+			if assistant.Content[i].Meta == nil {
+				assistant.Content[i].Meta = map[string]any{}
+			}
+			assistant.Content[i].Meta["duration_ms"] = thinkingDurationMs
+			break
+		}
+	}
+
 	return assistant, nil
 }
 
@@ -332,7 +365,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 }
 
 func (a *Agent) authorizeTool(ctx context.Context, toolCall message.Block, input map[string]any) (*tools.Result, bool) {
-	check := permissions.ClassifyTool(toolCall.Name, input, a.CWD, a.SkillRoots)
+	check := permissions.ClassifyTool(toolCall.Name, input, a.CWD, a.Project, a.SkillRoots)
 	switch permissions.DecisionFor(a.Permission, check.Tier) {
 	case permissions.DecisionAllow:
 		return nil, false

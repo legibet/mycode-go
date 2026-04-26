@@ -73,11 +73,19 @@ func TestChatPersistsReasoningBlocks(t *testing.T) {
 		return nil
 	}))
 
-	if len(events) != 2 || events[0].Type != "reasoning" || events[1].Type != "text" {
+	if len(events) != 3 || events[0].Type != "reasoning" || events[1].Type != "reasoning_done" || events[2].Type != "text" {
 		t.Fatalf("unexpected events: %#v", events)
+	}
+	durationMs, ok := events[1].Data["duration_ms"].(int)
+	if !ok {
+		t.Fatalf("reasoning_done missing duration_ms: %#v", events[1].Data)
 	}
 	if len(persisted) < 2 || len(persisted[1].Content) != 2 || persisted[1].Content[0].Type != "thinking" {
 		t.Fatalf("unexpected persisted messages: %#v", persisted)
+	}
+	thinkingBlock := persisted[1].Content[0]
+	if thinkingBlock.Meta == nil || thinkingBlock.Meta["duration_ms"] != durationMs {
+		t.Fatalf("thinking block missing duration_ms in meta: %#v", thinkingBlock)
 	}
 }
 

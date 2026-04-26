@@ -209,6 +209,7 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		Model:              resolved.Model,
 		Provider:           resolved.ProviderType,
 		CWD:                cwd,
+		Project:            settings.Project,
 		SessionDir:         s.store.SessionDir(sessionID),
 		SessionID:          sessionID,
 		APIKey:             resolved.APIKey,
@@ -224,7 +225,7 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		PermissionReviewer: func(ctx context.Context, req permissions.ReviewRequest) permissions.ReviewDecision {
 			return s.runs.requestDecision(ctx, sessionID, req)
 		},
-		SkillRoots: permissions.SkillRoots(cwd, config.ResolveHome()),
+		SkillRoots: permissions.SkillRoots(cwd, settings.Project, config.ResolveHome()),
 	})
 	if err != nil {
 		return ChatResponse{}, statusError(http.StatusInternalServerError, err.Error())
@@ -359,6 +360,7 @@ func (s *Service) Config(cwd string) (map[string]any, error) {
 		"default_reasoning_effort": ResponseReasoningEffort(settings.DefaultReasoningEffort),
 		"reasoning_effort_options": ReasoningEffortOptions,
 		"cwd":                      cwd,
+		"project":                  settings.Project,
 		"config_paths":             settings.ConfigPaths,
 	}, nil
 }

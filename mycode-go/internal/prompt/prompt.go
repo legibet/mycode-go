@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/legibet/mycode-go/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -54,22 +55,23 @@ type Skill struct {
 }
 
 // Build returns the runtime system prompt.
-func Build(cwd, home string) string {
+func Build(cwd, project, home string) string {
 	resolvedCWD := absPath(cwd)
+	resolvedProject := absPath(project)
 	parts := []string{basePrompt}
-	if section := loadInstructions(resolvedCWD, home); section != "" {
+	if section := loadInstructions(resolvedCWD, resolvedProject, home); section != "" {
 		parts = append(parts, section)
 	}
-	if section := loadSkills(resolvedCWD, home); section != "" {
+	if section := loadSkills(resolvedCWD, resolvedProject, home); section != "" {
 		parts = append(parts, section)
 	}
 	parts = append(parts, "Current working directory: "+resolvedCWD+"\nCurrent date: "+time.Now().Format("2006-01"))
 	return strings.Join(parts, "\n\n")
 }
 
-func loadInstructions(cwd, home string) string {
+func loadInstructions(cwd, project, home string) string {
 	sections := []string{}
-	for _, path := range discoverInstructionFiles(cwd, home) {
+	for _, path := range discoverInstructionFiles(cwd, project, home) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
@@ -83,14 +85,15 @@ func loadInstructions(cwd, home string) string {
 	if len(sections) == 0 {
 		return ""
 	}
-	return "<workspace_instructions>\n" +
-		"Ordered from global to project; later instructions take precedence.\n\n" +
+	return "<project_instructions>\n" +
+		"Ordered from global to project to cwd; later instructions take precedence.\n\n" +
 		strings.Join(sections, "\n\n") +
-		"\n</workspace_instructions>"
+		"\n</project_instructions>"
 }
 
-func discoverInstructionFiles(cwd, home string) []string {
+func discoverInstructionFiles(cwd, project, home string) []string {
 	resolvedCWD := absPath(cwd)
+	resolvedProject := absPath(project)
 	resolvedHome := absPath(home)
 	files := []string{}
 
@@ -102,15 +105,17 @@ func discoverInstructionFiles(cwd, home string) []string {
 		files = append(files, compatCandidate)
 	}
 
-	localCandidate := filepath.Join(resolvedCWD, "AGENTS.md")
-	if isFile(localCandidate) {
-		files = append(files, localCandidate)
+	for _, dir := range config.ProjectDirs(resolvedCWD, resolvedProject) {
+		candidate := filepath.Join(dir, "AGENTS.md")
+		if isFile(candidate) {
+			files = append(files, candidate)
+		}
 	}
 	return files
 }
 
-func loadSkills(cwd, home string) string {
-	skills := DiscoverSkills(cwd, home)
+func loadSkills(cwd, project, home string) string {
+	skills := DiscoverSkills(cwd, project, home)
 	if len(skills) == 0 {
 		return ""
 	}
@@ -131,8 +136,9 @@ func loadSkills(cwd, home string) string {
 }
 
 // DiscoverSkills returns the skill files visible to the runtime prompt.
-func DiscoverSkills(cwd, home string) []Skill {
+func DiscoverSkills(cwd, project, home string) []Skill {
 	cwdPath := absPath(cwd)
+	projectPath := absPath(project)
 	homePath := absPath(home)
 	compatHome := absPath(userHomeDir())
 	roots := []struct {
@@ -141,8 +147,20 @@ func DiscoverSkills(cwd, home string) []Skill {
 	}{
 		{filepath.Join(compatHome, ".agents", "skills"), "global"},
 		{filepath.Join(homePath, "skills"), "global"},
-		{filepath.Join(cwdPath, ".agents", "skills"), "project"},
-		{filepath.Join(cwdPath, ".mycode", "skills"), "project"},
+	}
+	for _, dir := range config.ProjectDirs(cwdPath, projectPath) {
+		roots = append(roots,
+			struct {
+				path   string
+				source string
+			}{filepath.Join(dir, ".agents", "skills"), "project"},
+		)
+		roots = append(roots,
+			struct {
+				path   string
+				source string
+			}{filepath.Join(dir, ".mycode", "skills"), "project"},
+		)
 	}
 
 	skillsByName := map[string]Skill{}

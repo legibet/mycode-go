@@ -115,7 +115,7 @@ func DecisionFor(permission config.PermissionConfig, tier Tier) Decision {
 	return DecisionAsk
 }
 
-func ClassifyTool(toolName string, input map[string]any, cwd string, skillRoots []string) Check {
+func ClassifyTool(toolName string, input map[string]any, cwd, project string, skillRoots []string) Check {
 	name := strings.ToLower(strings.TrimSpace(toolName))
 	switch name {
 	case "bash":
@@ -135,7 +135,7 @@ func ClassifyTool(toolName string, input map[string]any, cwd string, skillRoots 
 		if name == "read" && isUnderAny(path, skillRoots) {
 			return Check{Tier: TierReadonly, Preview: preview}
 		}
-		if !isUnder(path, cwd) {
+		if !isUnder(path, project) {
 			return Check{Tier: TierYolo, Preview: preview}
 		}
 		if name == "read" {
@@ -147,8 +147,8 @@ func ClassifyTool(toolName string, input map[string]any, cwd string, skillRoots 
 	}
 }
 
-func SkillRoots(cwd, home string) []string {
-	skills := prompt.DiscoverSkills(cwd, home)
+func SkillRoots(cwd, project, home string) []string {
+	skills := prompt.DiscoverSkills(cwd, project, home)
 	roots := make([]string, 0, len(skills))
 	seen := map[string]struct{}{}
 	for _, skill := range skills {

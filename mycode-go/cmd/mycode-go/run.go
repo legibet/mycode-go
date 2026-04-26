@@ -92,7 +92,7 @@ func runCommand(args []string) int {
 		SupportsImageInput: resolvedProvider.SupportsImageInput,
 		SupportsPDFInput:   resolvedProvider.SupportsPDFInput,
 		Permission:         settings.Permission,
-		SkillRoots:         permissions.SkillRoots(cwd, config.ResolveHome()),
+		SkillRoots:         permissions.SkillRoots(cwd, settings.Project, config.ResolveHome()),
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

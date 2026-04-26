@@ -30,7 +30,7 @@ func TestInstructions(t *testing.T) {
 		writeText(t, filepath.Join(home, "AGENTS.md"), "Global native")
 		writeText(t, filepath.Join(cwd, "AGENTS.md"), "Current cwd")
 
-		files := discoverInstructionFiles(cwd, home)
+		files := discoverInstructionFiles(cwd, cwd, home)
 		if len(files) != 2 {
 			t.Fatalf("unexpected files: %#v", files)
 		}
@@ -38,13 +38,13 @@ func TestInstructions(t *testing.T) {
 			t.Fatalf("unexpected files: %#v", files)
 		}
 
-		prompt := loadInstructions(cwd, home)
+		prompt := loadInstructions(cwd, cwd, home)
 		if !strings.Contains(prompt, "Global native") || !strings.Contains(prompt, "Current cwd") || strings.Contains(prompt, "Global compat") {
 			t.Fatalf("unexpected prompt: %q", prompt)
 		}
 	})
 
-	t.Run("does not load parent agents", func(t *testing.T) {
+	t.Run("does not load parent agents when no git is found", func(t *testing.T) {
 		root := t.TempDir()
 		home := filepath.Join(root, "home", ".mycode")
 		userHomeDir = func() string { return filepath.Join(root, "home") }
@@ -53,9 +53,39 @@ func TestInstructions(t *testing.T) {
 			t.Fatal(err)
 		}
 		writeText(t, filepath.Join(root, "project", "AGENTS.md"), "Parent project")
-		prompt := loadInstructions(cwd, home)
+		prompt := loadInstructions(cwd, cwd, home)
 		if strings.Contains(prompt, "Parent project") {
 			t.Fatalf("unexpected prompt: %q", prompt)
+		}
+	})
+
+	t.Run("loads project agents from project to cwd", func(t *testing.T) {
+		root := t.TempDir()
+		home := filepath.Join(root, "home", ".mycode")
+		userHomeDir = func() string { return filepath.Join(root, "home") }
+		project := filepath.Join(root, "project")
+		cwd := filepath.Join(project, "apps", "api")
+		if err := os.MkdirAll(cwd, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeText(t, filepath.Join(project, "AGENTS.md"), "Parent project")
+		writeText(t, filepath.Join(cwd, "AGENTS.md"), "Current cwd")
+
+		files := discoverInstructionFiles(cwd, project, home)
+		if len(files) != 2 {
+			t.Fatalf("unexpected files: %#v", files)
+		}
+		prompt := loadInstructions(cwd, project, home)
+		if !strings.Contains(prompt, "Parent project") || !strings.Contains(prompt, "Current cwd") {
+			t.Fatalf("unexpected prompt: %q", prompt)
+		}
+		parentIdx := strings.Index(prompt, "Parent project")
+		cwdIdx := strings.Index(prompt, "Current cwd")
+		if parentIdx >= cwdIdx {
+			t.Fatalf("parent should appear before cwd in prompt")
 		}
 	})
 
@@ -69,7 +99,7 @@ func TestInstructions(t *testing.T) {
 		}
 		writeText(t, filepath.Join(root, "home", ".agents", "AGENTS.md"), "Compat global")
 
-		prompt := loadInstructions(cwd, home)
+		prompt := loadInstructions(cwd, cwd, home)
 		if !strings.Contains(prompt, "Compat global") {
 			t.Fatalf("unexpected prompt: %q", prompt)
 		}
@@ -147,8 +177,34 @@ func TestSkills(t *testing.T) {
 		writeText(t, filepath.Join(root, "home", ".agents", "skills", "shared", "SKILL.md"), "---\nname: shared\ndescription: Compat.\n---\n")
 		writeText(t, filepath.Join(home, "skills", "shared", "SKILL.md"), "---\nname: shared\ndescription: Native.\n---\n")
 		writeText(t, filepath.Join(cwd, ".mycode", "skills", "shared", "SKILL.md"), "---\nname: shared\ndescription: Project.\n---\n")
-		skills := DiscoverSkills(cwd, home)
+		skills := DiscoverSkills(cwd, cwd, home)
 		if len(skills) != 1 || skills[0].Description != "Project." || skills[0].Source != "project" {
+			t.Fatalf("unexpected skills: %#v", skills)
+		}
+	})
+
+	t.Run("loads project skill roots from project to cwd", func(t *testing.T) {
+		root := t.TempDir()
+		home := filepath.Join(root, "home", ".mycode")
+		userHomeDir = func() string { return filepath.Join(root, "home") }
+		project := filepath.Join(root, "project")
+		cwd := filepath.Join(project, "apps", "api")
+		if err := os.MkdirAll(cwd, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeText(t, filepath.Join(project, ".agents", "skills", "parent", "SKILL.md"), "---\nname: parent\ndescription: Compat parent.\n---\n")
+		writeText(t, filepath.Join(project, ".mycode", "skills", "shared", "SKILL.md"), "---\nname: shared\ndescription: Parent project.\n---\n")
+		writeText(t, filepath.Join(cwd, ".mycode", "skills", "shared", "SKILL.md"), "---\nname: shared\ndescription: Nearest project.\n---\n")
+
+		skills := DiscoverSkills(cwd, project, home)
+		names := map[string]string{}
+		for _, s := range skills {
+			names[s.Name] = s.Description
+		}
+		if len(names) != 2 || names["parent"] != "Compat parent." || names["shared"] != "Nearest project." {
 			t.Fatalf("unexpected skills: %#v", skills)
 		}
 	})

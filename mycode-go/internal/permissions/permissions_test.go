@@ -1,6 +1,7 @@
 package permissions
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -49,11 +50,25 @@ func TestClassifyFileTools(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			check := ClassifyTool(tc.toolName, map[string]any{"path": tc.path}, cwd, tc.skillRoot)
+			check := ClassifyTool(tc.toolName, map[string]any{"path": tc.path}, cwd, cwd, tc.skillRoot)
 			if check.Tier != tc.want {
 				t.Fatalf("ClassifyTool() = %#v, want tier %q", check, tc.want)
 			}
 		})
+	}
+}
+
+func TestClassifyProjectBoundary(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "repo")
+	cwd := filepath.Join(project, "apps", "api")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	check := ClassifyTool("edit", map[string]any{"path": filepath.Join(project, "README.md")}, cwd, project, nil)
+	if check.Tier != TierSafe {
+		t.Fatalf("expected safe for path inside project, got %q", check.Tier)
 	}
 }
 
@@ -106,7 +121,7 @@ func TestClassifyBash(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.command, func(t *testing.T) {
-			check := ClassifyTool("bash", map[string]any{"command": tc.command}, ".", nil)
+			check := ClassifyTool("bash", map[string]any{"command": tc.command}, ".", ".", nil)
 			if check.Tier != tc.want {
 				t.Fatalf("ClassifyTool() = %#v, want tier %q", check, tc.want)
 			}

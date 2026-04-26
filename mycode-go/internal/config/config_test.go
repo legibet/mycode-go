@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -90,7 +91,7 @@ func TestLoadCompactThresholdParsing(t *testing.T) {
 	}
 }
 
-func TestLoadIgnoresParentGitConfig(t *testing.T) {
+func TestLoadMergesGlobalAndProjectConfigsFromProjectToCwd(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home", ".mycode")
 	project := filepath.Join(root, "project")
@@ -103,20 +104,68 @@ func TestLoadIgnoresParentGitConfig(t *testing.T) {
 	}
 	isolateConfigTest(t, home)
 
+	writeJSON(t, filepath.Join(home, "config.json"), `{
+		"providers": {
+			"openai": {"api_key": "global-key"}
+		}
+	}`)
 	writeJSON(t, filepath.Join(project, ".mycode", "config.json"), `{
-		"default": {"provider": "openai", "model": "gpt-5.4"},
-		"providers": {"openai": {"api_key": "project-key"}}
+		"providers": {
+			"openai": {"base_url": "https://root.example/v1"}
+		}
+	}`)
+	writeJSON(t, filepath.Join(cwd, ".mycode", "config.json"), `{
+		"default": {"provider": "openai", "model": "gpt-4.1"},
+		"providers": {
+			"openai": {"models": {"gpt-4.1": {}}}
+		}
 	}`)
 
 	settings, err := Load(cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(settings.ConfigPaths) != 0 {
-		t.Fatalf("unexpected config paths: %#v", settings.ConfigPaths)
+	if settings.CWD != absPath(cwd) {
+		t.Fatalf("expected cwd %q, got %q", absPath(cwd), settings.CWD)
 	}
-	if len(settings.Providers) != 0 || settings.DefaultProvider != "" {
-		t.Fatalf("unexpected settings from parent git config: %#v", settings)
+	if settings.Project != absPath(project) {
+		t.Fatalf("expected project %q, got %q", absPath(project), settings.Project)
+	}
+	if settings.DefaultProvider != "openai" || settings.DefaultModel != "gpt-4.1" {
+		t.Fatalf("unexpected default: provider=%q model=%q", settings.DefaultProvider, settings.DefaultModel)
+	}
+	if p := settings.Providers["openai"]; p.APIKey != "global-key" || p.BaseURL != "https://root.example/v1" || len(p.Models) != 1 {
+		t.Fatalf("unexpected provider: %#v", p)
+	}
+	expectedPaths := []string{
+		absPath(filepath.Join(home, "config.json")),
+		absPath(filepath.Join(project, ".mycode", "config.json")),
+		absPath(filepath.Join(cwd, ".mycode", "config.json")),
+	}
+	if !slices.Equal(settings.ConfigPaths, expectedPaths) {
+		t.Fatalf("unexpected config paths: %#v, want %#v", settings.ConfigPaths, expectedPaths)
+	}
+}
+
+func TestLoadUsesCwdAsProjectWhenNoGit(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	cwd := filepath.Join(project, "apps", "api")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(project, ".mycode", "config.json"), `{"default": {"provider": "parent"}}`)
+	writeJSON(t, filepath.Join(cwd, ".mycode", "config.json"), `{"default": {"provider": "local"}}`)
+
+	settings, err := Load(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Project != absPath(cwd) {
+		t.Fatalf("expected project==cwd when no .git, got %q vs %q", settings.Project, settings.CWD)
+	}
+	if settings.DefaultProvider != "local" {
+		t.Fatalf("expected local to win, got %q", settings.DefaultProvider)
 	}
 }
 

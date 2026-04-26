@@ -70,6 +70,7 @@ type Settings struct {
 	Permission             PermissionConfig
 	Port                   int
 	CWD                    string
+	Project                string
 	ConfigPaths            []string
 
 	providerOrder []string
@@ -116,9 +117,46 @@ func ResolveSessionsDir() string {
 	return filepath.Join(ResolveHome(), "sessions")
 }
 
+// ResolveProject returns the nearest Git project root, or cwd when no .git is found.
+func ResolveProject(cwd string) string {
+	cwdPath := absPath(cwd)
+	for path := cwdPath; path != "" && path != "." && path != "/"; path = filepath.Dir(path) {
+		if info, err := os.Stat(filepath.Join(path, ".git")); err == nil && info.IsDir() {
+			return path
+		}
+		if path == filepath.Dir(path) {
+			break
+		}
+	}
+	return cwdPath
+}
+
+// ProjectDirs returns directories from project to cwd, inclusive.
+func ProjectDirs(cwd, project string) []string {
+	cwdPath := absPath(cwd)
+	projectPath := absPath(project)
+
+	dirs := []string{cwdPath}
+	for dirs[len(dirs)-1] != projectPath {
+		parent := filepath.Dir(dirs[len(dirs)-1])
+		if parent == dirs[len(dirs)-1] {
+			break
+		}
+		dirs = append(dirs, parent)
+	}
+
+	// Reverse so project is first, cwd is last.
+	reversed := make([]string, len(dirs))
+	for i, d := range dirs {
+		reversed[len(dirs)-1-i] = d
+	}
+	return reversed
+}
+
 // Load returns merged config for one cwd.
 func Load(cwd string) (Settings, error) {
 	resolvedCWD := absPath(cmp.Or(cwd, mustGetwd()))
+	resolvedProject := ResolveProject(resolvedCWD)
 
 	settings := Settings{
 		Providers:        map[string]ProviderConfig{},
@@ -126,6 +164,7 @@ func Load(cwd string) (Settings, error) {
 		Permission:       DefaultPermissionConfig(),
 		Port:             defaultPort,
 		CWD:              resolvedCWD,
+		Project:          resolvedProject,
 	}
 
 	mergedProviders := map[string]map[string]any{}
@@ -133,9 +172,9 @@ func Load(cwd string) (Settings, error) {
 	providerOrder := []string{}
 	seenProviders := map[string]struct{}{}
 
-	configPaths := []string{
-		filepath.Join(ResolveHome(), "config.json"),
-		filepath.Join(resolvedCWD, ".mycode", "config.json"),
+	configPaths := []string{filepath.Join(ResolveHome(), "config.json")}
+	for _, dir := range ProjectDirs(resolvedCWD, resolvedProject) {
+		configPaths = append(configPaths, filepath.Join(dir, ".mycode", "config.json"))
 	}
 	for _, path := range configPaths {
 		loaded, ok := loadConfig(path)
@@ -270,7 +309,7 @@ func ResolveProvider(settings Settings, providerName, model, apiKey, apiBase, re
 	if len(envNames) > 0 {
 		checked = strings.Join(envNames, ", ")
 	}
-	return ResolvedProvider{}, fmt.Errorf("no available providers found; set one of the supported API key env vars (%s) or configure a provider in ~/.mycode/config.json or <cwd>/.mycode/config.json", checked)
+	return ResolvedProvider{}, fmt.Errorf("no available providers found; set one of the supported API key env vars (%s) or configure a provider in ~/.mycode/config.json or a project .mycode/config.json", checked)
 }
 
 // AvailableProviders returns currently selectable providers in stable order.
