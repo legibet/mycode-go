@@ -88,3 +88,5 @@ CLAUDE.md
 GEMINI.md
 .gemini/
 .pi/
+.agents/
+skills-lock.json
