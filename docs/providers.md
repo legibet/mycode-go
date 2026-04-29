@@ -50,7 +50,7 @@ Tool results are stored and replayed as:
 
 - SDK: `github.com/anthropics/anthropic-sdk-go`
 - Base URL: `https://api.anthropic.com`
-- Env: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`
+- Env: `ANTHROPIC_API_KEY`
 - Default models: `claude-sonnet-4-6`, `claude-opus-4-7`
 - Reasoning effort: supported
 - Adaptive thinking for `claude-sonnet-4-6`, `claude-opus-4-6`, and `claude-opus-4-7`
@@ -94,7 +94,7 @@ Tool results are stored and replayed as:
 - SDK: `github.com/openai/openai-go/v3`
 - API: Responses
 - Env: `OPENAI_API_KEY`
-- Default models: `gpt-5.4`, `gpt-5.4-mini`
+- Default models: `gpt-5.5`, `gpt-5.4-mini`
 - Reasoning effort: supported
 - Runs stateless with `store=false`
 - Includes encrypted reasoning content
@@ -110,7 +110,7 @@ Tool results are stored and replayed as:
 - Default models: `gpt-5.4`, `gpt-5.4-mini`
 - Auto-discovery: disabled
 - Intended for OpenAI-compatible gateways that do not support Responses
-- Preserves reasoning extensions exposed by compatible providers
+- Preserves reasoning extensions exposed by compatible providers, including empty native reasoning markers needed for later replay
 - Sends `stream_options.include_usage=true`
 
 ### `deepseek`
@@ -137,6 +137,7 @@ Tool results are stored and replayed as:
 - Env: `OPENROUTER_API_KEY`
 - Default model: `openrouter/auto`
 - Reasoning effort is forwarded through OpenRouter's `reasoning.effort`
+- Supports OpenRouter reasoning replay fields: `reasoning`, `reasoning_content`, and `reasoning_details`
 
 ## Reasoning Effort Mapping
 

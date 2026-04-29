@@ -126,6 +126,10 @@ func New(opts Options) (*Agent, error) {
 	if system == "" {
 		system = prompt.Build(cwd, project, config.ResolveHome())
 	}
+	contextWindow := opts.ContextWindow
+	if contextWindow == 0 {
+		contextWindow = 128000
+	}
 
 	return &Agent{
 		Model:              opts.Model,
@@ -138,7 +142,7 @@ func New(opts Options) (*Agent, error) {
 		APIBase:            opts.APIBase,
 		MaxTurns:           opts.MaxTurns,
 		MaxTokens:          opts.MaxTokens,
-		ContextWindow:      opts.ContextWindow,
+		ContextWindow:      contextWindow,
 		CompactThreshold:   opts.CompactThreshold,
 		ReasoningEffort:    opts.ReasoningEffort,
 		SupportsImageInput: opts.SupportsImageInput,
@@ -196,10 +200,24 @@ func (a *Agent) Chat(ctx context.Context, userInput message.Message, onPersist P
 				return
 			}
 
+			if assistant.Meta == nil {
+				assistant.Meta = map[string]any{}
+			}
+			assistant.Meta["context_window"] = a.ContextWindow
+			totalTokens := asInt(assistant.Meta["total_tokens"])
+
 			a.Messages = append(a.Messages, message.Clone(*assistant))
 			if err := persist(*assistant); err != nil {
 				a.emitError(out, err.Error())
 				return
+			}
+			if totalTokens > 0 {
+				out <- Event{Type: "usage", Data: map[string]any{
+					"total_tokens":   totalTokens,
+					"model":          cmp.Or(asString(assistant.Meta["model"]), a.Model),
+					"provider":       cmp.Or(asString(assistant.Meta["provider"]), a.Provider),
+					"context_window": a.ContextWindow,
+				}}
 			}
 
 			toolCalls := make([]message.Block, 0, len(assistant.Content))
@@ -208,23 +226,27 @@ func (a *Agent) Chat(ctx context.Context, userInput message.Message, onPersist P
 					toolCalls = append(toolCalls, block)
 				}
 			}
-			if len(toolCalls) == 0 {
-				a.compactIfNeeded(ctx, onPersist, out)
-				return
-			}
-
-			toolMessage, cancelled := a.executeToolCalls(ctx, toolCalls, out)
-			if len(toolMessage.Content) > 0 {
-				a.Messages = append(a.Messages, toolMessage)
-				if err := persist(toolMessage); err != nil {
-					a.emitError(out, err.Error())
+			if len(toolCalls) > 0 {
+				toolMessage, cancelled := a.executeToolCalls(ctx, toolCalls, out)
+				if len(toolMessage.Content) > 0 {
+					a.Messages = append(a.Messages, toolMessage)
+					if err := persist(toolMessage); err != nil {
+						a.emitError(out, err.Error())
+						return
+					}
+				}
+				if cancelled {
+					if len(toolMessage.Content) == 0 {
+						a.emitError(out, "cancelled")
+					}
 					return
 				}
 			}
-			if cancelled {
-				if len(toolMessage.Content) == 0 {
-					a.emitError(out, "cancelled")
-				}
+			if ctx.Err() != nil {
+				return
+			}
+			a.compactIfNeeded(ctx, persist, out, totalTokens)
+			if len(toolCalls) == 0 {
 				return
 			}
 		}
@@ -423,19 +445,8 @@ func (a *Agent) runTool(toolCall message.Block, out chan<- Event) tools.Result {
 	}
 }
 
-func (a *Agent) compactIfNeeded(ctx context.Context, onPersist PersistFunc, out chan<- Event) {
-	if len(a.Messages) == 0 {
-		return
-	}
-
-	var usage map[string]any
-	for i := len(a.Messages) - 1; i >= 0; i-- {
-		if a.Messages[i].Role == "assistant" {
-			usage, _ = a.Messages[i].Meta["usage"].(map[string]any)
-			break
-		}
-	}
-	if !session.ShouldCompact(usage, a.ContextWindow, a.CompactThreshold) {
+func (a *Agent) compactIfNeeded(ctx context.Context, persist PersistFunc, out chan<- Event, totalTokens int) {
+	if !session.ShouldCompact(totalTokens, a.ContextWindow, a.CompactThreshold) {
 		return
 	}
 
@@ -470,11 +481,9 @@ func (a *Agent) compactIfNeeded(ctx context.Context, onPersist PersistFunc, out 
 	if summaryText == "" {
 		return
 	}
-	compactEvent := session.BuildCompactEvent(summaryText, a.Provider, a.Model, beforeCount, summary.Meta["usage"])
-	if onPersist != nil {
-		if err := onPersist(compactEvent); err != nil {
-			return
-		}
+	compactEvent := session.BuildCompactEvent(summaryText, a.Provider, a.Model, beforeCount, asInt(summary.Meta["total_tokens"]))
+	if err := persist(compactEvent); err != nil {
+		return
 	}
 	a.Messages = append(a.Messages, compactEvent)
 	a.Messages = session.ApplyCompact(a.Messages)
@@ -505,6 +514,10 @@ func asInt(value any) int {
 	switch v := value.(type) {
 	case int:
 		return v
+	case int64:
+		return int(v)
+	case int32:
+		return int(v)
 	case float64:
 		return int(v)
 	default:

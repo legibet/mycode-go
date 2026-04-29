@@ -15,6 +15,8 @@ Loaded in order, later values overriding earlier values:
 
 Explicit CLI flags or API request fields override both config files.
 
+The web settings panel edits only `~/.mycode/config.json`; project-level files must be edited directly and continue to override it.
+
 ## Schema
 
 ```json

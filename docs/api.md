@@ -142,6 +142,58 @@ Return provider, model, and capability metadata for the web UI.
 
 `GET /api/config` returns `503` when no provider can be resolved.
 
+## Settings
+
+Read and write only the global config file (`~/.mycode/config.json`). Project-level `.mycode/config.json` files are not modified and still override the global file at runtime.
+
+### `GET /api/settings`
+
+Returns the global config plus UI editor options.
+
+```json
+{
+  "path": "/Users/.../.mycode/config.json",
+  "exists": true,
+  "config": {
+    "default": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+    "permission": {"level": "safe", "mode": "ask"},
+    "providers": {
+      "anthropic": {
+        "type": "anthropic",
+        "models": ["claude-sonnet-4-6"],
+        "api_key": null,
+        "api_key_saved": true
+      }
+    }
+  },
+  "options": {
+    "provider_types": ["anthropic", "openai"],
+    "permission_levels": ["readonly", "safe", "standard", "yolo"],
+    "permission_modes": ["ask", "deny"],
+    "reasoning_efforts": ["auto", "none", "low", "medium", "high", "xhigh"]
+  },
+  "env": {"ANTHROPIC_API_KEY": true},
+  "provider_type_env_vars": {"anthropic": ["ANTHROPIC_API_KEY"]},
+  "provider_type_default_models": {"anthropic": ["claude-sonnet-4-6"]}
+}
+```
+
+- Literal stored API keys are masked as `api_key: null` with `api_key_saved: true`.
+- Env references like `${MY_KEY}` stay visible and are reported in `env`.
+- Provider `models` are normalized to a list for the UI; non-empty per-model overrides are returned under `model_overrides`.
+
+### `PUT /api/settings`
+
+Replace the global config file atomically after validation.
+
+Per-provider `api_key` is three-state:
+
+- `null` or omitted keeps the existing value on disk.
+- `""` clears the field.
+- Non-empty string writes the value verbatim; `${VAR}` is treated as an env reference at runtime.
+
+Returns the same shape as `GET /api/settings`. Invalid provider types, invalid permission values, invalid reasoning effort, or out-of-range compact threshold return `400` with `{"detail": "..."}`.
+
 ## Sessions
 
 Session routes are implemented in `mycode-go/internal/server/sessions.go`.
@@ -235,6 +287,7 @@ Return the server process cwd:
 | `error`               | `message: str`                                                               |
 | `permission_request`  | `request_id: str`, `tool_use_id: str`, `tool_name: str`, `preview: str`      |
 | `permission_resolved` | `request_id: str`, `decision: "allow" \| "deny"`                             |
+| `usage`               | `total_tokens: int`, `model?`, `provider?`, `context_window?`                |
 
 The web UI replays `pending_events` from `GET /api/sessions/{id}`, then reconnects with `after=<last seq>`.
 

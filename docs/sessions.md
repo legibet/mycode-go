@@ -39,11 +39,13 @@ Canonical messages are block-based:
 
 ```json
 {"role": "user", "content": [{"type": "text", "text": "..."}]}
-{"role": "assistant", "content": [{"type": "thinking", "text": "...", "meta": {"duration_ms": 1200}}, {"type": "text", "text": "..."}, {"type": "tool_use", "id": "call_1", "name": "read", "input": {"path": "x.go"}}], "meta": {"provider": "...", "model": "...", "usage": {...}}}
+{"role": "assistant", "content": [{"type": "thinking", "text": "...", "meta": {"duration_ms": 1200}}, {"type": "text", "text": "..."}, {"type": "tool_use", "id": "call_1", "name": "read", "input": {"path": "x.go"}}], "meta": {"provider": "...", "model": "...", "total_tokens": 1456, "context_window": 200000}}
 {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "output": "...", "metadata": {...}, "is_error": false}]}
 ```
 
 `tool_result.output` is replayed to providers. `tool_result.metadata` is structured UI data. The `edit` tool stores a unified `patch` plus `added_lines` / `removed_lines`.
+
+`assistant.meta.total_tokens` is the canonical token count for a provider call: prompt plus generated text, tool calls, and reasoning. `assistant.meta.context_window` is stamped from the resolved model metadata so clients can render consumed-context percentage without resolving the model again.
 
 ## Record Types
 
@@ -74,13 +76,11 @@ Canonical messages are block-based:
 
 ## Context Compaction
 
-After a successful turn, the agent checks the last assistant usage. Compaction triggers when:
+After every completed assistant turn, at an assistant/tool-result boundary, the agent checks the latest assistant token count. Compaction triggers when:
 
 ```text
-usage.input_tokens >= context_window * compact_threshold
+total_tokens >= context_window * compact_threshold
 ```
-
-Fallback usage fields are `prompt_tokens` and `prompt_token_count`.
 
 The compact request uses the same provider/model, no tools, and no explicit reasoning effort. The compact event is appended; older JSONL records are never rewritten.
 

@@ -79,9 +79,11 @@ func (a openAIChatAdapter) StreamTurn(ctx context.Context, req Request) <-chan S
 
 			delta := choice.Delta
 			reasoningDelta, metaUpdate := extractChatReasoningDelta(delta.RawJSON())
+			if len(metaUpdate) > 0 {
+				maps.Copy(thinkingMeta, metaUpdate)
+			}
 			if reasoningDelta != "" {
 				thinkingParts = append(thinkingParts, reasoningDelta)
-				maps.Copy(thinkingMeta, metaUpdate)
 				out <- StreamEvent{Type: "thinking_delta", Text: reasoningDelta}
 			}
 
@@ -113,7 +115,7 @@ func (a openAIChatAdapter) StreamTurn(ctx context.Context, req Request) <-chan S
 		}
 
 		blocks := make([]message.Block, 0, len(toolCalls)+2)
-		if len(thinkingParts) > 0 {
+		if len(thinkingParts) > 0 || len(thinkingMeta) > 0 {
 			meta := map[string]any{}
 			if len(thinkingMeta) > 0 {
 				meta["native"] = thinkingMeta
@@ -136,7 +138,7 @@ func (a openAIChatAdapter) StreamTurn(ctx context.Context, req Request) <-chan S
 			blocks = append(blocks, message.ToolUseBlock(cmp.Or(state.ToolID, fmt.Sprintf("tool_call_%d", index)), state.Name, toolInput, meta))
 		}
 
-		msg := message.AssistantMessage(blocks, a.Spec().ID, responseModel, responseID, finishReason, usage, nil)
+		msg := message.AssistantMessage(blocks, a.Spec().ID, responseModel, responseID, finishReason, mapTokenCount(usage, "total_tokens"), nil)
 		out <- StreamEvent{Type: "message_done", Msg: &msg}
 	}()
 	return out
@@ -286,10 +288,7 @@ func (a openAIChatAdapter) serializeMessage(msg message.Message) []any {
 			}
 		}
 
-		payload := map[string]any{"role": "assistant"}
-		if len(textParts) > 0 {
-			payload["content"] = strings.Join(textParts, "\n")
-		}
+		payload := map[string]any{"role": "assistant", "content": strings.Join(textParts, "\n")}
 		if len(toolUseBlocks) > 0 {
 			toolCalls := make([]any, 0, len(toolUseBlocks))
 			for _, block := range toolUseBlocks {
@@ -323,10 +322,15 @@ func extractChatReasoningDelta(rawJSON string) (string, map[string]any) {
 		if len(source) == 0 {
 			continue
 		}
-		if reasoningContent, _ := source["reasoning_content"].(string); reasoningContent != "" {
-			return reasoningContent, map[string]any{"reasoning_field": "reasoning_content"}
+		if reasoning, exists := source["reasoning"]; exists {
+			text, _ := reasoning.(string)
+			return text, map[string]any{"reasoning_field": "reasoning"}
 		}
-		if reasoningDetails, ok := source["reasoning_details"].([]any); ok && len(reasoningDetails) > 0 {
+		if reasoningContent, exists := source["reasoning_content"]; exists {
+			text, _ := reasoningContent.(string)
+			return text, map[string]any{"reasoning_field": "reasoning_content"}
+		}
+		if reasoningDetails, ok := source["reasoning_details"].([]any); ok {
 			textParts := make([]string, 0, len(reasoningDetails))
 			for _, item := range reasoningDetails {
 				if entry, ok := item.(map[string]any); ok {
@@ -335,11 +339,9 @@ func extractChatReasoningDelta(rawJSON string) (string, map[string]any) {
 					}
 				}
 			}
-			if len(textParts) > 0 {
-				return strings.Join(textParts, ""), map[string]any{
-					"reasoning_field":   "reasoning_details",
-					"reasoning_details": reasoningDetails,
-				}
+			return strings.Join(textParts, ""), map[string]any{
+				"reasoning_field":   "reasoning_details",
+				"reasoning_details": reasoningDetails,
 			}
 		}
 	}
@@ -353,14 +355,27 @@ func serializeChatReasoning(blocks []message.Block) map[string]any {
 			thinkingText = append(thinkingText, block.Text)
 		}
 	}
+	text := strings.Join(thinkingText, "\n")
 	native := blockNativeMeta(blocks[0])
-	if field, _ := native["reasoning_field"].(string); field == "reasoning_details" {
+	switch field, _ := native["reasoning_field"].(string); field {
+	case "reasoning_details":
 		if details := native["reasoning_details"]; details != nil {
 			return map[string]any{"reasoning_details": details}
 		}
+		return map[string]any{"reasoning_details": []any{}}
+	case "reasoning":
+		if text == "" {
+			return map[string]any{"reasoning": nil}
+		}
+		return map[string]any{"reasoning": text}
+	case "reasoning_content":
+		if text == "" {
+			return map[string]any{"reasoning_content": nil}
+		}
+		return map[string]any{"reasoning_content": text}
 	}
-	if len(thinkingText) > 0 {
-		return map[string]any{"reasoning_content": strings.Join(thinkingText, "\n")}
+	if text != "" {
+		return map[string]any{"reasoning_content": text}
 	}
 	return nil
 }

@@ -267,7 +267,7 @@ func TestResolveProviderAutoDiscoveryOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := ResolveProvider(settings, "", "", "", "", "")
+	resolved, err := ResolveProvider(settings, "", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestResolveProviderAutoDiscoveryMatchesPythonRegistryOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := ResolveProvider(settings, "", "", "", "", "")
+	resolved, err := ResolveProvider(settings, "", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestResolveProviderPrefersFirstConfiguredProviderWithCredentials(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := ResolveProvider(settings, "", "", "", "", "")
+	resolved, err := ResolveProvider(settings, "", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,14 +349,14 @@ func TestResolveProviderDeepSeekDefaultsToV4(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := ResolveProvider(settings, "deepseek", "", "", "", "high")
+	resolved, err := ResolveProvider(settings, "deepseek", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resolved.ProviderName != "deepseek" || resolved.ProviderType != "deepseek" {
 		t.Fatalf("unexpected provider: %#v", resolved)
 	}
-	if resolved.Model != "deepseek-v4-pro" || resolved.ReasoningEffort != "high" || !resolved.SupportsEffortToggle {
+	if resolved.Model != "deepseek-v4-pro" || !resolved.SupportsEffortToggle {
 		t.Fatalf("unexpected DeepSeek defaults: %#v", resolved)
 	}
 }
@@ -390,7 +390,7 @@ func TestResolveProviderPreservesConfiguredModelOrder(t *testing.T) {
 	if got := settings.Providers["openai"].ModelOrder; len(got) != 2 || got[0] != "z-model" || got[1] != "a-model" {
 		t.Fatalf("unexpected model order: %#v", got)
 	}
-	resolved, err := ResolveProvider(settings, "", "", "", "", "")
+	resolved, err := ResolveProvider(settings, "", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +424,7 @@ func TestResolveProviderPrefersExplicitAPIKeyOverEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := ResolveProvider(settings, "", "", "request-key", "", "")
+	resolved, err := ResolveProvider(settings, "", "", "request-key", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +459,7 @@ func TestResolveProviderOpenAIChatIgnoresReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := ResolveProvider(settings, "", "", "", "", "")
+	resolved, err := ResolveProvider(settings, "", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +491,7 @@ func TestResolveProviderDefaultProviderDoesNotFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ResolveProvider(settings, "", "", "", "", ""); err == nil || !contains(err.Error(), `provider "claude" is selected`) {
+	if _, err := ResolveProvider(settings, "", "", "", ""); err == nil || !contains(err.Error(), `provider "claude" is selected`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -543,7 +543,7 @@ func TestResolveProviderMissingConfiguredAPIKeyEnvVar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ResolveProvider(settings, "", "", "", "", ""); err == nil || !contains(err.Error(), "OPENROUTER_API_KEY") {
+	if _, err := ResolveProvider(settings, "", "", "", ""); err == nil || !contains(err.Error(), "OPENROUTER_API_KEY") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -593,7 +593,7 @@ func TestResolveProviderUsesMetadataOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := ResolveProvider(settings, "", "", "", "", "")
+	resolved, err := ResolveProvider(settings, "", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -637,7 +637,7 @@ func TestResolveProviderUsesGlobalDefaultReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := ResolveProvider(settings, "", "", "", "", "")
+	resolved, err := ResolveProvider(settings, "", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

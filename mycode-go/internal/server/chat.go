@@ -128,6 +128,29 @@ func (a *app) handleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (a *app) handleSettings(w http.ResponseWriter, r *http.Request) {
+	resp, err := a.svc.Settings()
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *app) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	var req core.SettingsRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeDetailError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, err := a.svc.UpdateSettings(req)
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func writeCoreError(w http.ResponseWriter, err error) {
 	if statusErr, ok := err.(*core.StatusError); ok {
 		writeDetailError(w, statusErr.Status, statusErr.Detail)

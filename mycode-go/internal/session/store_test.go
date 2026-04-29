@@ -25,16 +25,18 @@ func TestNewStoreUsesMycodeHome(t *testing.T) {
 	}
 }
 
-func TestShouldCompactAcceptsProviderSpecificUsageShapes(t *testing.T) {
-	cases := []map[string]any{
-		{"input_tokens": 5000},
-		{"prompt_tokens": 7000},
-		{"prompt_token_count": 3000},
+func TestShouldCompactRespectsThresholdBoundaries(t *testing.T) {
+	if !ShouldCompact(80000, 100000, 0.8) {
+		t.Fatal("expected compact at threshold")
 	}
-	for _, usage := range cases {
-		if !ShouldCompact(usage, 10000, 0.3) {
-			t.Fatalf("expected compact for usage %#v", usage)
-		}
+	if ShouldCompact(79999, 100000, 0.8) {
+		t.Fatal("did not expect compact below threshold")
+	}
+	if ShouldCompact(99999, 100000, 0) {
+		t.Fatal("did not expect compact when disabled")
+	}
+	if ShouldCompact(0, 100000, 0.8) || ShouldCompact(50000, 0, 0.8) {
+		t.Fatal("did not expect compact without usage or context")
 	}
 }
 
@@ -138,7 +140,7 @@ func TestLoadSessionRepairsInterruptedToolLoop(t *testing.T) {
 
 	if err := store.AppendMessage(sessionID, message.AssistantMessage([]message.Block{
 		message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
-	}, "anthropic", "gpt-5.4", "", "", nil, nil), "/tmp"); err != nil {
+	}, "anthropic", "gpt-5.4", "", "", 0, nil), "/tmp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -175,12 +177,12 @@ func TestAppendRewindNonexistentSessionIsNoop(t *testing.T) {
 func TestApplyRewindMultipleMarkers(t *testing.T) {
 	messages := []message.Message{
 		message.UserTextMessage("a", nil),
-		message.AssistantMessage([]message.Block{message.TextBlock("b", nil)}, "p", "m", "", "", nil, nil),
+		message.AssistantMessage([]message.Block{message.TextBlock("b", nil)}, "p", "m", "", "", 0, nil),
 		message.UserTextMessage("c", nil),
-		message.AssistantMessage([]message.Block{message.TextBlock("d", nil)}, "p", "m", "", "", nil, nil),
+		message.AssistantMessage([]message.Block{message.TextBlock("d", nil)}, "p", "m", "", "", 0, nil),
 		BuildRewindEvent(2),
 		message.UserTextMessage("e", nil),
-		message.AssistantMessage([]message.Block{message.TextBlock("f", nil)}, "p", "m", "", "", nil, nil),
+		message.AssistantMessage([]message.Block{message.TextBlock("f", nil)}, "p", "m", "", "", 0, nil),
 		BuildRewindEvent(2),
 		message.UserTextMessage("g", nil),
 	}
@@ -201,11 +203,11 @@ func TestLoadSessionAppliesLatestCompactSummary(t *testing.T) {
 
 	for _, msg := range []message.Message{
 		message.UserTextMessage("hello", nil),
-		message.AssistantMessage([]message.Block{message.TextBlock("hi", nil)}, "p", "m", "", "", nil, nil),
-		BuildCompactEvent("old summary", "p", "m", 2, nil),
+		message.AssistantMessage([]message.Block{message.TextBlock("hi", nil)}, "p", "m", "", "", 0, nil),
+		BuildCompactEvent("old summary", "p", "m", 2, 0),
 		message.UserTextMessage("next", nil),
-		BuildCompactEvent("new summary", "p", "m", 4, nil),
-		message.AssistantMessage([]message.Block{message.TextBlock("latest reply", nil)}, "p", "m", "", "", nil, nil),
+		BuildCompactEvent("new summary", "p", "m", 4, 0),
+		message.AssistantMessage([]message.Block{message.TextBlock("latest reply", nil)}, "p", "m", "", "", 0, nil),
 	} {
 		if err := store.AppendMessage(sessionID, msg, "/tmp"); err != nil {
 			t.Fatal(err)
@@ -237,10 +239,10 @@ func TestRewindAfterCompactPreservesSummary(t *testing.T) {
 
 	for _, msg := range []message.Message{
 		message.UserTextMessage("hello", nil),
-		message.AssistantMessage([]message.Block{message.TextBlock("hi", nil)}, "p", "m", "", "", nil, nil),
-		BuildCompactEvent("summary of hello+hi", "p", "m", 2, nil),
+		message.AssistantMessage([]message.Block{message.TextBlock("hi", nil)}, "p", "m", "", "", 0, nil),
+		BuildCompactEvent("summary of hello+hi", "p", "m", 2, 0),
 		message.UserTextMessage("explain X", nil),
-		message.AssistantMessage([]message.Block{message.TextBlock("X is...", nil)}, "p", "m", "", "", nil, nil),
+		message.AssistantMessage([]message.Block{message.TextBlock("X is...", nil)}, "p", "m", "", "", 0, nil),
 	} {
 		if err := store.AppendMessage(sessionID, msg, "/tmp"); err != nil {
 			t.Fatal(err)
@@ -284,10 +286,10 @@ func TestRewindPastInterruptedToolLoopSkipsRepair(t *testing.T) {
 
 	for _, msg := range []message.Message{
 		message.UserTextMessage("hello", nil),
-		message.AssistantMessage([]message.Block{message.TextBlock("hi", nil)}, "p", "m", "", "", nil, nil),
+		message.AssistantMessage([]message.Block{message.TextBlock("hi", nil)}, "p", "m", "", "", 0, nil),
 		message.AssistantMessage([]message.Block{
 			message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
-		}, "p", "m", "", "", nil, nil),
+		}, "p", "m", "", "", 0, nil),
 	} {
 		if err := store.AppendMessage(sessionID, msg, "/tmp"); err != nil {
 			t.Fatal(err)

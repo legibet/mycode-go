@@ -57,7 +57,7 @@ func runCommand(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	resolvedProvider, err := config.ResolveProvider(settings, *providerName, *model, "", "", "")
+	resolvedProvider, err := config.ResolveProvider(settings, *providerName, *model, "", "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

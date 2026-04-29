@@ -58,7 +58,7 @@ func (a googleAdapter) StreamTurn(ctx context.Context, req Request) <-chan Strea
 		responseModel := ""
 		finishReason := ""
 		finishMessage := ""
-		var usage any
+		var totalTokens int
 
 		for response, err := range client.Models.GenerateContentStream(requestCtx, req.Model, a.buildContents(req), config) {
 			if err != nil {
@@ -74,8 +74,8 @@ func (a googleAdapter) StreamTurn(ctx context.Context, req Request) <-chan Strea
 			if responseModel == "" {
 				responseModel = response.ModelVersion
 			}
-			if dumped := dumpJSON(response.UsageMetadata); dumped != nil {
-				usage = dumped
+			if response.UsageMetadata != nil && response.UsageMetadata.TotalTokenCount > 0 {
+				totalTokens = int(response.UsageMetadata.TotalTokenCount)
 			}
 			if len(response.Candidates) == 0 || response.Candidates[0] == nil {
 				continue
@@ -101,7 +101,7 @@ func (a googleAdapter) StreamTurn(ctx context.Context, req Request) <-chan Strea
 		if finishMessage != "" {
 			nativeMeta["finish_message"] = finishMessage
 		}
-		msg := message.AssistantMessage(blocks, a.Spec().ID, cmp.Or(responseModel, req.Model), responseID, finishReason, usage, nativeMeta)
+		msg := message.AssistantMessage(blocks, a.Spec().ID, cmp.Or(responseModel, req.Model), responseID, finishReason, totalTokens, nativeMeta)
 		out <- StreamEvent{Type: "message_done", Msg: &msg}
 	}()
 	return out

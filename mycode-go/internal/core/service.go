@@ -4,8 +4,10 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -118,6 +120,10 @@ type DecideResponse struct {
 	Status string `json:"status"`
 }
 
+type SettingsRequest struct {
+	Config json.RawMessage `json:"config"`
+}
+
 func NewService(opts Options) *Service {
 	store := opts.Store
 	if store == nil {
@@ -147,13 +153,21 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		req.Model,
 		req.APIKey,
 		req.APIBase,
-		req.ReasoningEffort,
 	)
 	if err != nil {
 		if errors.Is(err, config.ErrUnsupportedReasoningEffort) {
 			return ChatResponse{}, statusError(http.StatusBadRequest, err.Error())
 		}
 		return ChatResponse{}, statusError(http.StatusInternalServerError, err.Error())
+	}
+	if strings.TrimSpace(req.ReasoningEffort) != "" {
+		effort, err := config.NormalizeReasoningEffort(req.ReasoningEffort)
+		if err != nil {
+			return ChatResponse{}, statusError(http.StatusBadRequest, err.Error())
+		}
+		if effort != "" {
+			resolved.ReasoningEffort = effort
+		}
 	}
 
 	userMessage, err := buildUserMessage(req, cwd)
@@ -293,7 +307,7 @@ func (s *Service) Config(cwd string) (map[string]any, error) {
 	if err != nil {
 		return nil, statusError(http.StatusInternalServerError, err.Error())
 	}
-	resolved, err := config.ResolveProvider(settings, "", "", "", "", "")
+	resolved, err := config.ResolveProvider(settings, "", "", "", "")
 	if err != nil {
 		return nil, statusError(http.StatusServiceUnavailable, err.Error())
 	}
@@ -316,7 +330,6 @@ func (s *Service) Config(cwd string) (map[string]any, error) {
 				model,
 				"",
 				choice.APIBase,
-				"",
 			)
 			if err != nil {
 				continue
@@ -363,6 +376,44 @@ func (s *Service) Config(cwd string) (map[string]any, error) {
 		"project":                  settings.Project,
 		"config_paths":             settings.ConfigPaths,
 	}, nil
+}
+
+func (s *Service) Settings() (map[string]any, error) {
+	path := filepath.Join(config.ResolveHome(), "config.json")
+	raw, order, exists, err := readRawConfig(path)
+	if err != nil {
+		return nil, statusError(http.StatusInternalServerError, err.Error())
+	}
+	return settingsResponse(path, exists, raw, order), nil
+}
+
+func (s *Service) UpdateSettings(req SettingsRequest) (map[string]any, error) {
+	path := filepath.Join(config.ResolveHome(), "config.json")
+	existing, _, _, err := readRawConfig(path)
+	if err != nil {
+		return nil, statusError(http.StatusInternalServerError, err.Error())
+	}
+	incoming := map[string]any{}
+	order := config.ConfigOrder{}
+	if text := strings.TrimSpace(string(req.Config)); text != "" && text != "null" {
+		if err := json.Unmarshal(req.Config, &incoming); err != nil {
+			return nil, statusError(http.StatusBadRequest, err.Error())
+		}
+		order = config.ParseConfigOrder(req.Config)
+	}
+	mergeExistingAPIKeys(incoming, existing)
+	cleaned, err := config.ValidateGlobalConfig(incoming)
+	if err != nil {
+		return nil, statusError(http.StatusBadRequest, err.Error())
+	}
+	if err := writeJSONFileAtomic(path, cleaned, order); err != nil {
+		return nil, statusError(http.StatusInternalServerError, err.Error())
+	}
+	raw, savedOrder, exists, err := readRawConfig(path)
+	if err != nil {
+		return nil, statusError(http.StatusInternalServerError, err.Error())
+	}
+	return settingsResponse(path, exists, raw, savedOrder), nil
 }
 
 func (s *Service) CreateSession(req SessionCreateRequest) (session.Data, error) {
@@ -639,6 +690,248 @@ func isRealUserMessage(msg message.Message) bool {
 		}
 	}
 	return false
+}
+
+func readRawConfig(path string) (map[string]any, config.ConfigOrder, bool, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]any{}, config.ConfigOrder{}, false, nil
+	}
+	if err != nil {
+		return nil, config.ConfigOrder{}, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return map[string]any{}, config.ConfigOrder{}, false, nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, config.ConfigOrder{}, false, err
+	}
+	var parsed any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil, config.ConfigOrder{}, true, fmt.Errorf("failed to parse %s: %w", path, err)
+	}
+	raw, ok := parsed.(map[string]any)
+	if !ok {
+		return nil, config.ConfigOrder{}, true, fmt.Errorf("%s must contain a JSON object", path)
+	}
+	return raw, config.ParseConfigOrder(data), true, nil
+}
+
+func settingsResponse(path string, exists bool, raw map[string]any, order config.ConfigOrder) map[string]any {
+	providerTypes := make([]string, 0, len(provider.Specs()))
+	envNames := map[string]struct{}{}
+	typeEnvVars := map[string][]string{}
+	typeDefaultModels := map[string][]string{}
+	for _, spec := range provider.Specs() {
+		providerTypes = append(providerTypes, spec.ID)
+		if len(spec.EnvAPIKeyNames) > 0 {
+			typeEnvVars[spec.ID] = append([]string(nil), spec.EnvAPIKeyNames...)
+		}
+		if len(spec.DefaultModels) > 0 {
+			typeDefaultModels[spec.ID] = append([]string(nil), spec.DefaultModels...)
+		}
+		if spec.AutoDiscoverable {
+			for _, name := range spec.EnvAPIKeyNames {
+				envNames[name] = struct{}{}
+			}
+		}
+	}
+	slices.Sort(providerTypes)
+	providers, _ := raw["providers"].(map[string]any)
+	for _, rawEntry := range providers {
+		rawEntry, _ := rawEntry.(map[string]any)
+		if rawEntry == nil {
+			continue
+		}
+		if apiKey, _ := rawEntry["api_key"].(string); apiKey != "" {
+			if ref := config.IsAPIKeyEnvRef(apiKey); ref != "" {
+				envNames[ref] = struct{}{}
+			}
+		}
+	}
+	env := map[string]bool{}
+	for _, name := range slices.Sorted(maps.Keys(envNames)) {
+		env[name] = strings.TrimSpace(os.Getenv(name)) != ""
+	}
+
+	return map[string]any{
+		"path":   path,
+		"exists": exists,
+		"config": presentConfig(raw, order),
+		"options": map[string]any{
+			"provider_types":    providerTypes,
+			"permission_levels": config.PermissionLevelOptions(),
+			"permission_modes":  config.PermissionModeOptions(),
+			"reasoning_efforts": ReasoningEffortOptions,
+		},
+		"env":                          env,
+		"provider_type_env_vars":       typeEnvVars,
+		"provider_type_default_models": typeDefaultModels,
+	}
+}
+
+func presentConfig(raw map[string]any, order config.ConfigOrder) map[string]any {
+	out := maps.Clone(raw)
+	if out == nil {
+		out = map[string]any{}
+	}
+	providers, _ := raw["providers"].(map[string]any)
+	if len(providers) == 0 {
+		return out
+	}
+	presentedProviders := map[string]any{}
+	for name, rawEntry := range providers {
+		entry, ok := rawEntry.(map[string]any)
+		if !ok {
+			presentedProviders[name] = rawEntry
+			continue
+		}
+		entry = maps.Clone(entry)
+		apiKey, _ := entry["api_key"].(string)
+		apiKey = strings.TrimSpace(apiKey)
+		if apiKey == "" {
+			entry["api_key"] = nil
+			entry["api_key_saved"] = false
+		} else if config.IsAPIKeyEnvRef(apiKey) != "" {
+			entry["api_key_saved"] = false
+		} else {
+			entry["api_key"] = nil
+			entry["api_key_saved"] = true
+		}
+
+		models, _ := entry["models"].(map[string]any)
+		if len(models) > 0 {
+			keys := orderedKeys(models, order.ModelOrder[name])
+			entry["models"] = keys
+			overrides := map[string]any{}
+			for _, key := range keys {
+				modelOverride, _ := models[key].(map[string]any)
+				if len(modelOverride) > 0 {
+					overrides[key] = modelOverride
+				}
+			}
+			if len(overrides) > 0 {
+				entry["model_overrides"] = overrides
+			}
+		}
+		presentedProviders[name] = entry
+	}
+	out["providers"] = orderedMap{values: presentedProviders, order: order.ProviderOrder}
+	return out
+}
+
+func mergeExistingAPIKeys(incoming, existing map[string]any) {
+	incomingProviders, _ := incoming["providers"].(map[string]any)
+	existingProviders, _ := existing["providers"].(map[string]any)
+	for name, rawEntry := range incomingProviders {
+		entry, _ := rawEntry.(map[string]any)
+		if entry == nil || entry["api_key"] != nil {
+			continue
+		}
+		prior, _ := existingProviders[name].(map[string]any)
+		if prior != nil {
+			if apiKey, ok := prior["api_key"]; ok {
+				entry["api_key"] = apiKey
+				continue
+			}
+		}
+		delete(entry, "api_key")
+	}
+}
+
+func writeJSONFileAtomic(path string, payload map[string]any, order config.ConfigOrder) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".")
+	if err != nil {
+		return err
+	}
+	tmpName := file.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	providers, _ := payload["providers"].(map[string]any)
+	if len(providers) > 0 {
+		orderedProviders := map[string]any{}
+		for _, name := range orderedKeys(providers, order.ProviderOrder) {
+			rawEntry := providers[name]
+			entry, ok := rawEntry.(map[string]any)
+			if ok {
+				entry = maps.Clone(entry)
+				if models, _ := entry["models"].(map[string]any); len(models) > 0 {
+					entry["models"] = orderedMap{values: models, order: order.ModelOrder[name]}
+				}
+				rawEntry = entry
+			}
+			orderedProviders[name] = rawEntry
+		}
+		payload = maps.Clone(payload)
+		payload["providers"] = orderedMap{values: orderedProviders, order: order.ProviderOrder}
+	}
+	if err := encoder.Encode(payload); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+type orderedMap struct {
+	values map[string]any
+	order  []string
+}
+
+// orderedMap preserves provider/model order in settings JSON.
+func (m orderedMap) MarshalJSON() ([]byte, error) {
+	var buf strings.Builder
+	buf.WriteByte('{')
+	for i, key := range orderedKeys(m.values, m.order) {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		name, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		value, err := json.Marshal(m.values[key])
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(name)
+		buf.WriteByte(':')
+		buf.Write(value)
+	}
+	buf.WriteByte('}')
+	return []byte(buf.String()), nil
+}
+
+func orderedKeys(values map[string]any, preferred []string) []string {
+	keys := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, key := range preferred {
+		if _, ok := values[key]; !ok {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	for _, key := range slices.Sorted(maps.Keys(values)) {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func modelsForProvider(settings config.Settings, resolved config.ResolvedProvider) []string {

@@ -52,6 +52,8 @@ func newApp(serveWeb bool, webRoot string, store *session.Store, runs *core.RunM
 	mux.HandleFunc("POST /api/runs/{run_id}/cancel", app.handleCancelRun)
 	mux.HandleFunc("POST /api/runs/{run_id}/decide", app.handleDecideRun)
 	mux.HandleFunc("GET /api/config", app.handleConfig)
+	mux.HandleFunc("GET /api/settings", app.handleSettings)
+	mux.HandleFunc("PUT /api/settings", app.handleUpdateSettings)
 
 	mux.HandleFunc("POST /api/sessions", app.handleCreateSession)
 	mux.HandleFunc("GET /api/sessions", app.handleListSessions)
@@ -117,7 +119,7 @@ func writeSSE(w io.Writer, payload any) error {
 func setCORSHeaders(w http.ResponseWriter) {
 	headers := w.Header()
 	headers.Set("Access-Control-Allow-Origin", "*")
-	headers.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+	headers.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 	headers.Set("Access-Control-Allow-Headers", "*")
 }
 

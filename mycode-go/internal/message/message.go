@@ -125,7 +125,7 @@ func UserTextMessage(text string, meta map[string]any) Message {
 }
 
 // AssistantMessage returns a normalized assistant message.
-func AssistantMessage(blocks []Block, provider, model, providerMessageID, stopReason string, usage any, nativeMeta map[string]any) Message {
+func AssistantMessage(blocks []Block, provider, model, providerMessageID, stopReason string, totalTokens int, nativeMeta map[string]any) Message {
 	meta := map[string]any{}
 	if provider != "" {
 		meta["provider"] = provider
@@ -139,8 +139,8 @@ func AssistantMessage(blocks []Block, provider, model, providerMessageID, stopRe
 	if stopReason != "" {
 		meta["stop_reason"] = stopReason
 	}
-	if usage != nil {
-		meta["usage"] = usage
+	if totalTokens > 0 {
+		meta["total_tokens"] = totalTokens
 	}
 	if len(nativeMeta) > 0 {
 		meta["native"] = maps.Clone(nativeMeta)

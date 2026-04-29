@@ -365,13 +365,14 @@ func (a anthropicAdapter) convertMessage(msg anthropic.Message) message.Message 
 	if msg.Usage.ServiceTier != "" {
 		nativeMeta["service_tier"] = string(msg.Usage.ServiceTier)
 	}
+	totalTokens := msg.Usage.InputTokens + msg.Usage.CacheCreationInputTokens + msg.Usage.CacheReadInputTokens + msg.Usage.OutputTokens
 	return message.AssistantMessage(
 		blocks,
 		a.Spec().ID,
 		msg.Model,
 		msg.ID,
 		string(msg.StopReason),
-		dumpJSON(msg.Usage),
+		int(totalTokens),
 		nativeMeta,
 	)
 }

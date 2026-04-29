@@ -305,7 +305,7 @@ func TestOpenAIResponsesReplaysNativeOutputItemsForToolResults(t *testing.T) {
 		Messages: []message.Message{
 			message.AssistantMessage([]message.Block{
 				message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
-			}, "openai", "gpt-5.4", "", "", nil, map[string]any{
+			}, "openai", "gpt-5.4", "", "", 0, map[string]any{
 				"output_items": []any{
 					map[string]any{
 						"type":              "reasoning",
@@ -370,7 +370,7 @@ func TestOpenAIResponsesFallbackReplaySkipsReasoningBlocks(t *testing.T) {
 				message.ThinkingBlock("Need the tool first.", nil),
 				message.TextBlock("I will inspect the file.", nil),
 				message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
-			}, "openai", "gpt-5.4", "", "", nil, nil),
+			}, "openai", "gpt-5.4", "", "", 0, nil),
 		},
 		MaxTokens: 4096,
 	})
@@ -463,7 +463,7 @@ func TestRepairMessagesForReplayDropsDuplicateAndOrphanToolResults(t *testing.T)
 	replay := RepairMessagesForReplay([]message.Message{
 		message.AssistantMessage([]message.Block{
 			message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
-		}, "", "", "", "", nil, nil),
+		}, "", "", "", "", 0, nil),
 		message.BuildMessage("user", []message.Block{
 			message.ToolResultBlock("call_1", "first", nil, false, nil, nil),
 			message.ToolResultBlock("call_1", "duplicate", nil, false, nil, nil),
@@ -471,13 +471,13 @@ func TestRepairMessagesForReplayDropsDuplicateAndOrphanToolResults(t *testing.T)
 		}, nil),
 		message.AssistantMessage([]message.Block{
 			message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
-		}, "", "", "", "", nil, nil),
+		}, "", "", "", "", 0, nil),
 	}, true, true)
 
 	expected := []message.Message{
 		message.AssistantMessage([]message.Block{
 			message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
-		}, "", "", "", "", nil, nil),
+		}, "", "", "", "", 0, nil),
 		message.BuildMessage("user", []message.Block{
 			message.ToolResultBlock("call_1", "first", nil, false, nil, nil),
 		}, nil),
@@ -491,21 +491,21 @@ func TestRepairMessagesForReplayKeepsPlaceholderUserTurn(t *testing.T) {
 	replay := RepairMessagesForReplay([]message.Message{
 		message.AssistantMessage([]message.Block{
 			message.TextBlock("first", nil),
-		}, "", "", "", "", nil, nil),
+		}, "", "", "", "", 0, nil),
 		message.BuildMessage("user", []message.Block{
 			message.ToolResultBlock("missing", "orphan", nil, false, nil, nil),
 		}, nil),
 		message.AssistantMessage([]message.Block{
 			message.TextBlock("second", nil),
-		}, "", "", "", "", nil, nil),
+		}, "", "", "", "", 0, nil),
 	}, true, true)
 
 	expected := []message.Message{
-		message.AssistantMessage([]message.Block{message.TextBlock("first", nil)}, "", "", "", "", nil, nil),
+		message.AssistantMessage([]message.Block{message.TextBlock("first", nil)}, "", "", "", "", 0, nil),
 		message.BuildMessage("user", []message.Block{
 			message.TextBlock("[User turn omitted during replay]", nil),
 		}, map[string]any{"synthetic": true}),
-		message.AssistantMessage([]message.Block{message.TextBlock("second", nil)}, "", "", "", "", nil, nil),
+		message.AssistantMessage([]message.Block{message.TextBlock("second", nil)}, "", "", "", "", 0, nil),
 	}
 	if !reflect.DeepEqual(replay, expected) {
 		t.Fatalf("unexpected replay:\n got: %#v\nwant: %#v", replay, expected)
@@ -516,7 +516,7 @@ func TestRepairMessagesForReplayFiltersImagesWhenDisabled(t *testing.T) {
 	replay := RepairMessagesForReplay([]message.Message{
 		message.AssistantMessage([]message.Block{
 			message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.png"}, nil),
-		}, "", "", "", "", nil, nil),
+		}, "", "", "", "", 0, nil),
 		message.BuildMessage("user", []message.Block{
 			message.TextBlock("describe this", nil),
 			message.ImageBlock("abc", "image/png", `logo"<v2>.png`, nil),
@@ -530,7 +530,7 @@ func TestRepairMessagesForReplayFiltersImagesWhenDisabled(t *testing.T) {
 	expected := []message.Message{
 		message.AssistantMessage([]message.Block{
 			message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.png"}, nil),
-		}, "", "", "", "", nil, nil),
+		}, "", "", "", "", 0, nil),
 		message.BuildMessage("user", []message.Block{
 			message.TextBlock("describe this", nil),
 			message.TextBlock(`<file name="logo&quot;&lt;v2&gt;.png" media_type="image/png" kind="image">Current model does not support image input.</file>`, map[string]any{"attachment": true}),
@@ -553,7 +553,7 @@ func TestOpenAIResponsesFallsBackToFullReplayForCrossProviderHistory(t *testing.
 			message.AssistantMessage([]message.Block{
 				message.ThinkingBlock("Need the tool first.", nil),
 				message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
-			}, "anthropic", "claude-sonnet-4-6", "", "", nil, nil),
+			}, "anthropic", "claude-sonnet-4-6", "", "", 0, nil),
 			message.BuildMessage("user", []message.Block{
 				message.ToolResultBlock("call_1", "42", nil, false, nil, nil),
 			}, nil),
@@ -594,7 +594,7 @@ func TestOpenAIResponsesSerializesToolResultImages(t *testing.T) {
 		Messages: []message.Message{
 			message.AssistantMessage([]message.Block{
 				message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.png"}, nil),
-			}, "", "", "", "", nil, nil),
+			}, "", "", "", "", 0, nil),
 			message.BuildMessage("user", []message.Block{
 				message.ToolResultBlock("call_1", "Read image file [image/png]", nil, false, []message.Block{
 					message.TextBlock("Read image file [image/png]", nil),
@@ -715,6 +715,18 @@ func TestOpenAIChatExtractsReasoningFromKnownExtraFields(t *testing.T) {
 			meta: map[string]any{"reasoning_field": "reasoning_content"},
 		},
 		{
+			name: "model_extra reasoning alias",
+			raw:  `{"model_extra":{"reasoning":"step alias"}}`,
+			text: "step alias",
+			meta: map[string]any{"reasoning_field": "reasoning"},
+		},
+		{
+			name: "empty reasoning_content marker",
+			raw:  `{"model_extra":{"reasoning_content":null}}`,
+			text: "",
+			meta: map[string]any{"reasoning_field": "reasoning_content"},
+		},
+		{
 			name: "model_extra reasoning_details",
 			raw:  `{"model_extra":{"reasoning_details":[{"type":"reasoning.text","text":"step "},{"type":"reasoning.text","text":"two"}]}}`,
 			text: "step two",
@@ -738,6 +750,41 @@ func TestOpenAIChatExtractsReasoningFromKnownExtraFields(t *testing.T) {
 	}
 }
 
+func TestRepairMessagesPreservesEmptyNativeReasoningBlocks(t *testing.T) {
+	messages := []message.Message{
+		message.AssistantMessage([]message.Block{
+			message.ThinkingBlock("", map[string]any{"native": map[string]any{"reasoning_field": "reasoning_content"}}),
+			message.TextBlock("done", nil),
+		}, "", "", "", "", 0, nil),
+		message.UserTextMessage("next question", nil),
+	}
+
+	repaired := RepairMessagesForReplay(messages, true, true)
+	if len(repaired) == 0 || len(repaired[0].Content) == 0 || repaired[0].Content[0].Type != "thinking" {
+		t.Fatalf("unexpected repaired messages: %#v", repaired)
+	}
+}
+
+func TestOpenAIChatReplaysNativeReasoningField(t *testing.T) {
+	adapter := newOpenAIChatAdapter("openai_chat").(openAIChatAdapter)
+	payload := adapter.buildPayload(Request{
+		Model: "test-model",
+		Messages: []message.Message{
+			message.AssistantMessage([]message.Block{
+				message.ThinkingBlock("", map[string]any{"native": map[string]any{"reasoning_field": "reasoning_content"}}),
+				message.TextBlock("done", nil),
+			}, "", "", "", "", 0, nil),
+			message.UserTextMessage("next question", nil),
+		},
+		MaxTokens: 2048,
+	})
+
+	first, _ := payload["messages"].([]any)[0].(map[string]any)
+	if value, ok := first["reasoning_content"]; !ok || value != nil {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+}
+
 func TestOpenAIChatReplaysReasoningByDefault(t *testing.T) {
 	adapter := newOpenAIChatAdapter("openai_chat").(openAIChatAdapter)
 	payload := adapter.buildPayload(Request{
@@ -746,7 +793,7 @@ func TestOpenAIChatReplaysReasoningByDefault(t *testing.T) {
 			message.AssistantMessage([]message.Block{
 				message.ThinkingBlock("think", nil),
 				message.TextBlock("answer", nil),
-			}, "", "", "", "", nil, nil),
+			}, "", "", "", "", 0, nil),
 		},
 		MaxTokens: 2048,
 	})
@@ -767,7 +814,7 @@ func TestDeepSeekReplaysReasoningAcrossTurns(t *testing.T) {
 			message.AssistantMessage([]message.Block{
 				message.ThinkingBlock("think", map[string]any{"native": map[string]any{"reasoning_field": "reasoning_content"}}),
 				message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
-			}, "", "", "", "", nil, nil),
+			}, "", "", "", "", 0, nil),
 			message.BuildMessage("user", []message.Block{
 				message.ToolResultBlock("call_1", "done", nil, false, nil, nil),
 			}, nil),
@@ -785,7 +832,7 @@ func TestDeepSeekReplaysReasoningAcrossTurns(t *testing.T) {
 			message.AssistantMessage([]message.Block{
 				message.ThinkingBlock("think", map[string]any{"native": map[string]any{"reasoning_field": "reasoning_content"}}),
 				message.TextBlock("done", nil),
-			}, "", "", "", "", nil, nil),
+			}, "", "", "", "", 0, nil),
 			message.UserTextMessage("next question", nil),
 		},
 		MaxTokens: 2048,
@@ -804,7 +851,7 @@ func TestAnthropicPrepareMessagesNormalizesToolIDs(t *testing.T) {
 			message.AssistantMessage([]message.Block{
 				message.ToolUseBlock("a/b", "read", map[string]any{"path": "x.py"}, nil),
 				message.ToolUseBlock("a|b", "write", map[string]any{"path": "y.py"}, nil),
-			}, "anthropic", "claude-sonnet-4-6", "", "", nil, nil),
+			}, "anthropic", "claude-sonnet-4-6", "", "", 0, nil),
 			message.BuildMessage("user", []message.Block{
 				message.ToolResultBlock("a/b", "done a", nil, false, nil, nil),
 				message.ToolResultBlock("a|b", "done b", nil, false, nil, nil),
@@ -888,10 +935,10 @@ func TestAnthropicBuildPayloadAddsCacheControlToLatestUserBlock(t *testing.T) {
 			message.UserTextMessage("first user message", nil),
 			message.AssistantMessage([]message.Block{
 				message.TextBlock("assistant reply", nil),
-			}, "", "", "", "", nil, nil),
+			}, "", "", "", "", 0, nil),
 			message.AssistantMessage([]message.Block{
 				message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
-			}, "", "", "", "", nil, nil),
+			}, "", "", "", "", 0, nil),
 			message.BuildMessage("user", []message.Block{
 				message.TextBlock("latest user message", nil),
 				message.ToolResultBlock("call_1", "tool output", nil, false, nil, nil),
@@ -939,6 +986,24 @@ func TestGoogleBuildConfigMapsReasoningEffort(t *testing.T) {
 				t.Fatalf("unexpected config: %#v", config)
 			}
 		})
+	}
+}
+
+func TestOpenAIChatAssistantReplayIncludesEmptyContent(t *testing.T) {
+	adapter := newOpenAIChatAdapter("openai_chat").(openAIChatAdapter)
+	payload := adapter.buildPayload(Request{
+		Model: "gpt-5.4",
+		Messages: []message.Message{
+			message.AssistantMessage([]message.Block{
+				message.ToolUseBlock("call_1", "read", map[string]any{"path": "README.md"}, nil),
+			}, "openai_chat", "gpt-5.4", "", "", 0, nil),
+		},
+		MaxTokens: 4096,
+	})
+	messages := payload["messages"].([]any)
+	assistant := messages[0].(map[string]any)
+	if content, ok := assistant["content"]; !ok || content != "" {
+		t.Fatalf("unexpected assistant payload: %#v", assistant)
 	}
 }
 

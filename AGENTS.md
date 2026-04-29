@@ -16,7 +16,7 @@ This branch is the Go rewrite of the Python backend on `main`. It tracks Python 
 
 Synced with Python `main` through:
 
-- `cd1dd9f Release 0.7.2`
+- `1635719 Release 0.7.5`
 
 Repository branch model (three-tier, see `docs/branching.md`):
 
@@ -98,7 +98,8 @@ All runtime, persistence, and API data use the same block-based JSON format:
     "provider": "anthropic",
     "model": "claude-sonnet-4-6",
     "stop_reason": "tool_use",
-    "usage": {},
+    "total_tokens": 1456,
+    "context_window": 200000,
     "native": {}
   }
 }
@@ -159,6 +160,7 @@ Do not change these event names or shapes without updating server and web UI.
 - `error` — `message`
 - `permission_request` — `request_id`, `tool_use_id`, `tool_name`, `preview`
 - `permission_resolved` — `request_id`, `decision` (`"allow"` or `"deny"`)
+- `usage` — `total_tokens`, optional `model`, optional `provider`, optional `context_window`
 
 Every event also carries `seq`.
 
@@ -180,6 +182,8 @@ Server:
 - `POST /api/runs/{run_id}/cancel`
 - `POST /api/runs/{run_id}/decide`
 - `GET /api/config`
+- `GET /api/settings`
+- `PUT /api/settings`
 - session CRUD at `/api/sessions`
 - workspace browser at `/api/workspaces`
 
@@ -228,7 +232,7 @@ go -C mycode-go test ./...
 go -C mycode-go vet ./...
 cd mycode-go && golangci-lint run ./...
 go -C mycode-go run ./cmd/mycode-go web --dev
-uv run --no-project python ./scripts/update_models_catalog.py
+uv run --no-project python ./scripts/update_models_catalog.py # only supported way to update models_catalog.json
 ```
 
 Web:

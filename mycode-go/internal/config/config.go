@@ -98,6 +98,11 @@ type loadedConfig struct {
 	ModelOrder    map[string][]string
 }
 
+type ConfigOrder struct {
+	ProviderOrder []string
+	ModelOrder    map[string][]string
+}
+
 type orderedObject struct {
 	order  []string
 	values map[string]json.RawMessage
@@ -196,8 +201,15 @@ func Load(cwd string) (Settings, error) {
 			if value, ok := rawDefault["model"].(string); ok {
 				settings.DefaultModel = strings.TrimSpace(value)
 			}
-			if _, exists := rawDefault["reasoning_effort"]; exists {
-				settings.DefaultReasoningEffort = normalizeReasoningEffort(rawDefault["reasoning_effort"])
+			if value, exists := rawDefault["reasoning_effort"]; exists {
+				if text, ok := value.(string); ok {
+					if err := validateReasoningEffort(text); err != nil {
+						return Settings{}, err
+					}
+					settings.DefaultReasoningEffort = normalizeReasoningEffort(text)
+				} else {
+					settings.DefaultReasoningEffort = ""
+				}
 			}
 			if threshold, ok := parseCompactThreshold(rawDefault["compact_threshold"]); ok {
 				settings.CompactThreshold = threshold
@@ -280,8 +292,152 @@ func DefaultPermissionConfig() PermissionConfig {
 	return PermissionConfig{Level: "safe", Mode: "ask"}
 }
 
+func PermissionLevelOptions() []string {
+	return append([]string(nil), validPermissionLevels...)
+}
+
+func PermissionModeOptions() []string {
+	return append([]string(nil), validPermissionModes...)
+}
+
+// ParseConfigOrder preserves model order lost by map unmarshalling.
+func ParseConfigOrder(data []byte) ConfigOrder {
+	out := ConfigOrder{ModelOrder: map[string][]string{}}
+	root, err := parseOrderedObject(data)
+	if err != nil {
+		return out
+	}
+	rawProviders, ok := root.values["providers"]
+	if !ok {
+		return out
+	}
+	providers, err := parseOrderedObject(rawProviders)
+	if err != nil {
+		return out
+	}
+	out.ProviderOrder = cleanStringOrder(providers.order)
+	for _, name := range providers.order {
+		providerObject, err := parseOrderedObject(providers.values[name])
+		if err != nil {
+			continue
+		}
+		rawModels := bytes.TrimSpace(providerObject.values["models"])
+		if len(rawModels) == 0 {
+			continue
+		}
+		if rawModels[0] == '[' {
+			var models []any
+			if err := json.Unmarshal(rawModels, &models); err != nil {
+				continue
+			}
+			order := make([]string, 0, len(models))
+			for _, model := range models {
+				if text, ok := model.(string); ok {
+					order = append(order, text)
+				}
+			}
+			out.ModelOrder[strings.TrimSpace(name)] = cleanStringOrder(order)
+			continue
+		}
+		models, err := parseOrderedObject(rawModels)
+		if err != nil {
+			continue
+		}
+		out.ModelOrder[strings.TrimSpace(name)] = cleanStringOrder(models.order)
+	}
+	return out
+}
+
+func NormalizeReasoningEffort(value string) (string, error) {
+	if err := validateReasoningEffort(value); err != nil {
+		return "", err
+	}
+	return normalizeReasoningEffort(value), nil
+}
+
+func IsAPIKeyEnvRef(value string) string {
+	text := strings.TrimSpace(value)
+	if !strings.HasPrefix(text, "${") || !strings.HasSuffix(text, "}") {
+		return ""
+	}
+	name := strings.TrimSuffix(strings.TrimPrefix(text, "${"), "}")
+	if name == "" {
+		return ""
+	}
+	for i, r := range name {
+		letter := r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z'
+		digit := r >= '0' && r <= '9'
+		if r == '_' || letter || i > 0 && digit {
+			continue
+		}
+		return ""
+	}
+	return name
+}
+
+var modelOverrideKeys = map[string]struct{}{
+	"context_window":       {},
+	"max_output_tokens":    {},
+	"supports_reasoning":   {},
+	"supports_image_input": {},
+	"supports_pdf_input":   {},
+}
+
+func ValidateGlobalConfig(data any) (map[string]any, error) {
+	if data == nil {
+		return map[string]any{}, nil
+	}
+	raw, ok := data.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("config must be an object")
+	}
+
+	out := map[string]any{}
+	if rawDefault, exists := raw["default"]; exists && rawDefault != nil {
+		cleaned, err := validateDefaultConfig(rawDefault)
+		if err != nil {
+			return nil, err
+		}
+		if len(cleaned) > 0 {
+			out["default"] = cleaned
+		}
+	}
+
+	if rawPermission, exists := raw["permission"]; exists && rawPermission != nil {
+		cleaned, err := validatePermissionPayload(rawPermission)
+		if err != nil {
+			return nil, err
+		}
+		out["permission"] = cleaned
+	}
+
+	if rawProviders, exists := raw["providers"]; exists && rawProviders != nil {
+		providersRaw, ok := rawProviders.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("providers must be an object")
+		}
+		providers := map[string]any{}
+		for name, rawProvider := range providersRaw {
+			cleanedName := strings.TrimSpace(name)
+			if cleanedName == "" {
+				return nil, fmt.Errorf("provider name must be a non-empty string")
+			}
+			cleaned, err := validateProviderPayload(cleanedName, rawProvider)
+			if err != nil {
+				return nil, err
+			}
+			providers[cleanedName] = cleaned
+		}
+		if len(providers) > 0 {
+			out["providers"] = providers
+		}
+	}
+
+	return out, nil
+}
+
 // ResolveProvider resolves one provider alias or built-in provider id.
-func ResolveProvider(settings Settings, providerName, model, apiKey, apiBase, reasoningEffort string) (ResolvedProvider, error) {
+func ResolveProvider(settings Settings, providerName, model, apiKey, apiBase string) (ResolvedProvider, error) {
 	selected := strings.TrimSpace(providerName)
 	if selected == "" {
 		selected = strings.TrimSpace(settings.DefaultProvider)
@@ -293,7 +449,7 @@ func ResolveProvider(settings Settings, providerName, model, apiKey, apiBase, re
 		}
 	}
 	if selected != "" {
-		return resolveProviderRuntime(settings, selected, model, apiKey, apiBase, reasoningEffort)
+		return resolveProviderRuntime(settings, selected, model, apiKey, apiBase)
 	}
 
 	envNames := []string{}
@@ -322,7 +478,7 @@ func AvailableProviders(settings Settings) []ResolvedProvider {
 	names := availableProviderReferences(settings)
 	out := make([]ResolvedProvider, 0, len(names))
 	for _, name := range names {
-		resolved, err := resolveProviderRuntime(settings, name, "", "", "", "")
+		resolved, err := resolveProviderRuntime(settings, name, "", "", "")
 		if err == nil {
 			out = append(out, resolved)
 		}
@@ -383,7 +539,7 @@ func availableProviderReferences(settings Settings) []string {
 	return names
 }
 
-func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiBase, reasoningEffort string) (ResolvedProvider, error) {
+func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiBase string) (ResolvedProvider, error) {
 	configured, hasConfig := settings.Providers[selectedName]
 	providerType := cmp.Or(configured.Type, selectedName)
 	spec, ok := provider.LookupSpec(providerType)
@@ -417,23 +573,13 @@ func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiB
 	supportsImageInput := meta != nil && meta.SupportsImageInput != nil && *meta.SupportsImageInput
 	supportsPDFInput := meta != nil && meta.SupportsPDFInput != nil && *meta.SupportsPDFInput
 
-	// Request values win, then provider config, then global defaults.
-	configuredEffort := normalizeReasoningEffort(reasoningEffort)
-	switch {
-	case configuredEffort != "":
-		// from request
-	case hasConfig && configured.ReasoningEffort != "":
-		configuredEffort = normalizeReasoningEffort(configured.ReasoningEffort)
-	case settings.DefaultReasoningEffort != "":
-		configuredEffort = normalizeReasoningEffort(settings.DefaultReasoningEffort)
-	}
-	if configuredEffort != "" {
-		if !slices.Contains(validReasoningEfforts, configuredEffort) {
-			return ResolvedProvider{}, fmt.Errorf("%w %q; supported: %s",
-				ErrUnsupportedReasoningEffort, configuredEffort, strings.Join(validReasoningEfforts, ", "))
-		}
-		if !supportsReasoning || !spec.SupportsReasoningEffort {
-			configuredEffort = ""
+	reasoningEffort := ""
+	if supportsReasoning && spec.SupportsReasoningEffort {
+		switch {
+		case hasConfig && configured.ReasoningEffort != "":
+			reasoningEffort = configured.ReasoningEffort
+		case settings.DefaultReasoningEffort != "":
+			reasoningEffort = settings.DefaultReasoningEffort
 		}
 	}
 
@@ -474,7 +620,7 @@ func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiB
 		Model:                resolvedModel,
 		APIKey:               resolvedAPIKey,
 		APIBase:              resolvedAPIBase,
-		ReasoningEffort:      configuredEffort,
+		ReasoningEffort:      reasoningEffort,
 		MaxTokens:            maxTokens,
 		ContextWindow:        contextWindow,
 		SupportsReasoning:    supportsReasoning,
@@ -529,7 +675,12 @@ func buildProviders(rawProviders map[string]map[string]any, order []string, mode
 	for _, name := range order {
 		raw := rawProviders[name]
 		rawType, hasExplicitType := raw["type"]
-		providerType := strings.TrimSpace(asString(rawType))
+		providerType := ""
+		if disabled, ok := rawType.(bool); ok && !disabled {
+			providerType = ""
+		} else if rawType != nil {
+			providerType = fmt.Sprint(rawType)
+		}
 		if hasExplicitType && providerType == "" {
 			providerType = "anthropic"
 		}
@@ -553,6 +704,22 @@ func buildProviders(rawProviders map[string]map[string]any, order []string, mode
 			}
 			orderedModels = append([]string(nil), spec.DefaultModels...)
 		}
+		reasoningEffort := ""
+		if value, exists := raw["reasoning_effort"]; exists && value != nil {
+			switch v := value.(type) {
+			case string:
+				if err := validateReasoningEffort(v); err != nil {
+					return nil, err
+				}
+				reasoningEffort = normalizeReasoningEffort(v)
+			case bool:
+				if v {
+					return nil, fmt.Errorf("reasoning_effort must be a string, got %T", value)
+				}
+			default:
+				return nil, fmt.Errorf("reasoning_effort must be a string, got %T", value)
+			}
+		}
 
 		providers[name] = ProviderConfig{
 			Name:            name,
@@ -562,7 +729,7 @@ func buildProviders(rawProviders map[string]map[string]any, order []string, mode
 			APIKey:          strings.TrimSpace(asString(raw["api_key"])),
 			APIKeyEnvVar:    strings.TrimSpace(asString(raw["api_key_env_var"])),
 			BaseURL:         strings.TrimSpace(asString(raw["base_url"])),
-			ReasoningEffort: normalizeReasoningEffort(raw["reasoning_effort"]),
+			ReasoningEffort: reasoningEffort,
 		}
 	}
 	return providers, nil
@@ -605,6 +772,207 @@ func normalizeModels(raw any, order []string) (map[string]ModelConfig, []string)
 	return out, keys
 }
 
+func validateDefaultConfig(value any) (map[string]any, error) {
+	raw, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("default must be an object")
+	}
+
+	out := map[string]any{}
+	for _, key := range []string{"provider", "model"} {
+		value, err := optionalString(raw, key, "default."+key)
+		if err != nil {
+			return nil, err
+		}
+		if value != "" {
+			out[key] = value
+		}
+	}
+
+	if effort, exists := raw["reasoning_effort"]; exists && effort != nil && effort != "" {
+		if err := validateReasoningEffort(effort); err != nil {
+			return nil, err
+		}
+		out["reasoning_effort"] = asString(effort)
+	}
+
+	if threshold, exists := raw["compact_threshold"]; exists && threshold != nil {
+		if disabled, ok := threshold.(bool); ok && !disabled {
+			out["compact_threshold"] = false
+			return out, nil
+		}
+		value, ok := parseCompactThreshold(threshold)
+		if !ok {
+			return nil, fmt.Errorf("default.compact_threshold must be a number in [0, 1] or false")
+		}
+		out["compact_threshold"] = value
+	}
+
+	return out, nil
+}
+
+func validatePermissionPayload(value any) (any, error) {
+	if text, ok := value.(string); ok {
+		return normalizePermissionLevel(text)
+	}
+	raw, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("permission must be a string or object")
+	}
+	out := map[string]any{}
+	if value, exists := raw["level"]; exists {
+		level, err := normalizePermissionLevel(value)
+		if err != nil {
+			return nil, err
+		}
+		out["level"] = level
+	}
+	if value, exists := raw["mode"]; exists {
+		mode, err := normalizePermissionMode(value)
+		if err != nil {
+			return nil, err
+		}
+		out["mode"] = mode
+	}
+	return out, nil
+}
+
+func validateProviderPayload(name string, value any) (map[string]any, error) {
+	raw, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("provider %q must be an object", name)
+	}
+	out := map[string]any{}
+
+	if rawType, exists := raw["type"]; exists && rawType != nil && rawType != "" {
+		providerType, ok := rawType.(string)
+		if !ok {
+			return nil, fmt.Errorf("provider %q: type must be a string", name)
+		}
+		if _, ok := provider.LookupSpec(providerType); !ok {
+			return nil, fmt.Errorf("provider %q: unsupported type %q; supported: %s", name, providerType, strings.Join(supportedProviderTypes(), ", "))
+		}
+		out["type"] = providerType
+	} else if _, ok := provider.LookupSpec(name); !ok {
+		return nil, fmt.Errorf("provider %q must set 'type'", name)
+	}
+
+	for _, key := range []string{"api_key", "base_url"} {
+		value, err := optionalString(raw, key, fmt.Sprintf("provider %q: %s", name, key))
+		if err != nil {
+			return nil, err
+		}
+		if value != "" {
+			out[key] = value
+		}
+	}
+
+	if effort, exists := raw["reasoning_effort"]; exists && effort != nil && effort != "" {
+		if err := validateReasoningEffort(effort); err != nil {
+			return nil, err
+		}
+		out["reasoning_effort"] = asString(effort)
+	}
+
+	if rawModels, exists := raw["models"]; exists && rawModels != nil {
+		models, err := validateModelsPayload(name, rawModels)
+		if err != nil {
+			return nil, err
+		}
+		if len(models) > 0 {
+			out["models"] = models
+		}
+	}
+
+	return out, nil
+}
+
+func validateModelsPayload(name string, value any) (map[string]any, error) {
+	switch raw := value.(type) {
+	case []any:
+		models := map[string]any{}
+		seen := map[string]struct{}{}
+		for _, item := range raw {
+			modelID, ok := item.(string)
+			if !ok || strings.TrimSpace(modelID) == "" {
+				return nil, fmt.Errorf("provider %q: model id must be a non-empty string", name)
+			}
+			cleaned := strings.TrimSpace(modelID)
+			if _, ok := seen[cleaned]; ok {
+				continue
+			}
+			seen[cleaned] = struct{}{}
+			models[cleaned] = map[string]any{}
+		}
+		return models, nil
+	case map[string]any:
+		items := map[string]any{}
+		order := []string{}
+		for modelID, overrides := range raw {
+			if strings.TrimSpace(modelID) == "" {
+				return nil, fmt.Errorf("provider %q: model id must be a non-empty string", name)
+			}
+			cleaned := strings.TrimSpace(modelID)
+			if overrides == nil {
+				items[cleaned] = map[string]any{}
+			} else if rawOverrides, ok := overrides.(map[string]any); ok {
+				modelOverrides := map[string]any{}
+				for key, overrideValue := range rawOverrides {
+					if _, ok := modelOverrideKeys[key]; ok && overrideValue != nil {
+						modelOverrides[key] = overrideValue
+					}
+				}
+				items[cleaned] = modelOverrides
+			} else {
+				return nil, fmt.Errorf("provider %q: model %q config must be an object", name, cleaned)
+			}
+			order = append(order, cleaned)
+		}
+		if len(order) > 0 {
+			slices.Sort(order)
+		}
+		out := map[string]any{}
+		for _, modelID := range order {
+			out[modelID] = items[modelID]
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("provider %q: models must be a list or object", name)
+	}
+}
+
+func optionalString(raw map[string]any, key, label string) (string, error) {
+	value, exists := raw[key]
+	if !exists || value == nil || value == "" {
+		return "", nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", label)
+	}
+	return strings.TrimSpace(text), nil
+}
+
+func validateReasoningEffort(value any) error {
+	if _, ok := value.(string); !ok {
+		return fmt.Errorf("reasoning_effort must be a string, got %T", value)
+	}
+	effort := normalizeReasoningEffort(value)
+	if effort == "" || slices.Contains(validReasoningEfforts, effort) {
+		return nil
+	}
+	return fmt.Errorf("%w %q; supported: auto, %s", ErrUnsupportedReasoningEffort, asString(value), strings.Join(validReasoningEfforts, ", "))
+}
+
+func supportedProviderTypes() []string {
+	out := make([]string, 0, len(provider.Specs()))
+	for _, spec := range provider.Specs() {
+		out = append(out, spec.ID)
+	}
+	slices.Sort(out)
+	return out
+}
+
 func parseCompactThreshold(value any) (float64, bool) {
 	switch v := value.(type) {
 	case nil:
@@ -624,6 +992,12 @@ func parseCompactThreshold(value any) (float64, bool) {
 			return 0, false
 		}
 		return float64(v), true
+	case json.Number:
+		parsed, err := v.Float64()
+		if err != nil || parsed < 0 || parsed > 1 {
+			return 0, false
+		}
+		return parsed, true
 	default:
 		return 0, false
 	}
@@ -678,7 +1052,11 @@ func parsePermissionConfig(value any, current PermissionConfig) (PermissionConfi
 }
 
 func normalizePermissionLevel(value any) (string, error) {
-	level := strings.TrimSpace(strings.ToLower(asString(value)))
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("permission level must be a string, got %T", value)
+	}
+	level := strings.TrimSpace(strings.ToLower(text))
 	if slices.Contains(validPermissionLevels, level) {
 		return level, nil
 	}
@@ -686,7 +1064,11 @@ func normalizePermissionLevel(value any) (string, error) {
 }
 
 func normalizePermissionMode(value any) (string, error) {
-	mode := strings.TrimSpace(strings.ToLower(asString(value)))
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("permission mode must be a string, got %T", value)
+	}
+	mode := strings.TrimSpace(strings.ToLower(text))
 	if slices.Contains(validPermissionModes, mode) {
 		return mode, nil
 	}
@@ -698,8 +1080,8 @@ func parseConfigAPIKey(value any) (literal string, envVar string) {
 	if text == "" {
 		return "", ""
 	}
-	if strings.HasPrefix(text, "${") && strings.HasSuffix(text, "}") {
-		return "", strings.TrimSuffix(strings.TrimPrefix(text, "${"), "}")
+	if ref := IsAPIKeyEnvRef(text); ref != "" {
+		return "", ref
 	}
 	return text, ""
 }
@@ -727,40 +1109,12 @@ func loadConfig(path string) (loadedConfig, bool) {
 		return loadedConfig{}, false
 	}
 
-	loaded := loadedConfig{Raw: raw, ModelOrder: map[string][]string{}}
-	root, err := parseOrderedObject(data)
-	if err != nil {
-		return loaded, true
-	}
-	rawProviders, ok := root.values["providers"]
-	if !ok {
-		return loaded, true
-	}
-	providers, err := parseOrderedObject(rawProviders)
-	if err != nil {
-		return loaded, true
-	}
-	loaded.ProviderOrder = append([]string(nil), providers.order...)
-	for _, name := range providers.order {
-		rawProvider, ok := providers.values[name]
-		if !ok {
-			continue
-		}
-		providerObject, err := parseOrderedObject(rawProvider)
-		if err != nil {
-			continue
-		}
-		rawModels, ok := providerObject.values["models"]
-		if !ok {
-			continue
-		}
-		modelsObject, err := parseOrderedObject(rawModels)
-		if err != nil {
-			continue
-		}
-		loaded.ModelOrder[name] = append([]string(nil), modelsObject.order...)
-	}
-	return loaded, true
+	order := ParseConfigOrder(data)
+	return loadedConfig{
+		Raw:           raw,
+		ProviderOrder: order.ProviderOrder,
+		ModelOrder:    order.ModelOrder,
+	}, true
 }
 
 func parseOrderedObject(data []byte) (orderedObject, error) {
@@ -794,6 +1148,23 @@ func parseOrderedObject(data []byte) (orderedObject, error) {
 		return orderedObject{}, err
 	}
 	return result, nil
+}
+
+func cleanStringOrder(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func defaultInt(value, fallback int) int {

@@ -91,30 +91,23 @@ func NewStore(dataDir string) *Store {
 	}
 }
 
-// ShouldCompact returns whether usage crosses the compact threshold.
-func ShouldCompact(usage map[string]any, contextWindow int, threshold float64) bool {
-	if len(usage) == 0 || contextWindow <= 0 || threshold <= 0 {
+// ShouldCompact returns whether the latest call crosses the compact threshold.
+func ShouldCompact(totalTokens int, contextWindow int, threshold float64) bool {
+	if totalTokens <= 0 || contextWindow <= 0 || threshold <= 0 {
 		return false
 	}
-	inputTokens := asInt(usage["input_tokens"])
-	if inputTokens == 0 {
-		inputTokens = asInt(usage["prompt_tokens"])
-	}
-	if inputTokens == 0 {
-		inputTokens = asInt(usage["prompt_token_count"])
-	}
-	return float64(inputTokens) >= float64(contextWindow)*threshold
+	return float64(totalTokens) >= float64(contextWindow)*threshold
 }
 
 // BuildCompactEvent returns the persisted compact event.
-func BuildCompactEvent(summary, provider, model string, compactedCount int, usage any) message.Message {
+func BuildCompactEvent(summary, provider, model string, compactedCount int, totalTokens int) message.Message {
 	meta := map[string]any{
 		"provider":        provider,
 		"model":           model,
 		"compacted_count": compactedCount,
 	}
-	if usage != nil {
-		meta["usage"] = usage
+	if totalTokens > 0 {
+		meta["total_tokens"] = totalTokens
 	}
 	return message.BuildMessage("compact", []message.Block{message.TextBlock(summary, nil)}, meta)
 }

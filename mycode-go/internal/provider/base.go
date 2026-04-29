@@ -111,7 +111,7 @@ func RepairMessagesForReplay(source []message.Message, supportsImageInput, suppo
 			for _, block := range msg.Content {
 				switch block.Type {
 				case "text", "thinking":
-					if strings.TrimSpace(block.Text) == "" {
+					if strings.TrimSpace(block.Text) == "" && len(blockNativeMeta(block)) == 0 {
 						continue
 					}
 					nextContent = append(nextContent, message.CloneBlock(block))
@@ -315,6 +315,37 @@ func dumpJSON(value any) any {
 func dumpJSONMap(value any) map[string]any {
 	out, _ := dumpJSON(value).(map[string]any)
 	return out
+}
+
+func tokenCount(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case int32:
+		return int(v)
+	case float64:
+		return int(v)
+	case json.Number:
+		parsed, _ := v.Int64()
+		return int(parsed)
+	default:
+		return 0
+	}
+}
+
+func mapTokenCount(value any, keys ...string) int {
+	raw, _ := value.(map[string]any)
+	if raw == nil {
+		return 0
+	}
+	for _, key := range keys {
+		if tokens := tokenCount(raw[key]); tokens > 0 {
+			return tokens
+		}
+	}
+	return 0
 }
 
 func unmarshalJSONMap(raw string) map[string]any {

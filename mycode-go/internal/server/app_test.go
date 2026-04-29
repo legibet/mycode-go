@@ -302,8 +302,8 @@ func TestChatRejectsRewindToCompactSummary(t *testing.T) {
 
 	for _, msg := range []message.Message{
 		message.UserTextMessage("hello", nil),
-		message.AssistantMessage([]message.Block{message.TextBlock("hi", nil)}, "openai", "gpt-5.4", "", "", nil, nil),
-		session.BuildCompactEvent("summary of hello+hi", "p", "m", 2, nil),
+		message.AssistantMessage([]message.Block{message.TextBlock("hi", nil)}, "openai", "gpt-5.4", "", "", 0, nil),
+		session.BuildCompactEvent("summary of hello+hi", "p", "m", 2, 0),
 		message.UserTextMessage("explain X", nil),
 	} {
 		if err := store.AppendMessage(sessionID, msg, "/tmp"); err != nil {
@@ -367,6 +367,113 @@ func TestConfigRoute(t *testing.T) {
 	}
 }
 
+func TestSettingsRouteMasksSecretsAndReportsEnv(t *testing.T) {
+	isolateServerConfigTest(t)
+	home := filepath.Join(t.TempDir(), "home", ".mycode")
+	t.Setenv("MYCODE_HOME", home)
+	t.Setenv("ANTHROPIC_API_KEY", "set")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeServerJSON(t, filepath.Join(home, "config.json"), map[string]any{
+		"providers": map[string]any{
+			"anthropic": map[string]any{"type": "anthropic", "api_key": "sk-secret"},
+			"router":    map[string]any{"type": "openrouter", "api_key": "${MY_CUSTOM_KEY}"},
+		},
+	})
+
+	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload map[string]any
+	decodeBody(t, recorder, &payload)
+	providers := payload["config"].(map[string]any)["providers"].(map[string]any)
+	anthropic := providers["anthropic"].(map[string]any)
+	router := providers["router"].(map[string]any)
+	env := payload["env"].(map[string]any)
+	if anthropic["api_key"] != nil || anthropic["api_key_saved"] != true {
+		t.Fatalf("unexpected anthropic config: %#v", anthropic)
+	}
+	if router["api_key"] != "${MY_CUSTOM_KEY}" || router["api_key_saved"] != false {
+		t.Fatalf("unexpected router config: %#v", router)
+	}
+	if env["ANTHROPIC_API_KEY"] != true || env["MY_CUSTOM_KEY"] != false {
+		t.Fatalf("unexpected env: %#v", env)
+	}
+}
+
+func TestSettingsPutPreservesOrClearsExistingAPIKey(t *testing.T) {
+	isolateServerConfigTest(t)
+	home := filepath.Join(t.TempDir(), "home", ".mycode")
+	t.Setenv("MYCODE_HOME", home)
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "config.json")
+
+	cases := []struct {
+		name     string
+		apiKey   any
+		expected any
+	}{
+		{name: "keep", apiKey: nil, expected: "sk-old"},
+		{name: "clear", apiKey: "", expected: nil},
+		{name: "replace", apiKey: "sk-new", expected: "sk-new"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeServerJSON(t, path, map[string]any{
+				"providers": map[string]any{
+					"anthropic": map[string]any{"type": "anthropic", "api_key": "sk-old"},
+				},
+			})
+			handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+			recorder := performJSON(t, handler, http.MethodPut, "/api/settings", map[string]any{
+				"config": map[string]any{
+					"providers": map[string]any{
+						"anthropic": map[string]any{"type": "anthropic", "api_key": tc.apiKey},
+					},
+				},
+			})
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+			}
+			onDisk := map[string]any{}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &onDisk); err != nil {
+				t.Fatal(err)
+			}
+			providerConfig := onDisk["providers"].(map[string]any)["anthropic"].(map[string]any)
+			if providerConfig["api_key"] != tc.expected {
+				t.Fatalf("unexpected on-disk config: %#v", providerConfig)
+			}
+		})
+	}
+}
+
+func TestSettingsPutRejectsInvalidProviderType(t *testing.T) {
+	isolateServerConfigTest(t)
+	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	recorder := performJSON(t, handler, http.MethodPut, "/api/settings", map[string]any{
+		"config": map[string]any{
+			"providers": map[string]any{
+				"weird": map[string]any{"type": "not-a-real-provider"},
+			},
+		},
+	})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func performJSON(t *testing.T, handler http.Handler, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -380,6 +487,20 @@ func performJSON(t *testing.T, handler http.Handler, method, path string, body a
 	request.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(recorder, request)
 	return recorder
+}
+
+func writeServerJSON(t *testing.T, path string, payload any) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func decodeBody(t *testing.T, recorder *httptest.ResponseRecorder, dst any) {

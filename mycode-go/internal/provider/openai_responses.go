@@ -515,7 +515,7 @@ func (a openAIResponsesAdapter) convertResponse(response responses.Response, out
 		response.Model,
 		response.ID,
 		string(response.Status),
-		dumpJSON(response.Usage),
+		mapTokenCount(dumpJSON(response.Usage), "total_tokens"),
 		nativeMeta,
 	)
 }
