@@ -1,119 +1,129 @@
 # Web UI
 
-`web/` is React + Vite. Its source must stay byte-for-byte synced with Python main's `web/` directory.
-
-## Sync Rule
-
-Do not manually port web changes. Sync by cherry-picking main-branch web commits:
-
-```bash
-git fetch /Users/legibet/projects/mycode main:refs/remotes/local-main/main
-git log --reverse --oneline <last-sync>..refs/remotes/local-main/main -- web/
-git cherry-pick <web-commit>
-```
-
-After syncing, verify:
-
-```bash
-git diff --stat refs/remotes/local-main/main -- web
-```
-
-Expected output is empty, except when the Go branch intentionally carries a documented web-only patch.
+React + Vite app in `web/`. Built assets are copied to `cli/src/mycode_cli/server/static/` for packaged serving.
 
 ## Serving Modes
 
-- `mycode-go web` serves `web/dist` in local development when available, otherwise embedded assets from `mycode-go/internal/server/webdist`.
-- `mycode-go web --dev` serves API only; pair it with `pnpm --dir web dev`.
-- `MYCODE_WEB_DIST` can point the server at a custom built asset directory.
+- `mycode web` — serves packaged web assets from `cli/src/mycode_cli/server/static/`
+- `mycode web --dev` — API only with backend hot reload; no static files (pair with `pnpm --dir web dev`)
 
-Built assets are synced into the Go embed directory with:
+CORS is enabled for all origins in the FastAPI app.
 
-```bash
-pnpm --dir web build
-./scripts/sync_web_dist.sh
-```
-
-## Source Layout
+## Component Structure
 
 ```text
 web/src/
-  App.tsx
-  main.tsx
-  types.ts
+  App.tsx                # root layout, config loading, session init
+  main.tsx               # React entry
+  types.ts               # shared TypeScript types
+  index.css              # Tailwind CSS
   components/
     Chat/
-      InputArea.tsx
-      MessageBubble.tsx
-      MessageList.tsx
-      ToolCard.tsx
-      EditDiff.tsx
-      PermissionPrompt.tsx
-      ReasoningBlock.tsx
-      MarkdownBlock.tsx
-      CodeBlock.tsx
-    Sidebar.tsx
-    WorkspacePicker.tsx
-    MobileHeader.tsx
-    ThemeProvider.tsx
+      MessageList.tsx      # scrollable message history
+      MessageBubble.tsx    # single message, role-based styling
+      CompactMarker.tsx    # inline divider rendered for `compact` markers
+      InputArea.tsx        # user input, image attachment, submit
+      ToolCard.tsx         # tool execution block (start/output/done)
+      ReasoningBlock.tsx   # thinking block — expanded while streaming, collapses after
+      MarkdownBlock.tsx    # markdown rendering
+      CodeBlock.tsx        # syntax-highlighted code
+      HighlightedCode.tsx  # shared highlighting wrapper
+      EditDiff.tsx         # diff view for edit tool results
+    Layout.tsx             # main layout shell
+    Sidebar.tsx            # session list + settings panel
+    WorkspacePicker.tsx    # workspace browser using /api/workspaces
+    MobileHeader.tsx       # mobile nav header
+    ThemeProvider.tsx       # light/dark theme toggle
+    UI/                    # shared UI primitives
   hooks/
-    useChat.ts
-    sessionSelection.ts
+    useChat.ts             # main chat state + SSE streaming
+    sessionSelection.ts    # session picker state
+    *.test.ts(x)           # focused unit and hook tests
+  test/
+    setup.ts               # Vitest + Testing Library setup
   utils/
-    messages.ts
-    storage.ts
-    config.ts
-    highlighter.ts
+    messages.ts            # buildRenderMessages() + streaming message builders
+    highlighter.ts         # code syntax highlighting (shiki)
+    storage.ts             # localStorage helpers
+    config.ts              # reasoning effort defaults + provider normalization with remote config
+    clipboard.ts           # clipboard copy helper
+    cn.ts                  # CSS class merging (clsx + tailwind-merge)
 ```
 
-## Message Rendering Contract
+## Message State Model
 
-The web consumes canonical session messages and SSE events:
+`useChat.ts` stores three related pieces of state:
+
+- `rawMessages: ChatMessage[]` — canonical block messages (mirrors the JSONL timeline; includes `role: "compact"` markers)
+- `messages: RenderMessage[]` — render-ready entries; `RenderMessage = ChatMessage | CompactMarkerMessage`
+- `toolRuntimeById` — ephemeral tool runtime state
+
+`CompactMarkerMessage` (`{kind: "compact-marker", sourceIndex, renderKey}`) carries no content of its own — it just tells `MessageList` to render `CompactMarker` instead of `MessageBubble`. Use the `isCompactMarker(msg)` type guard from `types.ts` to narrow when iterating.
+
+State is managed via `useReducer` with actions:
+
+- `set_messages` — load session history from server
+- `start_turn` — optimistic user message + empty assistant
+- `rewind_and_start_turn` — rewind + optimistic new turn
+- `apply_event` — apply one SSE event to state
+- `rollback` — restore the snapshot taken before an optimistic turn
+
+`buildRenderMessages()` in `utils/messages.ts` is used when loading or rebuilding from canonical messages; it emits a `CompactMarkerMessage` for every `role: "compact"` entry it sees. During streaming the reducer updates both `rawMessages` and `messages` incrementally, and a live `compact` SSE event appends a `{role: "compact"}` entry to `rawMessages` plus the matching marker to `messages`.
+
+Key design decisions:
+
+- Tool results persisted as `user` messages with `tool_result` blocks are visually folded into the preceding assistant message during rendering
+- Each render message and block gets a stable `renderKey` for React reconciliation
+- `sourceIndex` tracks the original message position; rewind uses this index against the visible list, so rewinding to a real user message before a `compact` marker slices the marker away too
+
+Rendering rules:
 
 - `thinking` blocks → `ReasoningBlock` (expanded while streaming, uses `meta.duration_ms` when present)
-- `tool_use` blocks render as `ToolCard`.
-- Persisted `tool_result` user messages are folded into the preceding assistant message.
-- Live tool state is tracked in `ToolRuntime`.
-- `tool_done.output` is the final display/provider text.
-- `tool_done.metadata` carries structured UI payloads such as edit `patch` and line stats.
-- `permission_request` shows the approval panel; `permission_resolved` clears it, including after reconnect.
+- `tool_use` blocks → `ToolCard` (with matching `tool_result` and live runtime folded in)
+- `text` blocks → `MarkdownBlock`
+- `image` blocks → inline image preview in `MessageBubble`
+- `compact-marker` entries → `CompactMarker` (a thin labelled divider, no interactivity)
 
-The reducer keeps:
+## Streaming
 
-- `rawMessages` — canonical block messages
-- `messages` — render-ready messages
-- `toolRuntimeById` — live per-tool state
+1. `POST /api/chat` → get `{run, session}`
+2. `GET /api/runs/{run_id}/stream` → SSE reader
+3. Each `data:` line parsed as `StreamEvent`, dispatched to reducer
+4. `data: [DONE]` ends the stream
+5. On disconnect: attempt session reload recovery via `GET /api/sessions/{id}`
+6. 409 conflict: attach to the existing run's stream
 
-State updates are immutable; keep reducers simple and deterministic.
+A live `compact` SSE event is consumed by the reducer at the position it arrives — the marker lands between whatever just streamed and whatever streams next, mirroring where the agent emitted it (e.g. between two tool calls of the same turn). The server has already persisted the `compact` JSONL record at the same point, so a later session reload renders the same marker without any extra round-trip.
 
-## Streaming Flow
+Streaming state tracking:
 
-1. `POST /api/chat` returns `{run, session}`.
-2. `GET /api/runs/{run_id}/stream` streams SSE.
-3. The reducer applies each event.
-4. On disconnect, the client reloads `GET /api/sessions/{id}`.
-5. If a run is still active, the client applies `pending_events` and reconnects with `after=<last_seq>`.
-6. `409` conflict attaches to the existing active run.
-7. Tool approval decisions are sent with `POST /api/runs/{run_id}/decide`.
+- `streamTokenRef` — incremented to invalidate stale streams
+- `pendingRequestTokenRef` — deduplicates concurrent send requests
+- `activeRunRef` — tracks the current run for cancel
 
-## Local Storage
+Attachments:
 
-The web persists:
+- `InputArea` always shows the attachment button and supports file picker and drag-and-drop
+- UTF-8 text/code/config files are attached as the same text snapshot format used by CLI `@file`
+- Images and PDFs are sent as structured `input` blocks
+- The attachment button uses `image_input_models` and `pdf_input_models`; unsupported pending attachments are cleared on model switch
 
-- provider
-- model
-- cwd
-- reasoningEffort
-- active session per cwd
-- cwd history
+## Config Persistence
 
-Empty reasoning effort and `auto` both mean "do not send a per-request effort override".
+Web UI config is persisted to `localStorage`:
 
-## Verification
+- `provider`, `model`, `cwd`, `reasoningEffort`
+- `auto` and empty string both mean "do not send reasoning_effort to server"
+- The reasoning effort selector in the sidebar only renders when `supports_reasoning_effort` is true AND the current model appears in `reasoning_models` (from `GET /api/config`)
+
+## Build
 
 ```bash
-pnpm --dir web typecheck
-pnpm --dir web test:run
-pnpm --dir web build
+pnpm --dir web test:run                                # run web UI tests once
+pnpm --dir web dev                                     # dev server (Vite HMR)
+uv build --package mycode-cli                          # builds web assets and packages static/ into wheel/sdist
 ```
 
-The Go server should work with the same `web/` source as Python main. Backend differences must be handled in Go API compatibility, not in web forks.
+Built `web/dist/` is **not** the serving path. `cli/hatch_build.py` copies the built output into `cli/src/mycode_cli/server/static/` during `mycode-cli` package builds, which is what gets packaged and served.
+
+If `cli/src/mycode_cli/server/static/` is missing at startup, the server falls back to API-only mode with a warning log.
