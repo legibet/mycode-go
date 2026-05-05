@@ -25,21 +25,6 @@ func TestNewStoreUsesMycodeHome(t *testing.T) {
 	}
 }
 
-func TestShouldCompactRespectsThresholdBoundaries(t *testing.T) {
-	if !ShouldCompact(80000, 100000, 0.8) {
-		t.Fatal("expected compact at threshold")
-	}
-	if ShouldCompact(79999, 100000, 0.8) {
-		t.Fatal("did not expect compact below threshold")
-	}
-	if ShouldCompact(99999, 100000, 0) {
-		t.Fatal("did not expect compact when disabled")
-	}
-	if ShouldCompact(0, 100000, 0.8) || ShouldCompact(50000, 0, 0.8) {
-		t.Fatal("did not expect compact without usage or context")
-	}
-}
-
 func TestCreateSessionDoesNotPrecreateToolOutputDir(t *testing.T) {
 	store := NewStore(t.TempDir())
 	data, err := store.CreateSession("", "/tmp")
@@ -89,6 +74,17 @@ func TestLoadSessionTreatsInvalidMetaAsMissing(t *testing.T) {
 	}
 	if loaded != nil {
 		t.Fatalf("expected missing session, got %#v", loaded)
+	}
+}
+
+func TestNewSessionUsesV7FormatVersion(t *testing.T) {
+	store := NewStore(t.TempDir())
+	data, err := store.CreateSession("s1", "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Session.MessageFormatVersion != 7 {
+		t.Fatalf("expected format version 7, got %d", data.Session.MessageFormatVersion)
 	}
 }
 
@@ -193,7 +189,7 @@ func TestApplyRewindMultipleMarkers(t *testing.T) {
 	}
 }
 
-func TestLoadSessionAppliesLatestCompactSummary(t *testing.T) {
+func TestLoadSessionPreservesCompactMarkersInline(t *testing.T) {
 	store := NewStore(t.TempDir())
 	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
@@ -201,12 +197,12 @@ func TestLoadSessionAppliesLatestCompactSummary(t *testing.T) {
 	}
 	sessionID := data.Session.ID
 
+	compactMarker := message.BuildMessage("compact", []message.Block{message.TextBlock("summary text", nil)}, map[string]any{"provider": "p", "model": "m"})
 	for _, msg := range []message.Message{
 		message.UserTextMessage("hello", nil),
 		message.AssistantMessage([]message.Block{message.TextBlock("hi", nil)}, "p", "m", "", "", 0, nil),
-		BuildCompactEvent("old summary", "p", "m", 2, 0),
+		compactMarker,
 		message.UserTextMessage("next", nil),
-		BuildCompactEvent("new summary", "p", "m", 4, 0),
 		message.AssistantMessage([]message.Block{message.TextBlock("latest reply", nil)}, "p", "m", "", "", 0, nil),
 	} {
 		if err := store.AppendMessage(sessionID, msg, "/tmp"); err != nil {
@@ -218,18 +214,15 @@ func TestLoadSessionAppliesLatestCompactSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Messages) != 3 {
-		t.Fatalf("unexpected compacted messages: %#v", loaded.Messages)
+	if len(loaded.Messages) != 5 {
+		t.Fatalf("expected compact marker preserved inline, got %d messages", len(loaded.Messages))
 	}
-	if loaded.Messages[0].Role != "user" || loaded.Messages[0].Meta["synthetic"] != true || loaded.Messages[0].Content[0].Text != "[Conversation Summary]\n\nnew summary" {
-		t.Fatalf("unexpected summary message: %#v", loaded.Messages[0])
-	}
-	if loaded.Messages[1].Role != "assistant" || loaded.Messages[1].Content[0].Text != compactAck {
-		t.Fatalf("unexpected ack: %#v", loaded.Messages[1])
+	if loaded.Messages[2].Role != "compact" || loaded.Messages[2].Content[0].Text != "summary text" {
+		t.Fatalf("unexpected compact marker: %#v", loaded.Messages[2])
 	}
 }
 
-func TestRewindAfterCompactPreservesSummary(t *testing.T) {
+func TestRewindAfterCompactKeepsCompactMarker(t *testing.T) {
 	store := NewStore(t.TempDir())
 	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
@@ -237,10 +230,11 @@ func TestRewindAfterCompactPreservesSummary(t *testing.T) {
 	}
 	sessionID := data.Session.ID
 
+	compactMarker := message.BuildMessage("compact", []message.Block{message.TextBlock("summary of hello+hi", nil)}, map[string]any{"provider": "p", "model": "m"})
 	for _, msg := range []message.Message{
 		message.UserTextMessage("hello", nil),
 		message.AssistantMessage([]message.Block{message.TextBlock("hi", nil)}, "p", "m", "", "", 0, nil),
-		BuildCompactEvent("summary of hello+hi", "p", "m", 2, 0),
+		compactMarker,
 		message.UserTextMessage("explain X", nil),
 		message.AssistantMessage([]message.Block{message.TextBlock("X is...", nil)}, "p", "m", "", "", 0, nil),
 	} {
@@ -249,15 +243,8 @@ func TestRewindAfterCompactPreservesSummary(t *testing.T) {
 		}
 	}
 
-	loaded, err := store.LoadSession(sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Messages) != 4 {
-		t.Fatalf("unexpected loaded messages: %#v", loaded.Messages)
-	}
-
-	if err := store.AppendRewind(sessionID, 2); err != nil {
+	// Rewind back to "explain X" target (visible index 3).
+	if err := store.AppendRewind(sessionID, 3); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.AppendMessage(sessionID, message.UserTextMessage("explain Y instead", nil), "/tmp"); err != nil {
@@ -268,11 +255,14 @@ func TestRewindAfterCompactPreservesSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reloaded.Messages) != 3 {
+	if len(reloaded.Messages) != 4 {
 		t.Fatalf("unexpected reloaded messages: %#v", reloaded.Messages)
 	}
-	if reloaded.Messages[0].Meta["synthetic"] != true || reloaded.Messages[1].Role != "assistant" || reloaded.Messages[2].Content[0].Text != "explain Y instead" {
-		t.Fatalf("unexpected rewind after compact result: %#v", reloaded.Messages)
+	if reloaded.Messages[2].Role != "compact" {
+		t.Fatalf("expected compact marker at index 2, got %#v", reloaded.Messages[2])
+	}
+	if reloaded.Messages[3].Content[0].Text != "explain Y instead" {
+		t.Fatalf("expected new user message after rewind, got %#v", reloaded.Messages[3])
 	}
 }
 

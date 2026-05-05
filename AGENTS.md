@@ -16,7 +16,7 @@ This branch is the Go rewrite of the Python backend on `main`. It tracks Python 
 
 Synced with Python `main` through:
 
-- `1635719 Release 0.7.5`
+- `ec31daa refactor(sdk): extract compact module from session.py and agent.py`
 
 Repository branch model (three-tier, see `docs/branching.md`):
 
@@ -49,6 +49,7 @@ Core runtime:
 
 - `mycode-go/internal/core/*.go` — transport-agnostic service layer (chat/sessions/runs/config/workspace) shared by HTTP and future adapters; owns `RunManager`
 - `mycode-go/internal/agent/agent.go` — the only orchestration loop
+- `mycode-go/internal/agent/compact.go` — compact threshold check, persisted compact event, lazy projection for provider replay
 - `mycode-go/internal/message/message.go` — canonical message/block format
 - `mycode-go/internal/tools/*.go` — 4 built-in tools and execution
 - `mycode-go/internal/permissions/*.go` — CLI/web tool permission policy and conservative bash classification
@@ -118,19 +119,19 @@ Tool results are stored as a `user` message with `tool_result` blocks. `thinking
 
 `tool_result.output` is provider-facing text. `tool_result.metadata` is structured UI data and is optional. Do not write `model_text` or `display_text`.
 
-Session `meta.json` stores only `cwd`, `title`, `created_at`, `updated_at`, and `message_format_version=6`. The API adds `id` from the directory name. Provider/model/api_base live on per-turn messages, not in session meta.
+Session `meta.json` stores only `cwd`, `title`, `created_at`, `updated_at`, and `message_format_version=7`. The API adds `id` from the directory name. Provider/model/api_base live on per-turn messages, not in session meta.
 
 ## Agent Loop
 
 `mycode-go/internal/agent/agent.go` runs one user turn:
 
 1. Append user message
-2. Stream one provider turn
+2. Stream one provider turn (messages are projected through `ApplyCompactReplay` so the latest `compact` marker becomes a summary continuation, while staying inline in storage)
 3. Persist the assistant message
 4. Execute tool calls locally
 5. Append tool results as a `user` message
 6. Repeat until there are no tool calls
-7. Optionally compact context when usage crosses `compact_threshold`
+7. Optionally compact context when usage crosses `compact_threshold`; the compact event is persisted inline and the next provider call projects it
 
 ## Provider Types
 
@@ -249,8 +250,8 @@ pnpm --dir web build
 Compatibility smoke:
 
 ```bash
-# Python writes a v6 session and Go must read it.
-# Go writes a v6 session and Python must read it.
+# Python writes a v7 session and Go must read it.
+# Go writes a v7 session and Python must read it.
 # Check tool_result.output and edit metadata patch/stats both ways.
 ```
 

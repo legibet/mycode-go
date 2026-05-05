@@ -21,35 +21,10 @@ import (
 
 const (
 	// MessageFormatVersion is the persisted session format version.
-	MessageFormatVersion = 6
+	MessageFormatVersion = 7
 	// DefaultSessionTitle is the initial session title.
 	DefaultSessionTitle = "New chat"
 )
-
-// CompactSummaryPrompt asks the model for a compact continuation summary.
-const CompactSummaryPrompt = "" +
-	"Summarize this conversation to create a continuation document. " +
-	"This summary will replace the full conversation history, so it must " +
-	"capture everything needed to continue the work seamlessly.\n\n" +
-	"Include:\n\n" +
-	"1. **User Requests**: Every distinct request or instruction the user gave, " +
-	"in chronological order. Preserve the user's original wording for ambiguous " +
-	"or nuanced requests.\n" +
-	"2. **Completed Work**: What was accomplished — files created, modified, or " +
-	"deleted; bugs fixed; features added. Include file paths and function names.\n" +
-	"3. **Current State**: The exact state of the work right now — what is working, " +
-	"what is broken, what is partially done.\n" +
-	"4. **Key Decisions**: Important decisions made, constraints discovered, " +
-	"approaches chosen or rejected, and why.\n" +
-	"5. **Next Steps**: What remains to be done, any work that was in progress " +
-	"when this summary was generated.\n\n" +
-	"Rules:\n" +
-	"- Be specific: include file paths, function names, error messages, and " +
-	"concrete details.\n" +
-	"- Do not add suggestions or opinions — only summarize what happened.\n" +
-	"- Keep it concise but complete."
-
-const compactAck = "Understood. I have the context from the conversation summary and will continue the work."
 
 // Meta is the session metadata stored in meta.json.
 type Meta struct {
@@ -89,53 +64,6 @@ func NewStore(dataDir string) *Store {
 		dataDir: dataDir,
 		locks:   map[string]*sync.Mutex{},
 	}
-}
-
-// ShouldCompact returns whether the latest call crosses the compact threshold.
-func ShouldCompact(totalTokens int, contextWindow int, threshold float64) bool {
-	if totalTokens <= 0 || contextWindow <= 0 || threshold <= 0 {
-		return false
-	}
-	return float64(totalTokens) >= float64(contextWindow)*threshold
-}
-
-// BuildCompactEvent returns the persisted compact event.
-func BuildCompactEvent(summary, provider, model string, compactedCount int, totalTokens int) message.Message {
-	meta := map[string]any{
-		"provider":        provider,
-		"model":           model,
-		"compacted_count": compactedCount,
-	}
-	if totalTokens > 0 {
-		meta["total_tokens"] = totalTokens
-	}
-	return message.BuildMessage("compact", []message.Block{message.TextBlock(summary, nil)}, meta)
-}
-
-// ApplyCompact replaces history before the latest compact event with a summary pair.
-func ApplyCompact(messages []message.Message) []message.Message {
-	lastCompact := -1
-	for i, msg := range messages {
-		if msg.Role == "compact" {
-			lastCompact = i
-		}
-	}
-	if lastCompact == -1 {
-		return messages
-	}
-
-	summary := ""
-	for _, block := range messages[lastCompact].Content {
-		if block.Type == "text" {
-			summary = block.Text
-			break
-		}
-	}
-
-	return append([]message.Message{
-		message.BuildMessage("user", []message.Block{message.TextBlock("[Conversation Summary]\n\n"+summary, nil)}, map[string]any{"synthetic": true}),
-		message.BuildMessage("assistant", []message.Block{message.TextBlock(compactAck, nil)}, map[string]any{"synthetic": true}),
-	}, messages[lastCompact+1:]...)
 }
 
 // BuildRewindEvent returns the persisted rewind event.
@@ -262,7 +190,9 @@ func (s *Store) LoadSession(sessionID string) (*Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	visible := ApplyRewind(ApplyCompact(rawMessages))
+	// Visible state = raw JSONL minus rewound tails. `compact` markers stay
+	// inline; the agent substitutes them when calling the provider.
+	visible := ApplyRewind(rawMessages)
 	if err := s.repairInterruptedToolLoop(sessionID, &meta, &visible); err != nil {
 		return nil, err
 	}

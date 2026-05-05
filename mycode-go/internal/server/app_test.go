@@ -300,10 +300,11 @@ func TestChatRejectsRewindToCompactSummary(t *testing.T) {
 	}
 	sessionID := created.Session.ID
 
+	compactMarker := message.BuildMessage("compact", []message.Block{message.TextBlock("summary of hello+hi", nil)}, map[string]any{"provider": "p", "model": "m"})
 	for _, msg := range []message.Message{
 		message.UserTextMessage("hello", nil),
 		message.AssistantMessage([]message.Block{message.TextBlock("hi", nil)}, "openai", "gpt-5.4", "", "", 0, nil),
-		session.BuildCompactEvent("summary of hello+hi", "p", "m", 2, 0),
+		compactMarker,
 		message.UserTextMessage("explain X", nil),
 	} {
 		if err := store.AppendMessage(sessionID, msg, "/tmp"); err != nil {
@@ -311,6 +312,8 @@ func TestChatRejectsRewindToCompactSummary(t *testing.T) {
 		}
 	}
 
+	// Targeting the inline compact marker (index 2) is invalid: rewind_to
+	// must reference a real user prompt.
 	recorder := performJSON(
 		t,
 		handler,
@@ -319,7 +322,7 @@ func TestChatRejectsRewindToCompactSummary(t *testing.T) {
 		map[string]any{
 			"session_id": sessionID,
 			"message":    "retry",
-			"rewind_to":  0,
+			"rewind_to":  2,
 			"provider":   "openai",
 			"model":      "gpt-5.4",
 			"cwd":        "/tmp",

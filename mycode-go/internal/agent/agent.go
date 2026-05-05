@@ -8,7 +8,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
 	"github.com/legibet/mycode-go/internal/config"
@@ -16,7 +15,6 @@ import (
 	"github.com/legibet/mycode-go/internal/permissions"
 	"github.com/legibet/mycode-go/internal/prompt"
 	"github.com/legibet/mycode-go/internal/provider"
-	"github.com/legibet/mycode-go/internal/session"
 	"github.com/legibet/mycode-go/internal/tools"
 )
 
@@ -63,6 +61,7 @@ type Agent struct {
 	Project            string
 	SessionDir         string
 	SessionID          string
+	TranscriptPath     string
 	APIKey             string
 	APIBase            string
 	MaxTurns           int
@@ -138,6 +137,7 @@ func New(opts Options) (*Agent, error) {
 		Project:            project,
 		SessionDir:         sessionDir,
 		SessionID:          sessionID,
+		TranscriptPath:     filepath.Join(sessionDir, "messages.jsonl"),
 		APIKey:             opts.APIKey,
 		APIBase:            opts.APIBase,
 		MaxTurns:           opts.MaxTurns,
@@ -245,7 +245,9 @@ func (a *Agent) Chat(ctx context.Context, userInput message.Message, onPersist P
 			if ctx.Err() != nil {
 				return
 			}
-			a.compactIfNeeded(ctx, persist, out, totalTokens)
+			if a.compactIfNeeded(ctx, persist, out, totalTokens) {
+				return
+			}
 			if len(toolCalls) == 0 {
 				return
 			}
@@ -261,7 +263,7 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 		Provider:           a.Provider,
 		Model:              a.Model,
 		SessionID:          a.SessionID,
-		Messages:           a.Messages,
+		Messages:           ApplyCompactReplay(a.Messages, a.TranscriptPath),
 		System:             a.System,
 		Tools:              toolSpecs(a.Tools.Definitions()),
 		MaxTokens:          a.MaxTokens,
@@ -445,13 +447,16 @@ func (a *Agent) runTool(toolCall message.Block, out chan<- Event) tools.Result {
 	}
 }
 
-func (a *Agent) compactIfNeeded(ctx context.Context, persist PersistFunc, out chan<- Event, totalTokens int) {
-	if !session.ShouldCompact(totalTokens, a.ContextWindow, a.CompactThreshold) {
-		return
+// compactIfNeeded triggers context compaction when the latest turn crosses
+// the threshold. Returns true when the agent loop should stop (cancellation).
+// Provider failures during compaction are swallowed: the next turn either
+// retries or surfaces the error from phase 1.
+func (a *Agent) compactIfNeeded(ctx context.Context, persist PersistFunc, out chan<- Event, totalTokens int) bool {
+	if !ShouldCompact(totalTokens, a.ContextWindow, a.CompactThreshold) {
+		return false
 	}
 
-	beforeCount := len(a.Messages)
-	compactMessages := append(slices.Clone(a.Messages), message.UserTextMessage(session.CompactSummaryPrompt, nil))
+	compactMessages := append(ApplyCompactReplay(a.Messages, a.TranscriptPath), message.UserTextMessage(CompactSummaryPrompt, nil))
 	req := provider.Request{
 		Provider:           a.Provider,
 		Model:              a.Model,
@@ -470,27 +475,25 @@ func (a *Agent) compactIfNeeded(ctx context.Context, persist PersistFunc, out ch
 		if event.Type == "message_done" {
 			summary = event.Msg
 		}
-		if event.Type == "provider_error" {
-			return
-		}
 	}
-	if ctx.Err() != nil || summary == nil {
-		return
+	if ctx.Err() != nil {
+		a.emitError(out, "cancelled")
+		return true
+	}
+	if summary == nil {
+		return false
 	}
 	summaryText := message.FlattenText(*summary, false)
 	if summaryText == "" {
-		return
+		return false
 	}
-	compactEvent := session.BuildCompactEvent(summaryText, a.Provider, a.Model, beforeCount, asInt(summary.Meta["total_tokens"]))
+	compactEvent := BuildCompactEvent(summaryText, a.Provider, a.Model, asInt(summary.Meta["total_tokens"]))
 	if err := persist(compactEvent); err != nil {
-		return
+		return false
 	}
 	a.Messages = append(a.Messages, compactEvent)
-	a.Messages = session.ApplyCompact(a.Messages)
-	out <- Event{Type: "compact", Data: map[string]any{
-		"message":         fmt.Sprintf("Context compacted (%d messages -> summary)", beforeCount),
-		"compacted_count": beforeCount,
-	}}
+	out <- Event{Type: "compact", Data: map[string]any{}}
+	return false
 }
 
 func toolSpecs(specs []tools.ToolSpec) []map[string]any {

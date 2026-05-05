@@ -142,6 +142,9 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 	}
 
 	cwd := RequestCWD(req.CWD)
+	if !isExistingDir(cwd) {
+		return ChatResponse{}, statusError(http.StatusBadRequest, fmt.Sprintf("Working directory does not exist: %s", cwd))
+	}
 	settings, err := config.Load(cwd)
 	if err != nil {
 		return ChatResponse{}, statusError(http.StatusInternalServerError, err.Error())
@@ -165,7 +168,10 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		if err != nil {
 			return ChatResponse{}, statusError(http.StatusBadRequest, err.Error())
 		}
-		if effort != "" {
+		// Per-request overrides honor the same gate as configured defaults:
+		// only send reasoning_effort when the model supports reasoning and the
+		// adapter exposes the effort knob.
+		if effort != "" && resolved.SupportsReasoning && resolved.SupportsEffortToggle {
 			resolved.ReasoningEffort = effort
 		}
 	}
@@ -373,6 +379,7 @@ func (s *Service) Config(cwd string) (map[string]any, error) {
 		"default_reasoning_effort": ResponseReasoningEffort(settings.DefaultReasoningEffort),
 		"reasoning_effort_options": ReasoningEffortOptions,
 		"cwd":                      cwd,
+		"cwd_exists":               isExistingDir(cwd),
 		"project":                  settings.Project,
 		"config_paths":             settings.ConfigPaths,
 	}, nil
@@ -417,7 +424,11 @@ func (s *Service) UpdateSettings(req SettingsRequest) (map[string]any, error) {
 }
 
 func (s *Service) CreateSession(req SessionCreateRequest) (session.Data, error) {
-	data, err := s.store.CreateSession("", RequestCWD(req.CWD))
+	cwd := RequestCWD(req.CWD)
+	if !isExistingDir(cwd) {
+		return session.Data{}, statusError(http.StatusBadRequest, fmt.Sprintf("Working directory does not exist: %s", cwd))
+	}
+	data, err := s.store.CreateSession("", cwd)
 	if err != nil {
 		return session.Data{}, statusError(http.StatusInternalServerError, err.Error())
 	}
@@ -457,12 +468,12 @@ func (s *Service) LoadSession(sessionID string) (SessionResponse, error) {
 	}
 	if data != nil {
 		resp.Session = data.Session
-		resp.Messages = data.Messages
+		resp.Messages = redactDocumentData(data.Messages)
 	}
 
 	if active := s.runs.snapshotSession(sessionID); active != nil {
 		resp.ActiveRun = active.Run
-		resp.Messages = active.Messages
+		resp.Messages = redactDocumentData(active.Messages)
 		resp.PendingEvents = active.PendingEvents
 	}
 
@@ -678,9 +689,6 @@ func isRealUserMessage(msg message.Message) bool {
 	if msg.Role != "user" {
 		return false
 	}
-	if msg.Meta["synthetic"] == true {
-		return false
-	}
 	for _, block := range msg.Content {
 		if block.Type == "image" || block.Type == "document" {
 			return true
@@ -690,6 +698,38 @@ func isRealUserMessage(msg message.Message) bool {
 		}
 	}
 	return false
+}
+
+func isExistingDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// redactDocumentData strips the base64 payload from `document` blocks so the
+// API does not leak large PDF binaries on every reload.
+func redactDocumentData(messages []message.Message) []message.Message {
+	out := make([]message.Message, 0, len(messages))
+	for _, msg := range messages {
+		hasDocument := false
+		for _, block := range msg.Content {
+			if block.Type == "document" && block.Data != "" {
+				hasDocument = true
+				break
+			}
+		}
+		if !hasDocument {
+			out = append(out, msg)
+			continue
+		}
+		clone := message.Clone(msg)
+		for i := range clone.Content {
+			if clone.Content[i].Type == "document" {
+				clone.Content[i].Data = ""
+			}
+		}
+		out = append(out, clone)
+	}
+	return out
 }
 
 func readRawConfig(path string) (map[string]any, config.ConfigOrder, bool, error) {
