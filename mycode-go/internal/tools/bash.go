@@ -7,10 +7,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 )
+
+// trimTailLines bounds tailLines to the most recent DefaultMaxLines entries.
+func trimTailLines(lines []string) []string {
+	if len(lines) <= DefaultMaxLines {
+		return lines
+	}
+	return slices.Clone(lines[len(lines)-DefaultMaxLines:])
+}
 
 // Bash runs a shell command and streams output.
 func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput OutputCallback) Result {

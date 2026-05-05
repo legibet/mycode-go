@@ -59,7 +59,7 @@ func (a *completeAdapter) StreamTurn(_ context.Context, _ provider.Request) <-ch
 func newTestAgent(t *testing.T, adapter provider.Adapter) *agentpkg.Agent {
 	t.Helper()
 	dir := t.TempDir()
-	agent, err := agentpkg.New(agentpkg.Options{
+	agent, err := agentpkg.New(agentpkg.Agent{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/legibet/mycode-go/internal/session"
@@ -11,7 +12,7 @@ import (
 
 func sessionCommand(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "session subcommand is required")
+		_, _ = fmt.Fprintln(os.Stderr, "session subcommand is required")
 		return 2
 	}
 
@@ -22,10 +23,15 @@ func sessionCommand(args []string) int {
 		printSessionUsage(os.Stdout)
 		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "unknown session subcommand: %s\n", args[0])
+		_, _ = fmt.Fprintf(os.Stderr, "unknown session subcommand: %s\n", args[0])
 		printSessionUsage(os.Stderr)
 		return 2
 	}
+}
+
+func printSessionUsage(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "Usage:")
+	_, _ = fmt.Fprintf(w, "  %s session list [--all]\n", cliName)
 }
 
 func sessionListCommand(args []string) int {
@@ -42,7 +48,7 @@ func sessionListCommand(args []string) int {
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
@@ -53,7 +59,7 @@ func sessionListCommand(args []string) int {
 	}
 	sessions, err := store.ListSessions(filterCWD)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 

@@ -293,18 +293,6 @@ func atomicWriteText(path, content, newline string) error {
 	return os.Rename(tmp, path)
 }
 
-func trimTailLines(lines []string) []string {
-	if len(lines) <= DefaultMaxLines {
-		return lines
-	}
-	return slices.Clone(lines[len(lines)-DefaultMaxLines:])
-}
-
 func shellQuote(text string) string {
 	return "'" + strings.ReplaceAll(text, "'", "'\"'\"'") + "'"
-}
-
-// MIMEByExtension returns a MIME type using extension fallback.
-func MIMEByExtension(path string) string {
-	return mime.TypeByExtension(filepath.Ext(path))
 }

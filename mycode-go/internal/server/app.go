@@ -2,12 +2,18 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/legibet/mycode-go/internal/core"
 	"github.com/legibet/mycode-go/internal/session"
@@ -85,7 +91,301 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.serveStatic(w, r)
 }
 
-// HTTP helpers used across all handlers.
+// Chat / runs
+
+func (a *app) handleChat(w http.ResponseWriter, r *http.Request) {
+	var req core.ChatRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeDetailError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, err := a.svc.StartChat(req)
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *app) handleRunStream(w http.ResponseWriter, r *http.Request) {
+	runID := r.PathValue("run_id")
+
+	after := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("after")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			writeDetailError(w, http.StatusBadRequest, "after must be a non-negative integer")
+			return
+		}
+		after = value
+	}
+	pending, finished, err := a.svc.RunEventsAfter(runID, after)
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeDetailError(w, http.StatusInternalServerError, "streaming is not supported")
+		return
+	}
+
+	headers := w.Header()
+	headers.Set("Content-Type", "text/event-stream")
+	headers.Set("Cache-Control", "no-cache")
+	headers.Set("Connection", "keep-alive")
+	headers.Set("X-Accel-Buffering", "no") // disable nginx buffering
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	lastSeq := after
+	for {
+		if pending == nil {
+			pending, finished, err = a.svc.RunEventsAfter(runID, lastSeq)
+			if err != nil {
+				return
+			}
+		}
+		for _, event := range pending {
+			if err := writeSSE(w, event); err != nil {
+				return
+			}
+			lastSeq = eventSeq(event, lastSeq)
+			flusher.Flush()
+		}
+
+		if finished {
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			flusher.Flush()
+			return
+		}
+
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			pending = nil
+		}
+	}
+}
+
+func (a *app) handleCancelRun(w http.ResponseWriter, r *http.Request) {
+	resp, err := a.svc.CancelRun(r.PathValue("run_id"))
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *app) handleDecideRun(w http.ResponseWriter, r *http.Request) {
+	var req core.DecideRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeDetailError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, err := a.svc.DecideRun(r.PathValue("run_id"), req)
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// Config / settings
+
+func (a *app) handleConfig(w http.ResponseWriter, r *http.Request) {
+	resp, err := a.svc.Config(r.URL.Query().Get("cwd"))
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *app) handleSettings(w http.ResponseWriter, r *http.Request) {
+	resp, err := a.svc.Settings()
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *app) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	var req core.SettingsRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeDetailError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, err := a.svc.UpdateSettings(req)
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// Sessions
+
+func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	var req core.SessionCreateRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeDetailError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, err := a.svc.CreateSession(req)
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *app) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	resp, err := a.svc.ListSessions(r.URL.Query().Get("cwd"))
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *app) handleLoadSession(w http.ResponseWriter, r *http.Request) {
+	resp, err := a.svc.LoadSession(r.PathValue("session_id"))
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *app) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	if err := a.svc.DeleteSession(r.PathValue("session_id")); err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+func (a *app) handleClearSession(w http.ResponseWriter, r *http.Request) {
+	if err := a.svc.ClearSession(r.PathValue("session_id")); err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+// Workspaces
+
+func (a *app) handleWorkspaceRoots(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, a.svc.WorkspaceRoots())
+}
+
+func (a *app) handleWorkspaceBrowse(w http.ResponseWriter, r *http.Request) {
+	resp, err := a.svc.WorkspaceBrowse(r.URL.Query().Get("root"), r.URL.Query().Get("path"))
+	if err != nil {
+		writeCoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *app) handleWorkspaceCWD(w http.ResponseWriter, _ *http.Request) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		writeDetailError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_, statErr := os.Stat(cwd)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cwd":    cwd,
+		"exists": statErr == nil,
+	})
+}
+
+// Static file serving (SPA fallback to index.html)
+
+func (a *app) serveStatic(w http.ResponseWriter, r *http.Request) {
+	if a.webFS == nil {
+		http.NotFound(w, r)
+		return
+	}
+	requested := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+	if requested == "." || requested == "/" {
+		requested = "index.html"
+	}
+	if a.serveStaticFile(w, r, requested) {
+		return
+	}
+	// SPA fallback so client-side routes resolve to index.html.
+	if a.serveStaticFile(w, r, "index.html") {
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func (a *app) serveStaticFile(w http.ResponseWriter, r *http.Request, name string) bool {
+	info, err := fs.Stat(a.webFS, name)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	http.ServeFileFS(w, r, a.webFS, name)
+	return true
+}
+
+// defaultWebRoot picks the first existing webdist directory: explicit arg,
+// $MYCODE_WEB_DIST, or well-known relative paths. Returns "" so callers fall
+// back to the embedded FS.
+func defaultWebRoot(webRoot string) string {
+	if resolved := resolveWebRoot(webRoot); resolved != "" {
+		return resolved
+	}
+	if raw := strings.TrimSpace(os.Getenv("MYCODE_WEB_DIST")); raw != "" {
+		if resolved := resolveWebRoot(raw); resolved != "" {
+			return resolved
+		}
+	}
+
+	var candidates []string
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(cwd, "web", "dist"))
+		candidates = append(candidates, filepath.Join(cwd, "..", "web", "dist"))
+	}
+	if _, filename, _, ok := runtime.Caller(0); ok {
+		moduleRoot := filepath.Dir(filepath.Dir(filepath.Dir(filename)))
+		repoRoot := filepath.Dir(moduleRoot)
+		candidates = append(candidates, filepath.Join(moduleRoot, "web", "dist"))
+		candidates = append(candidates, filepath.Join(repoRoot, "web", "dist"))
+	}
+	for _, candidate := range candidates {
+		if resolved := resolveWebRoot(candidate); resolved != "" {
+			return resolved
+		}
+	}
+	return ""
+}
+
+func resolveWebRoot(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	resolved := raw
+	if absolute, err := filepath.Abs(raw); err == nil {
+		resolved = absolute
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	return resolved
+}
+
+// HTTP utilities
 
 func decodeJSON(r *http.Request, dst any) error {
 	defer func() { _ = r.Body.Close() }()
@@ -98,13 +398,23 @@ func decodeJSON(r *http.Request, dst any) error {
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	encoder := json.NewEncoder(w)
-	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(value)
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(value)
 }
 
 func writeDetailError(w http.ResponseWriter, status int, detail any) {
 	writeJSON(w, status, map[string]any{"detail": detail})
+}
+
+// writeCoreError maps a core.StatusError to its HTTP status; falls back to 500.
+func writeCoreError(w http.ResponseWriter, err error) {
+	var statusErr *core.StatusError
+	if errors.As(err, &statusErr) {
+		writeDetailError(w, statusErr.Status, statusErr.Detail)
+		return
+	}
+	writeDetailError(w, http.StatusInternalServerError, err.Error())
 }
 
 func writeSSE(w io.Writer, payload any) error {
@@ -117,12 +427,13 @@ func writeSSE(w io.Writer, payload any) error {
 }
 
 func setCORSHeaders(w http.ResponseWriter) {
-	headers := w.Header()
-	headers.Set("Access-Control-Allow-Origin", "*")
-	headers.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	headers.Set("Access-Control-Allow-Headers", "*")
+	h := w.Header()
+	h.Set("Access-Control-Allow-Origin", "*")
+	h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	h.Set("Access-Control-Allow-Headers", "*")
 }
 
+// eventSeq falls back to the previous value so SSE replay sequence stays monotonic.
 func eventSeq(event map[string]any, fallback int) int {
 	switch v := event["seq"].(type) {
 	case int:

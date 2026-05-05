@@ -31,12 +31,12 @@ func webCommand(args []string) int {
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	settings, err := config.Load(cwd)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
@@ -52,9 +52,9 @@ func webCommand(args []string) int {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	fmt.Fprintf(os.Stderr, "Listening on http://%s\n", addr)
+	_, _ = fmt.Fprintf(os.Stderr, "Listening on http://%s\n", addr)
 	if err := serverInstance.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	return 0

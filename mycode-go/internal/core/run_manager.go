@@ -1,10 +1,11 @@
+// RunManager owns one in-flight chat per session and brokers permission
+// prompts so /api/runs/{id}/stream can replay events to clients that
+// reconnect mid-run.
+
 package core
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"fmt"
 	"maps"
 	"slices"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	agentpkg "github.com/legibet/mycode-go/internal/agent"
 	"github.com/legibet/mycode-go/internal/message"
 	"github.com/legibet/mycode-go/internal/permissions"
+	"github.com/legibet/mycode-go/internal/util"
 )
 
 type runStatus string
@@ -23,19 +25,21 @@ const (
 	runStatusFailed    runStatus = "failed"
 	runStatusCancelled runStatus = "cancelled"
 
+	// finishedRunTTL keeps completed runs addressable so a client reconnecting
+	// right after completion can still pull the final events.
 	finishedRunTTL = 5 * time.Minute
 )
 
-// EventPayload is emitted by desktop adapters for live run updates.
+// EventPayload is what desktop adapters consume.
 type EventPayload struct {
 	RunID     string         `json:"run_id"`
 	SessionID string         `json:"session_id"`
 	Event     map[string]any `json:"event"`
 }
 
-// EventSink receives normalized run events after they are buffered.
 type EventSink func(EventPayload)
 
+// ActiveRunError signals the session already has a run in flight.
 type ActiveRunError struct {
 	RunID string
 }
@@ -98,6 +102,7 @@ func newRunState(id, sessionID string, userMessage message.Message, baseMessages
 	}
 }
 
+// infoLocked: caller must already hold r.mu.
 func (r *runState) infoLocked() map[string]any {
 	out := map[string]any{
 		"id":         r.id,
@@ -139,6 +144,7 @@ func (r *runState) removeDecision(requestID string) {
 	delete(r.pendingDecisions, requestID)
 }
 
+// resolveDecision is non-blocking; returns false if no reviewer is waiting.
 func (r *runState) resolveDecision(requestID string, decision permissions.ReviewDecision) bool {
 	r.mu.RLock()
 	ch := r.pendingDecisions[requestID]
@@ -154,6 +160,8 @@ func (r *runState) resolveDecision(requestID string, decision permissions.Review
 	}
 }
 
+// denyPendingDecisions unblocks every waiting reviewer on cancel so the
+// agent goroutine can exit.
 func (r *runState) denyPendingDecisions() {
 	r.mu.RLock()
 	channels := slices.Collect(maps.Values(r.pendingDecisions))
@@ -166,6 +174,7 @@ func (r *runState) denyPendingDecisions() {
 	}
 }
 
+// finish records terminal status and returns the synthetic "done" event for SSE.
 func (r *runState) finish(status runStatus, errText string) map[string]any {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -201,7 +210,6 @@ func (r *runState) snapshot() runSnapshot {
 	defer r.mu.RUnlock()
 
 	messages := append(message.CloneMessages(r.baseMessages), message.Clone(r.userMessage))
-
 	events := make([]map[string]any, 0, len(r.events))
 	for _, event := range r.events {
 		events = append(events, event.payload())
@@ -229,6 +237,7 @@ func NewRunManager(sink EventSink) *RunManager {
 	}
 }
 
+// startRun returns ActiveRunError if the session already has a run in flight.
 func (m *RunManager) startRun(sessionID string, userMessage message.Message, baseMessages []message.Message, agent *agentpkg.Agent, onPersist func(message.Message) error) (map[string]any, error) {
 	m.pruneFinishedRuns()
 
@@ -239,7 +248,7 @@ func (m *RunManager) startRun(sessionID string, userMessage message.Message, bas
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	state := newRunState(newID(), sessionID, userMessage, baseMessages, agent, cancel)
+	state := newRunState(util.RandomHex16(), sessionID, userMessage, baseMessages, agent, cancel)
 	m.activeBySession[sessionID] = state
 	m.runsByID[state.id] = state
 
@@ -278,6 +287,8 @@ func (m *RunManager) cancelRun(runID string) map[string]any {
 	return state.info()
 }
 
+// requestDecision blocks the agent goroutine until the UI POSTs to
+// /runs/{id}/decide (or ctx is cancelled).
 func (m *RunManager) requestDecision(ctx context.Context, sessionID string, request permissions.ReviewRequest) permissions.ReviewDecision {
 	m.mu.Lock()
 	state := m.activeBySession[sessionID]
@@ -286,7 +297,7 @@ func (m *RunManager) requestDecision(ctx context.Context, sessionID string, requ
 		return permissions.ReviewDeny
 	}
 
-	requestID := newID()
+	requestID := util.RandomHex16()
 	ch := make(chan permissions.ReviewDecision, 1)
 	state.addDecision(requestID, ch)
 
@@ -331,6 +342,8 @@ func (m *RunManager) hasActiveRun(sessionID string) bool {
 	return m.activeBySession[sessionID] != nil
 }
 
+// pendingAfter returns (events, finished, found); the third bool
+// distinguishes "run not found" from "no new events yet".
 func (m *RunManager) pendingAfter(runID string, after int) ([]map[string]any, bool, bool) {
 	state := m.getRun(runID)
 	if state == nil {
@@ -391,12 +404,4 @@ func (m *RunManager) pruneFinishedRuns() {
 			delete(m.runsByID, runID)
 		}
 	}
-}
-
-func newID() string {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(buf)
 }

@@ -1,12 +1,14 @@
 package message
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
 )
 
-// Block is the canonical content block persisted in sessions and used in API responses.
+// Block is one canonical content block. Persisted in sessions and used in
+// API responses; provider adapters translate it to/from native shapes.
 type Block struct {
 	Type      string         `json:"type"`
 	Text      string         `json:"text,omitempty"`
@@ -30,14 +32,6 @@ type Message struct {
 	Meta    map[string]any `json:"meta,omitempty"`
 }
 
-// Bool returns a stable pointer for JSON optional booleans.
-//
-//go:fix inline
-func Bool(v bool) *bool {
-	return new(v)
-}
-
-// TextBlock returns a plain text block.
 func TextBlock(text string, meta map[string]any) Block {
 	b := Block{Type: "text", Text: text}
 	if len(meta) > 0 {
@@ -46,7 +40,6 @@ func TextBlock(text string, meta map[string]any) Block {
 	return b
 }
 
-// ThinkingBlock returns a reasoning block.
 func ThinkingBlock(text string, meta map[string]any) Block {
 	b := Block{Type: "thinking", Text: text}
 	if len(meta) > 0 {
@@ -55,7 +48,6 @@ func ThinkingBlock(text string, meta map[string]any) Block {
 	return b
 }
 
-// ImageBlock returns an image block.
 func ImageBlock(data, mimeType, name string, meta map[string]any) Block {
 	b := Block{Type: "image", Data: data, MIMEType: mimeType, Name: name}
 	if len(meta) > 0 {
@@ -64,7 +56,6 @@ func ImageBlock(data, mimeType, name string, meta map[string]any) Block {
 	return b
 }
 
-// DocumentBlock returns a document block.
 func DocumentBlock(data, mimeType, name string, meta map[string]any) Block {
 	b := Block{Type: "document", Data: data, MIMEType: mimeType, Name: name}
 	if len(meta) > 0 {
@@ -73,8 +64,8 @@ func DocumentBlock(data, mimeType, name string, meta map[string]any) Block {
 	return b
 }
 
-// ToolUseBlock returns a tool use block. Input is always a non-nil map to
-// match the Python tool_use_block contract (`dict(input or {})`).
+// ToolUseBlock forces Input to a non-nil map to match the Python
+// tool_use_block contract (`dict(input or {})`).
 func ToolUseBlock(id, name string, input map[string]any, meta map[string]any) Block {
 	inputCopy := maps.Clone(input)
 	if inputCopy == nil {
@@ -87,7 +78,6 @@ func ToolUseBlock(id, name string, input map[string]any, meta map[string]any) Bl
 	return block
 }
 
-// ToolResultBlock returns a tool result block.
 func ToolResultBlock(toolUseID, output string, metadata map[string]any, isError bool, content []Block, meta map[string]any) Block {
 	block := Block{
 		Type:      "tool_result",
@@ -107,7 +97,6 @@ func ToolResultBlock(toolUseID, output string, metadata map[string]any, isError 
 	return block
 }
 
-// BuildMessage returns a canonical message.
 func BuildMessage(role string, blocks []Block, meta map[string]any) Message {
 	msg := Message{Role: role}
 	if len(blocks) > 0 {
@@ -119,12 +108,12 @@ func BuildMessage(role string, blocks []Block, meta map[string]any) Message {
 	return msg
 }
 
-// UserTextMessage returns a text-only user message.
 func UserTextMessage(text string, meta map[string]any) Message {
 	return BuildMessage("user", []Block{TextBlock(text, nil)}, meta)
 }
 
-// AssistantMessage returns a normalized assistant message.
+// AssistantMessage normalizes provider response data into the canonical
+// assistant message shape, dropping zero-valued meta keys.
 func AssistantMessage(blocks []Block, provider, model, providerMessageID, stopReason string, totalTokens int, nativeMeta map[string]any) Message {
 	meta := map[string]any{}
 	if provider != "" {
@@ -148,7 +137,26 @@ func AssistantMessage(blocks []Block, provider, model, providerMessageID, stopRe
 	return BuildMessage("assistant", blocks, meta)
 }
 
-// FlattenText returns readable text while skipping attachment snapshots.
+// ValidateMediaSupport rejects user input that includes image or document
+// blocks the active model cannot consume.
+func ValidateMediaSupport(msg Message, supportsImage, supportsPDF bool) error {
+	for _, block := range msg.Content {
+		switch block.Type {
+		case "image":
+			if !supportsImage {
+				return fmt.Errorf("current model does not support image input")
+			}
+		case "document":
+			if !supportsPDF {
+				return fmt.Errorf("current model does not support PDF input")
+			}
+		}
+	}
+	return nil
+}
+
+// FlattenText returns plain text. Skips attachment blocks (large embedded
+// payloads). Includes thinking blocks only when asked.
 func FlattenText(msg Message, includeThinking bool) string {
 	parts := make([]string, 0, len(msg.Content))
 	for _, block := range msg.Content {
@@ -172,7 +180,9 @@ func FlattenText(msg Message, includeThinking bool) string {
 	return strings.Join(parts, " ")
 }
 
-// Clone returns a deep-enough copy for replay and persistence.
+// Clone, CloneBlock, CloneMessages, CloneBlocks return deep copies of the
+// internal maps and slices so callers can mutate safely.
+
 func Clone(msg Message) Message {
 	out := Message{Role: msg.Role}
 	if len(msg.Content) > 0 {
@@ -184,7 +194,6 @@ func Clone(msg Message) Message {
 	return out
 }
 
-// CloneBlock returns a copy of a block.
 func CloneBlock(block Block) Block {
 	out := block
 	if len(block.Input) > 0 {
@@ -206,7 +215,6 @@ func CloneBlock(block Block) Block {
 	return out
 }
 
-// CloneMessages returns a deep copy of a message slice.
 func CloneMessages(msgs []Message) []Message {
 	out := make([]Message, len(msgs))
 	for i, msg := range msgs {
@@ -215,7 +223,6 @@ func CloneMessages(msgs []Message) []Message {
 	return out
 }
 
-// CloneBlocks returns a deep copy of a block slice.
 func CloneBlocks(blocks []Block) []Block {
 	out := make([]Block, len(blocks))
 	for i, block := range blocks {

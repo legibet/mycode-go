@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -19,7 +18,7 @@ import (
 	"github.com/legibet/mycode-go/internal/tools"
 )
 
-// Event is the normalized streaming event sent to the API and CLI.
+// Event is one normalized streaming event sent to the API and CLI.
 type Event struct {
 	Type string
 	Data map[string]any
@@ -28,33 +27,8 @@ type Event struct {
 // PersistFunc stores one canonical message.
 type PersistFunc func(message.Message) error
 
-// Options configures one agent instance.
-type Options struct {
-	Model              string
-	Provider           string
-	CWD                string
-	Project            string
-	SessionDir         string
-	SessionID          string
-	APIKey             string
-	APIBase            string
-	System             string
-	Messages           []message.Message
-	MaxTurns           int
-	MaxTokens          int
-	ContextWindow      int
-	CompactThreshold   float64
-	ReasoningEffort    string
-	SupportsImageInput bool
-	SupportsPDFInput   bool
-	Permission         config.PermissionConfig
-	PermissionReviewer permissions.Reviewer
-	SkillRoots         []string
-	Adapter            provider.Adapter
-	Tools              *tools.Executor
-}
-
-// Agent is the single orchestration loop.
+// Agent is the single orchestration loop. Construct via New so derived fields
+// (TranscriptPath, default Tools/Adapter, default System prompt) are filled.
 type Agent struct {
 	Model              string
 	Provider           string
@@ -62,9 +36,10 @@ type Agent struct {
 	Project            string
 	SessionDir         string
 	SessionID          string
-	TranscriptPath     string
 	APIKey             string
 	APIBase            string
+	System             string
+	Messages           []message.Message
 	MaxTurns           int
 	MaxTokens          int
 	ContextWindow      int
@@ -75,94 +50,67 @@ type Agent struct {
 	Permission         config.PermissionConfig
 	PermissionReviewer permissions.Reviewer
 	SkillRoots         []string
-	System             string
-	Messages           []message.Message
-	Tools              *tools.Executor
 	Adapter            provider.Adapter
+	Tools              *tools.Executor
+
+	// TranscriptPath is set by New from SessionDir.
+	TranscriptPath string
 }
 
-// New creates an agent from options.
-func New(opts Options) (*Agent, error) {
-	cwd := opts.CWD
-	if cwd == "" {
-		var err error
-		cwd, err = os.Getwd()
-		if err != nil {
-			cwd = "."
+// New fills defaults and returns a runnable Agent.
+func New(a Agent) (*Agent, error) {
+	if a.CWD == "" {
+		if wd, err := os.Getwd(); err == nil {
+			a.CWD = wd
+		} else {
+			a.CWD = "."
 		}
 	}
-	if absolute, err := filepath.Abs(cwd); err == nil {
-		cwd = absolute
+	if absolute, err := filepath.Abs(a.CWD); err == nil {
+		a.CWD = absolute
 	}
 
-	sessionDir := cmp.Or(opts.SessionDir, cwd)
-	sessionID := cmp.Or(opts.SessionID, filepath.Base(sessionDir))
-	// Transcript path is only meaningful when a session backs the agent on
-	// disk. Without it, the compact projection skips the "read the original
-	// log at: <path>" hint, matching Python's transcript_path=None branch.
-	transcriptPath := ""
-	if opts.SessionDir != "" {
-		transcriptPath = filepath.Join(opts.SessionDir, "messages.jsonl")
-	}
-	permission := opts.Permission
-	if permission.Level == "" {
-		permission = config.DefaultPermissionConfig()
-	}
-	project := cmp.Or(opts.Project, config.ResolveProject(cwd))
-
-	skillRoots := append([]string(nil), opts.SkillRoots...)
-	if skillRoots == nil {
-		skillRoots = permissions.SkillRoots(cwd, project, config.ResolveHome())
+	// Without an explicit SessionDir, skip the "read the original log at:"
+	// hint in the compact projection (Python's transcript_path=None branch).
+	explicitSessionDir := a.SessionDir
+	a.SessionDir = cmp.Or(a.SessionDir, a.CWD)
+	a.SessionID = cmp.Or(a.SessionID, filepath.Base(a.SessionDir))
+	if a.TranscriptPath == "" && explicitSessionDir != "" {
+		a.TranscriptPath = filepath.Join(explicitSessionDir, "messages.jsonl")
 	}
 
-	toolExecutor := opts.Tools
-	if toolExecutor == nil {
-		toolExecutor = tools.NewExecutor(cwd, sessionDir, opts.SupportsImageInput)
+	if a.Permission.Level == "" {
+		a.Permission = config.DefaultPermissionConfig()
+	}
+	a.Project = cmp.Or(a.Project, config.ResolveProject(a.CWD))
+
+	if a.SkillRoots == nil {
+		a.SkillRoots = permissions.SkillRoots(a.CWD, a.Project, config.ResolveHome())
+	} else {
+		a.SkillRoots = slices.Clone(a.SkillRoots)
 	}
 
-	adapter := opts.Adapter
-	if adapter == nil {
-		var ok bool
-		adapter, ok = provider.LookupAdapter(opts.Provider)
+	if a.Tools == nil {
+		a.Tools = tools.NewExecutor(a.CWD, a.SessionDir, a.SupportsImageInput)
+	}
+
+	if a.Adapter == nil {
+		adapter, ok := provider.LookupAdapter(a.Provider)
 		if !ok {
-			return nil, errors.New("unsupported provider adapter: " + opts.Provider)
+			return nil, errors.New("unsupported provider adapter: " + a.Provider)
 		}
+		a.Adapter = adapter
 	}
 
-	system := opts.System
-	if system == "" {
-		system = prompt.Build(cwd, project, config.ResolveHome())
+	if a.System == "" {
+		a.System = prompt.Build(a.CWD, a.Project, config.ResolveHome())
 	}
-	contextWindow := opts.ContextWindow
-	if contextWindow == 0 {
-		contextWindow = 128000
+	if a.ContextWindow == 0 {
+		a.ContextWindow = 128000
 	}
 
-	return &Agent{
-		Model:              opts.Model,
-		Provider:           opts.Provider,
-		CWD:                cwd,
-		Project:            project,
-		SessionDir:         sessionDir,
-		SessionID:          sessionID,
-		TranscriptPath:     transcriptPath,
-		APIKey:             opts.APIKey,
-		APIBase:            opts.APIBase,
-		MaxTurns:           opts.MaxTurns,
-		MaxTokens:          opts.MaxTokens,
-		ContextWindow:      contextWindow,
-		CompactThreshold:   opts.CompactThreshold,
-		ReasoningEffort:    opts.ReasoningEffort,
-		SupportsImageInput: opts.SupportsImageInput,
-		SupportsPDFInput:   opts.SupportsPDFInput,
-		Permission:         permission,
-		PermissionReviewer: opts.PermissionReviewer,
-		SkillRoots:         skillRoots,
-		System:             system,
-		Messages:           message.CloneMessages(opts.Messages),
-		Tools:              toolExecutor,
-		Adapter:            adapter,
-	}, nil
+	a.Messages = message.CloneMessages(a.Messages)
+	return &a, nil
 }
 
 // Cancel stops active tools. Provider cancellation is driven by ctx.
@@ -179,7 +127,7 @@ func (a *Agent) Chat(ctx context.Context, userInput message.Message, onPersist P
 			a.emitError(out, "user input must be a user message")
 			return
 		}
-		if err := a.validateUserInput(userInput); err != nil {
+		if err := message.ValidateMediaSupport(userInput, a.SupportsImageInput, a.SupportsPDFInput); err != nil {
 			a.emitError(out, err.Error())
 			return
 		}
@@ -273,7 +221,7 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 		SessionID:          a.SessionID,
 		Messages:           ApplyCompactReplay(a.Messages, a.TranscriptPath),
 		System:             a.System,
-		Tools:              toolSpecs(a.Tools.Definitions()),
+		Tools:              toolSpecs(tools.DefaultSpecs()),
 		MaxTokens:          a.MaxTokens,
 		APIKey:             a.APIKey,
 		APIBase:            a.APIBase,
@@ -423,18 +371,6 @@ func (a *Agent) emitError(out chan<- Event, msg string) {
 	out <- Event{Type: "error", Data: map[string]any{"message": msg}}
 }
 
-func (a *Agent) validateUserInput(userInput message.Message) error {
-	for _, block := range userInput.Content {
-		if block.Type == "image" && !a.SupportsImageInput {
-			return fmt.Errorf("current model does not support image input")
-		}
-		if block.Type == "document" && !a.SupportsPDFInput {
-			return fmt.Errorf("current model does not support PDF input")
-		}
-	}
-	return nil
-}
-
 func (a *Agent) runTool(toolCall message.Block, out chan<- Event) tools.Result {
 	switch toolCall.Name {
 	case "read":
@@ -455,10 +391,10 @@ func (a *Agent) runTool(toolCall message.Block, out chan<- Event) tools.Result {
 	}
 }
 
-// compactIfNeeded triggers context compaction when the latest turn crosses
-// the threshold. Returns true when the agent loop should stop (cancellation).
-// Provider failures during compaction are swallowed: the next turn either
-// retries or surfaces the error from phase 1.
+// compactIfNeeded triggers compaction when the latest turn crosses the
+// threshold. Returns true to stop the agent loop (cancellation). Provider
+// failures during compaction are swallowed — the next turn either retries or
+// surfaces the error from phase 1.
 func (a *Agent) compactIfNeeded(ctx context.Context, persist PersistFunc, out chan<- Event, totalTokens int) bool {
 	if !ShouldCompact(totalTokens, a.ContextWindow, a.CompactThreshold) {
 		return false

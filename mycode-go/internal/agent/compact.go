@@ -1,8 +1,7 @@
 // Context compaction: summarize past history when nearing the context window.
-//
-// Compact records are persisted inline in the JSONL log as `role: "compact"`
-// markers. They stay visible during replay; the agent substitutes them with a
-// summary continuation only when projecting messages for the provider.
+// Compact records persist inline as `role: "compact"` markers; ApplyCompactReplay
+// substitutes them with a summary continuation only when projecting messages
+// for the provider.
 
 package agent
 
@@ -13,12 +12,10 @@ import (
 	"github.com/legibet/mycode-go/internal/message"
 )
 
-// DefaultCompactThreshold is the default share of the context window after
-// which the agent triggers compaction.
+// DefaultCompactThreshold triggers compaction; the (1 - threshold) headroom
+// is reserved for the compact LLM call itself.
 const DefaultCompactThreshold = 0.8
 
-// CompactSummaryPrompt is the user-side prompt that asks the model to
-// summarize the conversation so far for continuation.
 const CompactSummaryPrompt = `Summarize this conversation to create a continuation document. This summary will replace the full conversation history, so it must capture everything needed to continue the work seamlessly.
 
 Include:
@@ -44,9 +41,6 @@ const continuationFooter = `Resume directly from where the work left off. Do not
 
 const compactAck = "Acknowledged."
 
-// ShouldCompact returns true when the latest call crosses the compact
-// threshold. The (1 - threshold) headroom is reserved for the compact LLM
-// call itself.
 func ShouldCompact(totalTokens, contextWindow int, threshold float64) bool {
 	if totalTokens <= 0 || contextWindow <= 0 || threshold <= 0 {
 		return false
@@ -54,7 +48,6 @@ func ShouldCompact(totalTokens, contextWindow int, threshold float64) bool {
 	return float64(totalTokens) >= float64(contextWindow)*threshold
 }
 
-// BuildCompactEvent returns the persisted compact event.
 func BuildCompactEvent(summary, provider, model string, totalTokens int) message.Message {
 	meta := map[string]any{
 		"provider": provider,
@@ -66,15 +59,13 @@ func BuildCompactEvent(summary, provider, model string, totalTokens int) message
 	return message.BuildMessage("compact", []message.Block{message.TextBlock(summary, nil)}, meta)
 }
 
-// ApplyCompactReplay returns a projection of messages where the latest
-// compact marker is replaced by a summary continuation. The marker stays in
-// the input slice unchanged; only the returned slice is rewritten. Returns
-// the input unchanged when no compact marker is present.
+// ApplyCompactReplay rewrites messages so the latest `compact` marker becomes
+// a summary continuation; the input slice is not mutated.
 //
-// The tail (messages after the latest compact) determines whether the summary
-// is followed by an "Acknowledged." assistant turn. An assistant-led tail (or
-// no tail at all) means we are mid-loop and resume directly; a user-led tail
-// needs the ack so role alternation stays valid.
+// The tail (messages after the latest compact) drives whether we follow the
+// summary with an "Acknowledged." assistant turn: an assistant-led tail (or
+// none) means we resume directly; a user-led tail needs the ack so role
+// alternation stays valid for the provider.
 func ApplyCompactReplay(messages []message.Message, transcriptPath string) []message.Message {
 	lastCompact := -1
 	for i, msg := range messages {

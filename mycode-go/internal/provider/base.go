@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/internal/util"
 )
 
 // Request is one provider turn request.
@@ -163,8 +164,8 @@ func RepairMessagesForReplay(source []message.Message, supportsImageInput, suppo
 					}
 					attachment := fmt.Sprintf(
 						"<file name=\"%s\" media_type=\"%s\" kind=\"%s\">Current model does not support %s.</file>",
-						escapeAttachmentAttr(cmp.Or(block.Name, "attached-"+block.Type)),
-						escapeAttachmentAttr(cmp.Or(block.MIMEType, defaultMIME)),
+						util.EscapeXMLAttr(cmp.Or(block.Name, "attached-"+block.Type)),
+						util.EscapeXMLAttr(cmp.Or(block.MIMEType, defaultMIME)),
 						block.Type,
 						label,
 					)
@@ -254,15 +255,6 @@ func interruptedToolResultMessage(toolUseIDs []string) message.Message {
 		))
 	}
 	return message.BuildMessage("user", blocks, nil)
-}
-
-func escapeAttachmentAttr(value string) string {
-	return strings.NewReplacer(
-		"&", "&amp;",
-		`"`, "&quot;",
-		"<", "&lt;",
-		">", "&gt;",
-	).Replace(value)
 }
 
 func blockNativeMeta(block message.Block) map[string]any {

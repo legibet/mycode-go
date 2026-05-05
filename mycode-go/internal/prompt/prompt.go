@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/legibet/mycode-go/internal/config"
+	"github.com/legibet/mycode-go/internal/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -56,8 +57,8 @@ type Skill struct {
 
 // Build returns the runtime system prompt.
 func Build(cwd, project, home string) string {
-	resolvedCWD := absPath(cwd)
-	resolvedProject := absPath(project)
+	resolvedCWD := util.ExpandAbs(cwd)
+	resolvedProject := util.ExpandAbs(project)
 	parts := []string{basePrompt}
 	if section := loadInstructions(resolvedCWD, resolvedProject, home); section != "" {
 		parts = append(parts, section)
@@ -92,13 +93,13 @@ func loadInstructions(cwd, project, home string) string {
 }
 
 func discoverInstructionFiles(cwd, project, home string) []string {
-	resolvedCWD := absPath(cwd)
-	resolvedProject := absPath(project)
-	resolvedHome := absPath(home)
+	resolvedCWD := util.ExpandAbs(cwd)
+	resolvedProject := util.ExpandAbs(project)
+	resolvedHome := util.ExpandAbs(home)
 	files := []string{}
 
 	globalCandidate := filepath.Join(resolvedHome, "AGENTS.md")
-	compatCandidate := filepath.Join(absPath(userHomeDir()), ".agents", "AGENTS.md")
+	compatCandidate := filepath.Join(util.ExpandAbs(userHomeDir()), ".agents", "AGENTS.md")
 	if isFile(globalCandidate) {
 		files = append(files, globalCandidate)
 	} else if isFile(compatCandidate) {
@@ -135,34 +136,31 @@ func loadSkills(cwd, project, home string) string {
 	return strings.Join(lines, "\n")
 }
 
-// DiscoverSkills returns the skill files visible to the runtime prompt.
+// DiscoverSkills merges skills across global home, ~/.agents (compat),
+// project AGENTS, and project .mycode/skills.
 func DiscoverSkills(cwd, project, home string) []Skill {
-	cwdPath := absPath(cwd)
-	projectPath := absPath(project)
-	homePath := absPath(home)
-	compatHome := absPath(userHomeDir())
-	roots := []struct {
+	cwdPath := util.ExpandAbs(cwd)
+	projectPath := util.ExpandAbs(project)
+	homePath := util.ExpandAbs(home)
+	compatHome := util.ExpandAbs(userHomeDir())
+
+	type skillRoot struct {
 		path   string
 		source string
-	}{
+	}
+	roots := []skillRoot{
 		{filepath.Join(compatHome, ".agents", "skills"), "global"},
 		{filepath.Join(homePath, "skills"), "global"},
 	}
 	for _, dir := range config.ProjectDirs(cwdPath, projectPath) {
 		roots = append(roots,
-			struct {
-				path   string
-				source string
-			}{filepath.Join(dir, ".agents", "skills"), "project"},
-		)
-		roots = append(roots,
-			struct {
-				path   string
-				source string
-			}{filepath.Join(dir, ".mycode", "skills"), "project"},
+			skillRoot{filepath.Join(dir, ".agents", "skills"), "project"},
+			skillRoot{filepath.Join(dir, ".mycode", "skills"), "project"},
 		)
 	}
 
+	// Dedupe by path, then re-key by name so a project skill overrides a
+	// global one with the same name.
 	skillsByName := map[string]Skill{}
 	seenPaths := map[string]struct{}{}
 	addSkill := func(skill Skill) {
@@ -312,7 +310,7 @@ func parseSkill(path, source, fallbackName string) (Skill, bool) {
 	return Skill{
 		Name:        name,
 		Description: description,
-		Path:        absPath(path),
+		Path:        util.ExpandAbs(path),
 		Source:      source,
 	}, true
 }
@@ -346,18 +344,6 @@ func parseFrontmatter(text string) (map[string]any, bool) {
 func isFile(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular()
-}
-
-func absPath(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
-	}
-	absolute, err := filepath.Abs(path)
-	if err != nil {
-		return filepath.Clean(path)
-	}
-	return filepath.Clean(absolute)
 }
 
 func asString(value any) string {

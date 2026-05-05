@@ -3,11 +3,8 @@ package session
 import (
 	"bufio"
 	"cmp"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,16 +14,17 @@ import (
 
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/internal/util"
 )
 
 const (
-	// MessageFormatVersion is the persisted session format version.
+	// MessageFormatVersion is the persisted session format version. Bumping
+	// it is a Python-side compatibility decision.
 	MessageFormatVersion = 7
-	// DefaultSessionTitle is the initial session title.
-	DefaultSessionTitle = "New chat"
+	DefaultSessionTitle  = "New chat"
 )
 
-// Meta is the session metadata stored in meta.json.
+// Meta is the JSON saved in meta.json.
 type Meta struct {
 	CWD                  string `json:"cwd"`
 	Title                string `json:"title"`
@@ -35,26 +33,24 @@ type Meta struct {
 	MessageFormatVersion int    `json:"message_format_version"`
 }
 
-// Summary is the session payload returned by the API.
 type Summary struct {
 	ID string `json:"id"`
 	Meta
 }
 
-// Data is one loaded session.
 type Data struct {
 	Session  Summary           `json:"session"`
 	Messages []message.Message `json:"messages"`
 }
 
-// Store persists append-only sessions.
+// Store keeps a per-session mutex so concurrent operations on the same
+// session can't interleave, while different sessions remain concurrent.
 type Store struct {
 	dataDir string
 	mu      sync.Mutex
 	locks   map[string]*sync.Mutex
 }
 
-// NewStore creates a session store.
 func NewStore(dataDir string) *Store {
 	if dataDir == "" {
 		dataDir = config.ResolveSessionsDir()
@@ -66,7 +62,8 @@ func NewStore(dataDir string) *Store {
 	}
 }
 
-// BuildRewindEvent returns the persisted rewind event.
+// BuildRewindEvent is the marker appended on rewind requests; ApplyRewind
+// truncates visible history from this marker.
 func BuildRewindEvent(rewindTo int) message.Message {
 	return message.Message{
 		Role: "rewind",
@@ -77,7 +74,7 @@ func BuildRewindEvent(rewindTo int) message.Message {
 	}
 }
 
-// ApplyRewind truncates visible history according to rewind markers.
+// ApplyRewind collapses raw JSONL into visible history. Rewind markers are dropped.
 func ApplyRewind(messages []message.Message) []message.Message {
 	out := make([]message.Message, 0, len(messages))
 	for _, msg := range messages {
@@ -95,24 +92,22 @@ func ApplyRewind(messages []message.Message) []message.Message {
 	return out
 }
 
-// DraftSession builds an in-memory draft.
+// DraftSession returns an in-memory session that has not been written to disk.
 func (s *Store) DraftSession(cwd string) Data {
 	nowValue := now()
 	meta := Meta{
-		CWD:                  absPath(cwd),
+		CWD:                  util.ExpandAbs(cwd),
 		Title:                DefaultSessionTitle,
 		CreatedAt:            nowValue,
 		UpdatedAt:            nowValue,
 		MessageFormatVersion: MessageFormatVersion,
 	}
-	sessionID := newID()
 	return Data{
-		Session:  summarize(sessionID, meta),
+		Session:  Summary{ID: util.RandomHex16(), Meta: meta},
 		Messages: []message.Message{},
 	}
 }
 
-// CreateSession writes a session immediately.
 func (s *Store) CreateSession(sessionID, cwd string) (Data, error) {
 	data := s.DraftSession(cwd)
 	if sessionID != "" {
@@ -128,6 +123,7 @@ func (s *Store) CreateSession(sessionID, cwd string) (Data, error) {
 	if err := s.writeMeta(data.Session.ID, data.Session.Meta); err != nil {
 		return Data{}, err
 	}
+	// Touch messages.jsonl so readers always see both files.
 	file, err := os.OpenFile(s.messagesPath(data.Session.ID), os.O_RDONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		return Data{}, err
@@ -136,13 +132,13 @@ func (s *Store) CreateSession(sessionID, cwd string) (Data, error) {
 	return data, nil
 }
 
-// ListSessions returns sessions sorted by updated_at descending.
+// ListSessions returns sessions (filtered by cwd when non-empty), sorted by updated_at desc.
 func (s *Store) ListSessions(cwd string) ([]Summary, error) {
 	entries, err := os.ReadDir(s.dataDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	filterCWD := absPath(cwd)
+	filterCWD := util.ExpandAbs(cwd)
 	out := make([]Summary, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -152,10 +148,10 @@ func (s *Store) ListSessions(cwd string) ([]Summary, error) {
 		if err != nil {
 			continue
 		}
-		if filterCWD != "" && absPath(meta.CWD) != filterCWD {
+		if filterCWD != "" && util.ExpandAbs(meta.CWD) != filterCWD {
 			continue
 		}
-		out = append(out, summarize(entry.Name(), meta))
+		out = append(out, Summary{ID: entry.Name(), Meta: meta})
 	}
 	slices.SortFunc(out, func(a, b Summary) int {
 		return cmp.Compare(b.UpdatedAt, a.UpdatedAt)
@@ -163,7 +159,6 @@ func (s *Store) ListSessions(cwd string) ([]Summary, error) {
 	return out, nil
 }
 
-// LatestSession returns the latest session for a workspace.
 func (s *Store) LatestSession(cwd string) (*Summary, error) {
 	sessions, err := s.ListSessions(cwd)
 	if err != nil || len(sessions) == 0 {
@@ -172,7 +167,9 @@ func (s *Store) LatestSession(cwd string) (*Summary, error) {
 	return &sessions[0], nil
 }
 
-// LoadSession loads one session and applies replay rules.
+// LoadSession returns the visible (post-rewind) history. `compact` markers
+// stay inline; the agent substitutes them when calling the provider. Orphan
+// tool_use blocks are closed by the provider adapter at replay time.
 func (s *Store) LoadSession(sessionID string) (*Data, error) {
 	lock := s.sessionLock(sessionID)
 	lock.Lock()
@@ -190,24 +187,17 @@ func (s *Store) LoadSession(sessionID string) (*Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Visible state = raw JSONL minus rewound tails. `compact` markers stay
-	// inline; the agent substitutes them when calling the provider. Orphan
-	// tool_use blocks (e.g. left open by a server crash) are closed by the
-	// provider adapter at replay time, not here — load_session is read-only.
-	visible := ApplyRewind(rawMessages)
-
-	return &Data{Session: summarize(sessionID, meta), Messages: visible}, nil
+	return &Data{Session: Summary{ID: sessionID, Meta: meta}, Messages: ApplyRewind(rawMessages)}, nil
 }
 
-// DeleteSession removes a session directory.
 func (s *Store) DeleteSession(sessionID string) error {
 	lock := s.sessionLock(sessionID)
 	lock.Lock()
 	defer lock.Unlock()
-	return os.RemoveAll(s.sessionDir(sessionID))
+	return os.RemoveAll(s.SessionDir(sessionID))
 }
 
-// ClearSession removes persisted messages and keeps meta.
+// ClearSession resets messages but keeps meta so the session id stays addressable.
 func (s *Store) ClearSession(sessionID string) error {
 	lock := s.sessionLock(sessionID)
 	lock.Lock()
@@ -228,7 +218,6 @@ func (s *Store) ClearSession(sessionID string) error {
 	return os.WriteFile(s.messagesPath(sessionID), nil, 0o644)
 }
 
-// AppendRewind appends a rewind event.
 func (s *Store) AppendRewind(sessionID string, rewindTo int) error {
 	lock := s.sessionLock(sessionID)
 	lock.Lock()
@@ -251,7 +240,8 @@ func (s *Store) AppendRewind(sessionID string, rewindTo int) error {
 	return s.writeMeta(sessionID, meta)
 }
 
-// AppendMessage appends one canonical message.
+// AppendMessage appends one message and refreshes meta. The first non-empty
+// user turn becomes the session title (truncated to 48 runes).
 func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string) error {
 	lock := s.sessionLock(sessionID)
 	lock.Lock()
@@ -266,10 +256,9 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string)
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-
 		nowValue := now()
 		meta = Meta{
-			CWD:                  absPath(cwd),
+			CWD:                  util.ExpandAbs(cwd),
 			Title:                DefaultSessionTitle,
 			CreatedAt:            nowValue,
 			UpdatedAt:            nowValue,
@@ -294,11 +283,6 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string)
 	return s.writeMeta(sessionID, meta)
 }
 
-// SessionDir returns the absolute session directory.
-func (s *Store) SessionDir(sessionID string) string {
-	return s.sessionDir(sessionID)
-}
-
 func (s *Store) readMessages(sessionID string) ([]message.Message, error) {
 	file, err := os.Open(s.messagesPath(sessionID))
 	if err != nil {
@@ -307,11 +291,10 @@ func (s *Store) readMessages(sessionID string) ([]message.Message, error) {
 		}
 		return nil, err
 	}
-	defer func() {
-		_ = file.Close()
-	}()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
+	// Large tool_result outputs occasionally exceed bufio's default 64KB buffer.
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
 	out := make([]message.Message, 0)
@@ -335,6 +318,7 @@ func (s *Store) readMeta(sessionID string) (Meta, error) {
 	}
 	var meta Meta
 	if err := json.Unmarshal(data, &meta); err != nil {
+		// Treat a corrupt meta.json as missing so the next write recreates it.
 		return Meta{}, os.ErrNotExist
 	}
 	return meta, nil
@@ -349,22 +333,19 @@ func (s *Store) writeMeta(sessionID string, meta Meta) error {
 }
 
 func (s *Store) ensureSessionDir(sessionID string) error {
-	if err := os.MkdirAll(s.sessionDir(sessionID), 0o755); err != nil {
-		return err
-	}
-	return nil
+	return os.MkdirAll(s.SessionDir(sessionID), 0o755)
 }
 
-func (s *Store) sessionDir(sessionID string) string {
+func (s *Store) SessionDir(sessionID string) string {
 	return filepath.Join(s.dataDir, sessionID)
 }
 
 func (s *Store) metaPath(sessionID string) string {
-	return filepath.Join(s.sessionDir(sessionID), "meta.json")
+	return filepath.Join(s.SessionDir(sessionID), "meta.json")
 }
 
 func (s *Store) messagesPath(sessionID string) string {
-	return filepath.Join(s.sessionDir(sessionID), "messages.jsonl")
+	return filepath.Join(s.SessionDir(sessionID), "messages.jsonl")
 }
 
 func (s *Store) sessionLock(sessionID string) *sync.Mutex {
@@ -383,40 +364,18 @@ func appendJSONL(path string, msg message.Message) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = file.Close()
-	}()
+	defer func() { _ = file.Close() }()
 
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
-	if _, err := file.Write(append(data, '\n')); err != nil {
-		return err
-	}
-	return nil
+	_, err = file.Write(append(data, '\n'))
+	return err
 }
 
 func now() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
-}
-
-func absPath(path string) string {
-	if path == "" {
-		return ""
-	}
-	value, err := filepath.Abs(path)
-	if err != nil {
-		return path
-	}
-	return value
-}
-
-func summarize(sessionID string, meta Meta) Summary {
-	return Summary{
-		ID:   sessionID,
-		Meta: meta,
-	}
 }
 
 func asInt(value any) int {
@@ -428,12 +387,4 @@ func asInt(value any) int {
 	default:
 		return 0
 	}
-}
-
-func newID() string {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(buf)
 }

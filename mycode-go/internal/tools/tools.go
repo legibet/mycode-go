@@ -1,3 +1,5 @@
+// Package tools implements the four built-in agent tools: read, write, edit,
+// bash. The set is fixed; new capabilities live in skills.
 package tools
 
 import (
@@ -16,15 +18,10 @@ import (
 )
 
 const (
-	// DefaultMaxLines limits read output.
-	DefaultMaxLines = 2000
-	// DefaultMaxBytes limits truncated tool output kept in memory.
-	DefaultMaxBytes = 50 * 1024
-	// ReadMaxLineChars shortens unusually long lines.
-	ReadMaxLineChars = 2000
-	// BashTimeout is the default bash timeout.
-	BashTimeout = 120 * time.Second
-	// BashMaxInMemoryBytes spills large output to disk.
+	DefaultMaxLines      = 2000
+	DefaultMaxBytes      = 50 * 1024
+	ReadMaxLineChars     = 2000
+	BashTimeout          = 120 * time.Second
 	BashMaxInMemoryBytes = 5_000_000
 )
 
@@ -36,7 +33,9 @@ type ToolSpec struct {
 	StreamsOutput bool           `json:"-"`
 }
 
-// Result is the canonical tool execution result.
+// Result is the canonical tool result. Output is provider-facing text;
+// Content carries optional structured blocks (e.g. inline images);
+// Metadata carries optional structured info for the UI (e.g. edit patches).
 type Result struct {
 	Output   string          `json:"output"`
 	Content  []message.Block `json:"content,omitempty"`
@@ -44,7 +43,7 @@ type Result struct {
 	IsError  bool            `json:"is_error"`
 }
 
-// Truncation reports text truncation details.
+// Truncation reports whether and why text output was shortened.
 type Truncation struct {
 	Truncated   bool
 	TruncatedBy string
@@ -52,10 +51,11 @@ type Truncation struct {
 	OutputBytes int
 }
 
-// OutputCallback receives live bash output chunks.
+// OutputCallback receives live bash output one line at a time.
 type OutputCallback func(text string)
 
-// Executor runs the four built-in tools for one session.
+// Executor runs the four built-in tools for one session. It tracks live bash
+// children so Cancel kills the whole tree on user-requested cancellation.
 type Executor struct {
 	cwd                string
 	toolOutputDir      string
@@ -64,7 +64,8 @@ type Executor struct {
 	activeCmds         map[*exec.Cmd]struct{}
 }
 
-// DefaultSpecs returns the four built-in tool definitions.
+// DefaultSpecs returns the four built-in tool definitions sent to the model.
+// These descriptions are what the model sees and must match actual behavior.
 func DefaultSpecs() []ToolSpec {
 	return []ToolSpec{
 		{
@@ -144,7 +145,8 @@ func DefaultSpecs() []ToolSpec {
 	}
 }
 
-// NewExecutor creates a tool executor.
+// NewExecutor roots the executor at cwd. Bash logs spill into
+// sessionDir/tool-output when output exceeds BashMaxInMemoryBytes.
 func NewExecutor(cwd, sessionDir string, supportsImageInput bool) *Executor {
 	absoluteCWD := cwd
 	if absoluteCWD != "" {
@@ -155,21 +157,15 @@ func NewExecutor(cwd, sessionDir string, supportsImageInput bool) *Executor {
 	if sessionDir == "" {
 		sessionDir = absoluteCWD
 	}
-	toolOutputDir := filepath.Join(sessionDir, "tool-output")
 	return &Executor{
 		cwd:                absoluteCWD,
-		toolOutputDir:      toolOutputDir,
+		toolOutputDir:      filepath.Join(sessionDir, "tool-output"),
 		supportsImageInput: supportsImageInput,
 		activeCmds:         map[*exec.Cmd]struct{}{},
 	}
 }
 
-// Definitions returns provider-facing tool definitions.
-func (e *Executor) Definitions() []ToolSpec {
-	return DefaultSpecs()
-}
-
-// CancelActive cancels all running bash commands started by this executor.
+// CancelActive kills all bash commands started by this executor.
 func (e *Executor) CancelActive() {
 	e.mu.Lock()
 	cmds := slices.Collect(maps.Keys(e.activeCmds))
@@ -193,6 +189,8 @@ func (e *Executor) untrackCmd(cmd *exec.Cmd) {
 	e.mu.Unlock()
 }
 
+// killCmdTree kills the whole process group so spawned children
+// (e.g. compiler subprocesses under `make`) don't leak as orphans.
 func killCmdTree(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
@@ -203,7 +201,8 @@ func killCmdTree(cmd *exec.Cmd) {
 	_ = cmd.Process.Kill()
 }
 
-// ParseToolArguments parses provider tool call arguments.
+// ParseToolArguments parses the JSON object providers stream as tool call
+// arguments. Empty input yields an empty map.
 func ParseToolArguments(raw string) (map[string]any, error) {
 	if strings.TrimSpace(raw) == "" {
 		return map[string]any{}, nil

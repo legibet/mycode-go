@@ -1,3 +1,6 @@
+// Package workspace exposes the workspace browser used by the web UI.
+// Roots are restricted by env vars (or default to home + /) so the API
+// never lets the browser walk arbitrary host paths.
 package workspace
 
 import (
@@ -8,13 +11,11 @@ import (
 	"strings"
 )
 
-// BrowseEntry is one browse result.
 type BrowseEntry struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
 }
 
-// BrowseResult is the workspace browse response.
 type BrowseResult struct {
 	Root    string        `json:"root"`
 	Path    string        `json:"path"`
@@ -23,7 +24,8 @@ type BrowseResult struct {
 	Error   string        `json:"error"`
 }
 
-// Roots returns allowed workspace roots.
+// Roots returns the directories the UI is allowed to browse. Falls back to
+// home + / when MYCODE_WORKSPACE_ROOTS / WORKSPACE_ROOTS are unset.
 func Roots() []string {
 	raw := cmp.Or(
 		strings.TrimSpace(os.Getenv("MYCODE_WORKSPACE_ROOTS")),
@@ -64,7 +66,8 @@ func Roots() []string {
 	return out
 }
 
-// Browse returns directories within an allowed root.
+// Browse returns child directories of root/relativePath. The root must be in
+// Roots() and the resolved target must stay inside root.
 func Browse(root, relativePath string) BrowseResult {
 	requestedRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -73,32 +76,19 @@ func Browse(root, relativePath string) BrowseResult {
 	if !slices.Contains(Roots(), requestedRoot) {
 		return BrowseResult{Root: root, Error: "Invalid root"}
 	}
-	allowed := requestedRoot
 
-	target := filepath.Join(allowed, relativePath)
+	target := filepath.Join(requestedRoot, relativePath)
 	target, err = filepath.Abs(target)
 	if err != nil {
-		return BrowseResult{
-			Root:    allowed,
-			Current: allowed,
-			Error:   err.Error(),
-		}
+		return BrowseResult{Root: requestedRoot, Current: requestedRoot, Error: err.Error()}
 	}
-	if !withinRoot(allowed, target) {
-		return BrowseResult{
-			Root:    allowed,
-			Current: allowed,
-			Error:   "Path outside root",
-		}
+	if !withinRoot(requestedRoot, target) {
+		return BrowseResult{Root: requestedRoot, Current: requestedRoot, Error: "Path outside root"}
 	}
 
 	entries, err := os.ReadDir(target)
 	if err != nil {
-		return BrowseResult{
-			Root:    allowed,
-			Current: allowed,
-			Error:   err.Error(),
-		}
+		return BrowseResult{Root: requestedRoot, Current: requestedRoot, Error: err.Error()}
 	}
 	out := make([]BrowseEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -106,7 +96,7 @@ func Browse(root, relativePath string) BrowseResult {
 			continue
 		}
 		fullPath := filepath.Join(target, entry.Name())
-		rel, err := filepath.Rel(allowed, fullPath)
+		rel, err := filepath.Rel(requestedRoot, fullPath)
 		if err != nil {
 			continue
 		}
@@ -117,15 +107,15 @@ func Browse(root, relativePath string) BrowseResult {
 	})
 
 	relCurrent := ""
-	if target != allowed {
-		relCurrent, err = filepath.Rel(allowed, target)
+	if target != requestedRoot {
+		relCurrent, err = filepath.Rel(requestedRoot, target)
 		if err != nil {
 			relCurrent = ""
 		}
 		relCurrent = filepath.ToSlash(relCurrent)
 	}
 	return BrowseResult{
-		Root:    allowed,
+		Root:    requestedRoot,
 		Path:    relCurrent,
 		Current: target,
 		Entries: out,

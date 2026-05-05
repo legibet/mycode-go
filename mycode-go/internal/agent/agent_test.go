@@ -40,7 +40,7 @@ func (f *fakeAdapter) StreamTurn(_ context.Context, req provider.Request) <-chan
 
 func TestChatPersistsReasoningBlocks(t *testing.T) {
 	dir := t.TempDir()
-	agent, err := New(Options{
+	agent, err := New(Agent{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
@@ -91,7 +91,7 @@ func TestChatPersistsReasoningBlocks(t *testing.T) {
 
 func TestChatRespectsExplicitTurnLimit(t *testing.T) {
 	dir := t.TempDir()
-	agent, err := New(Options{
+	agent, err := New(Agent{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
@@ -143,7 +143,7 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 			},
 		}},
 	}
-	agent, err := New(Options{
+	agent, err := New(Agent{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
@@ -169,7 +169,7 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 
 func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 	dir := t.TempDir()
-	agent, err := New(Options{
+	agent, err := New(Agent{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
@@ -240,7 +240,7 @@ func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 			}},
 		},
 	}
-	agent, err := New(Options{
+	agent, err := New(Agent{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
@@ -277,7 +277,7 @@ func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 
 func TestNewRejectsUnsupportedProviderAdapter(t *testing.T) {
 	dir := t.TempDir()
-	agent, err := New(Options{
+	agent, err := New(Agent{
 		Model:     "gpt-5.4",
 		Provider:  "missing",
 		CWD:       dir,
@@ -292,7 +292,7 @@ func TestNewRejectsUnsupportedProviderAdapter(t *testing.T) {
 }
 
 func TestNewDefaultsCWDToCurrentDirectory(t *testing.T) {
-	agent, err := New(Options{
+	agent, err := New(Agent{
 		Model:    "gpt-5.4",
 		Provider: "openai",
 		Adapter:  &fakeAdapter{spec: provider.Spec{ID: "openai"}},

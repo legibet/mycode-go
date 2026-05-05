@@ -37,29 +37,29 @@ func runCommand(args []string) int {
 		return 2
 	}
 	if *sessionID != "" && *continueLast {
-		fmt.Fprintln(os.Stderr, "--session and --continue are mutually exclusive")
+		_, _ = fmt.Fprintln(os.Stderr, "--session and --continue are mutually exclusive")
 		return 2
 	}
 
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if prompt == "" {
-		fmt.Fprintln(os.Stderr, "message is required")
+		_, _ = fmt.Fprintln(os.Stderr, "message is required")
 		return 2
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	settings, err := config.Load(cwd)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	resolvedProvider, err := config.ResolveProvider(settings, *providerName, *model, "", "")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
@@ -71,11 +71,11 @@ func runCommand(args []string) int {
 		*continueLast,
 	)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
-	agent, err := agentpkg.New(agentpkg.Options{
+	agent, err := agentpkg.New(agentpkg.Agent{
 		Model:              resolvedProvider.Model,
 		Provider:           resolvedProvider.ProviderType,
 		CWD:                cwd,
@@ -95,7 +95,7 @@ func runCommand(args []string) int {
 		SkillRoots:         permissions.SkillRoots(cwd, settings.Project, config.ResolveHome()),
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
@@ -121,7 +121,7 @@ func runCommand(args []string) int {
 		}
 	}
 	if errorMessage != "" {
-		fmt.Fprintln(os.Stderr, errorMessage)
+		_, _ = fmt.Fprintln(os.Stderr, errorMessage)
 		return 1
 	}
 

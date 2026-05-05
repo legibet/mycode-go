@@ -9,6 +9,7 @@ import (
 
 	"github.com/legibet/mycode-go/internal/models"
 	"github.com/legibet/mycode-go/internal/provider"
+	"github.com/legibet/mycode-go/internal/util"
 )
 
 func TestLoadMergesGlobalAndCurrentDirectoryConfigs(t *testing.T) {
@@ -125,11 +126,11 @@ func TestLoadMergesGlobalAndProjectConfigsFromProjectToCwd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.CWD != absPath(cwd) {
-		t.Fatalf("expected cwd %q, got %q", absPath(cwd), settings.CWD)
+	if settings.CWD != util.ExpandAbs(cwd) {
+		t.Fatalf("expected cwd %q, got %q", util.ExpandAbs(cwd), settings.CWD)
 	}
-	if settings.Project != absPath(project) {
-		t.Fatalf("expected project %q, got %q", absPath(project), settings.Project)
+	if settings.Project != util.ExpandAbs(project) {
+		t.Fatalf("expected project %q, got %q", util.ExpandAbs(project), settings.Project)
 	}
 	if settings.DefaultProvider != "openai" || settings.DefaultModel != "gpt-4.1" {
 		t.Fatalf("unexpected default: provider=%q model=%q", settings.DefaultProvider, settings.DefaultModel)
@@ -138,9 +139,9 @@ func TestLoadMergesGlobalAndProjectConfigsFromProjectToCwd(t *testing.T) {
 		t.Fatalf("unexpected provider: %#v", p)
 	}
 	expectedPaths := []string{
-		absPath(filepath.Join(home, "config.json")),
-		absPath(filepath.Join(project, ".mycode", "config.json")),
-		absPath(filepath.Join(cwd, ".mycode", "config.json")),
+		util.ExpandAbs(filepath.Join(home, "config.json")),
+		util.ExpandAbs(filepath.Join(project, ".mycode", "config.json")),
+		util.ExpandAbs(filepath.Join(cwd, ".mycode", "config.json")),
 	}
 	if !slices.Equal(settings.ConfigPaths, expectedPaths) {
 		t.Fatalf("unexpected config paths: %#v, want %#v", settings.ConfigPaths, expectedPaths)
@@ -167,15 +168,15 @@ func TestLoadTreatsGitFileAsProjectRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Project != absPath(project) {
-		t.Fatalf("expected project %q, got %q", absPath(project), settings.Project)
+	if settings.Project != util.ExpandAbs(project) {
+		t.Fatalf("expected project %q, got %q", util.ExpandAbs(project), settings.Project)
 	}
 	if settings.DefaultProvider != "local" {
 		t.Fatalf("expected local to win, got %q", settings.DefaultProvider)
 	}
 	expectedPaths := []string{
-		absPath(filepath.Join(project, ".mycode", "config.json")),
-		absPath(filepath.Join(cwd, ".mycode", "config.json")),
+		util.ExpandAbs(filepath.Join(project, ".mycode", "config.json")),
+		util.ExpandAbs(filepath.Join(cwd, ".mycode", "config.json")),
 	}
 	if !slices.Equal(settings.ConfigPaths, expectedPaths) {
 		t.Fatalf("unexpected config paths: %#v, want %#v", settings.ConfigPaths, expectedPaths)
@@ -196,7 +197,7 @@ func TestLoadUsesCwdAsProjectWhenNoGit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Project != absPath(cwd) {
+	if settings.Project != util.ExpandAbs(cwd) {
 		t.Fatalf("expected project==cwd when no .git, got %q vs %q", settings.Project, settings.CWD)
 	}
 	if settings.DefaultProvider != "local" {

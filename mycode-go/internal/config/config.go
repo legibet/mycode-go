@@ -15,6 +15,7 @@ import (
 
 	"github.com/legibet/mycode-go/internal/models"
 	"github.com/legibet/mycode-go/internal/provider"
+	"github.com/legibet/mycode-go/internal/util"
 )
 
 const (
@@ -114,7 +115,7 @@ func ResolveHome() string {
 	if raw == "" {
 		raw = defaultHome
 	}
-	return absPath(raw)
+	return util.ExpandAbs(raw)
 }
 
 // ResolveSessionsDir returns the persisted sessions directory.
@@ -124,7 +125,7 @@ func ResolveSessionsDir() string {
 
 // ResolveProject returns the nearest Git project root, or cwd when no .git is found.
 func ResolveProject(cwd string) string {
-	cwdPath := absPath(cwd)
+	cwdPath := util.ExpandAbs(cwd)
 	for path := cwdPath; path != "" && path != "."; {
 		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 			return path
@@ -140,8 +141,8 @@ func ResolveProject(cwd string) string {
 
 // ProjectDirs returns directories from project to cwd, inclusive.
 func ProjectDirs(cwd, project string) []string {
-	cwdPath := absPath(cwd)
-	projectPath := absPath(project)
+	cwdPath := util.ExpandAbs(cwd)
+	projectPath := util.ExpandAbs(project)
 	if projectPath == "" {
 		projectPath = ResolveProject(cwdPath)
 	}
@@ -165,7 +166,14 @@ func ProjectDirs(cwd, project string) []string {
 
 // Load returns merged config for one cwd.
 func Load(cwd string) (Settings, error) {
-	resolvedCWD := absPath(cmp.Or(cwd, mustGetwd()))
+	if cwd == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return Settings{}, err
+		}
+		cwd = wd
+	}
+	resolvedCWD := util.ExpandAbs(cwd)
 	resolvedProject := ResolveProject(resolvedCWD)
 
 	settings := Settings{
@@ -1174,21 +1182,6 @@ func defaultInt(value, fallback int) int {
 	return fallback
 }
 
-func absPath(path string) string {
-	if path == "" {
-		return ""
-	}
-	if strings.HasPrefix(path, "~/") {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
-	}
-	absolute, err := filepath.Abs(path)
-	if err != nil {
-		return filepath.Clean(path)
-	}
-	return filepath.Clean(absolute)
-}
-
 func asString(value any) string {
 	text, _ := value.(string)
 	return text
@@ -1215,10 +1208,291 @@ func asBoolPtr(value any) *bool {
 	return nil
 }
 
-func mustGetwd() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		panic(err)
+// ----- Settings IO (server side: load, render, save the global config.json) -----
+
+// ReasoningEffortOptions enumerates the values exposed to the web UI; "auto"
+// is added on top of the validated set so the UI can render the unset case.
+var ReasoningEffortOptions = []string{"auto", "none", "low", "medium", "high", "xhigh"}
+
+// ResponseReasoningEffort maps an unset effort to the UI's "auto" sentinel.
+func ResponseReasoningEffort(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "auto"
 	}
-	return wd
+	return value
+}
+
+// ReadRawSettings loads the global settings JSON. Returns an empty map and
+// exists=false when the file is missing or not a regular file (e.g. a
+// directory placeholder). Parse failures bubble up with the file path.
+func ReadRawSettings(path string) (raw map[string]any, order ConfigOrder, exists bool, err error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]any{}, ConfigOrder{}, false, nil
+	}
+	if err != nil {
+		return nil, ConfigOrder{}, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return map[string]any{}, ConfigOrder{}, false, nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, ConfigOrder{}, false, err
+	}
+	var parsed any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil, ConfigOrder{}, true, fmt.Errorf("failed to parse %s: %w", path, err)
+	}
+	root, ok := parsed.(map[string]any)
+	if !ok {
+		return nil, ConfigOrder{}, true, fmt.Errorf("%s must contain a JSON object", path)
+	}
+	return root, ParseConfigOrder(data), true, nil
+}
+
+// BuildSettingsResponse renders the GET /api/settings payload. The web UI
+// needs the saved config plus metadata about valid options / env vars to
+// render the settings form without making extra calls.
+func BuildSettingsResponse(path string, exists bool, raw map[string]any, order ConfigOrder) map[string]any {
+	providerTypes := make([]string, 0, len(provider.Specs()))
+	envNames := map[string]struct{}{}
+	typeEnvVars := map[string][]string{}
+	typeDefaultModels := map[string][]string{}
+	for _, spec := range provider.Specs() {
+		providerTypes = append(providerTypes, spec.ID)
+		if len(spec.EnvAPIKeyNames) > 0 {
+			typeEnvVars[spec.ID] = slices.Clone(spec.EnvAPIKeyNames)
+		}
+		if len(spec.DefaultModels) > 0 {
+			typeDefaultModels[spec.ID] = slices.Clone(spec.DefaultModels)
+		}
+		if spec.AutoDiscoverable {
+			for _, name := range spec.EnvAPIKeyNames {
+				envNames[name] = struct{}{}
+			}
+		}
+	}
+	slices.Sort(providerTypes)
+
+	// Configured providers may reference env vars that no built-in provider
+	// auto-discovers; surface them so the UI shows their availability.
+	providers, _ := raw["providers"].(map[string]any)
+	for _, rawEntry := range providers {
+		entry, _ := rawEntry.(map[string]any)
+		if entry == nil {
+			continue
+		}
+		if apiKey, _ := entry["api_key"].(string); apiKey != "" {
+			if ref := IsAPIKeyEnvRef(apiKey); ref != "" {
+				envNames[ref] = struct{}{}
+			}
+		}
+	}
+	env := map[string]bool{}
+	for _, name := range slices.Sorted(maps.Keys(envNames)) {
+		env[name] = strings.TrimSpace(os.Getenv(name)) != ""
+	}
+
+	return map[string]any{
+		"path":   path,
+		"exists": exists,
+		"config": presentConfig(raw, order),
+		"options": map[string]any{
+			"provider_types":    providerTypes,
+			"permission_levels": PermissionLevelOptions(),
+			"permission_modes":  PermissionModeOptions(),
+			"reasoning_efforts": ReasoningEffortOptions,
+		},
+		"env":                          env,
+		"provider_type_env_vars":       typeEnvVars,
+		"provider_type_default_models": typeDefaultModels,
+	}
+}
+
+// presentConfig redacts saved api_key strings (replacing them with the
+// api_key_saved flag) and reshapes models into a sorted name list with
+// optional overrides, so the UI never sees raw secrets.
+func presentConfig(raw map[string]any, order ConfigOrder) map[string]any {
+	out := maps.Clone(raw)
+	if out == nil {
+		out = map[string]any{}
+	}
+	providers, _ := raw["providers"].(map[string]any)
+	if len(providers) == 0 {
+		return out
+	}
+	presented := map[string]any{}
+	for name, rawEntry := range providers {
+		entry, ok := rawEntry.(map[string]any)
+		if !ok {
+			presented[name] = rawEntry
+			continue
+		}
+		entry = maps.Clone(entry)
+		apiKey := strings.TrimSpace(asString(entry["api_key"]))
+		switch {
+		case apiKey == "":
+			entry["api_key"] = nil
+			entry["api_key_saved"] = false
+		case IsAPIKeyEnvRef(apiKey) != "":
+			entry["api_key_saved"] = false
+		default:
+			entry["api_key"] = nil
+			entry["api_key_saved"] = true
+		}
+
+		if models, _ := entry["models"].(map[string]any); len(models) > 0 {
+			keys := orderedKeys(models, order.ModelOrder[name])
+			entry["models"] = keys
+			overrides := map[string]any{}
+			for _, key := range keys {
+				if modelOverride, _ := models[key].(map[string]any); len(modelOverride) > 0 {
+					overrides[key] = modelOverride
+				}
+			}
+			if len(overrides) > 0 {
+				entry["model_overrides"] = overrides
+			}
+		}
+		presented[name] = entry
+	}
+	out["providers"] = orderedMap{values: presented, order: order.ProviderOrder}
+	return out
+}
+
+// MergeAPIKeys carries over saved api_keys for providers whose incoming
+// payload omits them (the UI never echoes saved secrets back). Providers
+// that explicitly clear api_key still drop it.
+func MergeAPIKeys(incoming, existing map[string]any) {
+	incomingProviders, _ := incoming["providers"].(map[string]any)
+	existingProviders, _ := existing["providers"].(map[string]any)
+	for name, rawEntry := range incomingProviders {
+		entry, _ := rawEntry.(map[string]any)
+		if entry == nil || entry["api_key"] != nil {
+			continue
+		}
+		prior, _ := existingProviders[name].(map[string]any)
+		if prior != nil {
+			if apiKey, ok := prior["api_key"]; ok {
+				entry["api_key"] = apiKey
+				continue
+			}
+		}
+		delete(entry, "api_key")
+	}
+}
+
+// WriteSettingsFile writes payload as pretty-printed JSON via a temp-file
+// rename, preserving the caller-supplied provider/model ordering. The atomic
+// rename ensures a crash mid-write cannot truncate the settings.
+func WriteSettingsFile(path string, payload map[string]any, order ConfigOrder) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".")
+	if err != nil {
+		return err
+	}
+	tmpName := file.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if providers, _ := payload["providers"].(map[string]any); len(providers) > 0 {
+		ordered := map[string]any{}
+		for _, name := range orderedKeys(providers, order.ProviderOrder) {
+			rawEntry := providers[name]
+			if entry, ok := rawEntry.(map[string]any); ok {
+				entry = maps.Clone(entry)
+				if models, _ := entry["models"].(map[string]any); len(models) > 0 {
+					entry["models"] = orderedMap{values: models, order: order.ModelOrder[name]}
+				}
+				rawEntry = entry
+			}
+			ordered[name] = rawEntry
+		}
+		payload = maps.Clone(payload)
+		payload["providers"] = orderedMap{values: ordered, order: order.ProviderOrder}
+	}
+	if err := encoder.Encode(payload); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+// ModelsForProvider returns the models to expose for a resolved provider:
+// configured models first (with their explicit order), otherwise the spec's
+// defaults, falling back to the single resolved model when no spec matches.
+func ModelsForProvider(settings Settings, resolved ResolvedProvider) []string {
+	if pc, ok := settings.Providers[resolved.ProviderName]; ok && len(pc.Models) > 0 {
+		if len(pc.ModelOrder) > 0 {
+			return slices.Clone(pc.ModelOrder)
+		}
+		return slices.Sorted(maps.Keys(pc.Models))
+	}
+	spec, ok := provider.LookupSpec(resolved.ProviderType)
+	if !ok || len(spec.DefaultModels) == 0 {
+		return []string{resolved.Model}
+	}
+	return slices.Clone(spec.DefaultModels)
+}
+
+// orderedMap preserves provider/model insertion order when marshaling to
+// JSON, so settings round-trip through the UI without churning keys.
+type orderedMap struct {
+	values map[string]any
+	order  []string
+}
+
+func (m orderedMap) MarshalJSON() ([]byte, error) {
+	var buf strings.Builder
+	buf.WriteByte('{')
+	for i, key := range orderedKeys(m.values, m.order) {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		name, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		value, err := json.Marshal(m.values[key])
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(name)
+		buf.WriteByte(':')
+		buf.Write(value)
+	}
+	buf.WriteByte('}')
+	return []byte(buf.String()), nil
+}
+
+// orderedKeys returns the keys of values in preferred order; remaining keys
+// are appended alphabetically.
+func orderedKeys(values map[string]any, preferred []string) []string {
+	keys := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, key := range preferred {
+		if _, ok := values[key]; !ok {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	for _, key := range slices.Sorted(maps.Keys(values)) {
+		if _, ok := seen[key]; !ok {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
