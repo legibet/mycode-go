@@ -1,7 +1,6 @@
 package session
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -126,7 +125,7 @@ func TestAppendMessageTruncatesSessionTitleByRune(t *testing.T) {
 	}
 }
 
-func TestLoadSessionRepairsInterruptedToolLoop(t *testing.T) {
+func TestLoadSessionLeavesOrphanToolUseInPlace(t *testing.T) {
 	store := NewStore(t.TempDir())
 	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
@@ -140,23 +139,41 @@ func TestLoadSessionRepairsInterruptedToolLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	metaBefore, err := store.readMeta(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawBefore, err := os.ReadFile(filepath.Join(store.SessionDir(sessionID), "messages.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	loaded, err := store.LoadSession(sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded == nil || len(loaded.Messages) != 2 {
-		t.Fatalf("unexpected session: %#v", loaded)
+	// Load is read-only: orphan tool_use stays in the visible history; the
+	// provider adapter closes it at replay time.
+	if loaded == nil || len(loaded.Messages) != 1 {
+		t.Fatalf("expected single assistant message, got %#v", loaded)
 	}
-	if loaded.Messages[1].Role != "user" || loaded.Messages[1].Content[0].Type != "tool_result" {
-		t.Fatalf("unexpected repaired message: %#v", loaded.Messages)
+	if loaded.Messages[0].Role != "assistant" || loaded.Messages[0].Content[0].Type != "tool_use" {
+		t.Fatalf("unexpected loaded content: %#v", loaded.Messages[0])
 	}
 
-	loadedAgain, err := store.LoadSession(sessionID)
+	metaAfter, err := store.readMeta(sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loadedAgain.Messages) != 2 {
-		t.Fatalf("unexpected repaired session on reload: %#v", loadedAgain.Messages)
+	rawAfter, err := os.ReadFile(filepath.Join(store.SessionDir(sessionID), "messages.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metaAfter.UpdatedAt != metaBefore.UpdatedAt {
+		t.Fatalf("LoadSession mutated meta.updated_at: %q -> %q", metaBefore.UpdatedAt, metaAfter.UpdatedAt)
+	}
+	if string(rawAfter) != string(rawBefore) {
+		t.Fatal("LoadSession appended to messages.jsonl; expected read-only behavior")
 	}
 }
 
@@ -266,7 +283,7 @@ func TestRewindAfterCompactKeepsCompactMarker(t *testing.T) {
 	}
 }
 
-func TestRewindPastInterruptedToolLoopSkipsRepair(t *testing.T) {
+func TestRewindTruncatesPastOpenToolUse(t *testing.T) {
 	store := NewStore(t.TempDir())
 	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
@@ -297,42 +314,4 @@ func TestRewindPastInterruptedToolLoopSkipsRepair(t *testing.T) {
 	if len(loaded.Messages) != 2 || loaded.Messages[0].Content[0].Text != "hello" || loaded.Messages[1].Content[0].Text != "hi" {
 		t.Fatalf("unexpected messages after rewind: %#v", loaded.Messages)
 	}
-
-	lines, err := os.ReadFile(filepath.Join(store.SessionDir(sessionID), "messages.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	count := 0
-	for _, line := range bytesToLines(lines) {
-		var msg map[string]any
-		if err := json.Unmarshal([]byte(line), &msg); err == nil && msg["role"] == "user" {
-			if content, ok := msg["content"].([]any); ok && len(content) > 0 {
-				block, _ := content[0].(map[string]any)
-				if block["type"] == "tool_result" {
-					count++
-				}
-			}
-		}
-	}
-	if count != 0 {
-		t.Fatalf("unexpected repaired tool results persisted: %d", count)
-	}
-}
-
-func bytesToLines(data []byte) []string {
-	lines := []string{}
-	start := 0
-	for i, b := range data {
-		if b != '\n' {
-			continue
-		}
-		if i > start {
-			lines = append(lines, string(data[start:i]))
-		}
-		start = i + 1
-	}
-	if start < len(data) {
-		lines = append(lines, string(data[start:]))
-	}
-	return lines
 }

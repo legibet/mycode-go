@@ -2,7 +2,7 @@
 
 Source: `mycode-go/internal/session/store.go`
 
-The on-disk format matches Python `main` message format version 6.
+The on-disk format matches Python `main` message format version 7.
 
 ## Storage Layout
 
@@ -23,7 +23,7 @@ $MYCODE_HOME/sessions/<session_id>/
   "title": "New chat",
   "created_at": "...",
   "updated_at": "...",
-  "message_format_version": 6
+  "message_format_version": 7
 }
 ```
 
@@ -31,7 +31,7 @@ $MYCODE_HOME/sessions/<session_id>/
 - `provider`, `model`, and `api_base` are not persisted in meta. Per-turn provider state lives on assistant message `meta`.
 - `title` starts as `"New chat"` and is promoted to the first readable user message, truncated to 48 chars.
 - `updated_at` is bumped on every appended message.
-- `message_format_version` is written as `6`.
+- `message_format_version` is written as `7`.
 
 ## Message Blocks
 
@@ -56,8 +56,10 @@ Canonical messages are block-based:
 ### Compact Event
 
 ```json
-{"role": "compact", "content": [{"type": "text", "text": "<summary>"}], "meta": {"provider": "...", "model": "...", "compacted_count": 12}}
+{"role": "compact", "content": [{"type": "text", "text": "<summary>"}], "meta": {"provider": "...", "model": "...", "total_tokens": 4321}}
 ```
+
+`compact` markers are persisted inline at the position they were emitted. They stay visible during replay; the agent substitutes the latest marker with a summary continuation only when projecting messages for the provider.
 
 ### Rewind Event
 
@@ -67,12 +69,12 @@ Canonical messages are block-based:
 
 ## Load Order
 
-`Store.LoadSession(sessionID)` applies the same replay order as Python:
+`Store.LoadSession(sessionID)` is read-only and applies a single replay rule:
 
 1. Read raw JSONL records.
-2. Apply latest compact summary.
-3. Apply rewind markers sequentially.
-4. Repair an interrupted final tool loop by appending synthetic error `tool_result` blocks.
+2. Apply rewind markers sequentially.
+
+`compact` markers stay inline in the visible history. The agent substitutes the latest marker with a summary continuation when calling the provider (`agent.ApplyCompactReplay`). Orphan `tool_use` blocks left open by a server crash are closed by the provider adapter at replay time (`provider.RepairMessagesForReplay`), not on disk.
 
 ## Context Compaction
 
@@ -82,7 +84,12 @@ After every completed assistant turn, at an assistant/tool-result boundary, the 
 total_tokens >= context_window * compact_threshold
 ```
 
-The compact request uses the same provider/model, no tools, and no explicit reasoning effort. The compact event is appended; older JSONL records are never rewritten.
+The compact request uses the same provider/model, no tools, and no explicit reasoning effort. The summary is appended as a new `compact` record in the JSONL log; older messages are never rewritten.
+
+When the next provider call projects the history, the latest `compact` marker is replaced by:
+
+- A `user` message containing a continuation header, the summary, an optional transcript path hint, and (when no follow-up has streamed yet) a continuation footer instructing the model to resume directly.
+- An optional `assistant` "Acknowledged." turn, only when the marker is followed by a real user message and role alternation requires it.
 
 ## Rewind
 

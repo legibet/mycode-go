@@ -31,7 +31,7 @@ Exactly one of `message` or `input` is required.
 
 - `provider` is either a configured provider alias or a raw provider id.
 - `reasoning_effort` overrides config for this request only. Empty string, `null`, or `"auto"` means "use server/config default".
-- `rewind_to` is a visible message index. It must point at a real user message, not an assistant message, synthetic compact summary, or tool-result-only message.
+- `rewind_to` is a visible message index. It must point at a real user message, not an assistant message, compact marker, or tool-result-only message.
 
 Structured `input` accepts the same block shape as Python:
 
@@ -63,14 +63,14 @@ Response:
     "title": "...",
     "created_at": "...",
     "updated_at": "...",
-    "message_format_version": 6
+    "message_format_version": 7
   }
 }
 ```
 
 Errors:
 
-- `400` for invalid request data, invalid `rewind_to`, unsupported attachment type, unsupported model capability, or unsupported `reasoning_effort`.
+- `400` for invalid request data, invalid `rewind_to`, missing or invalid `cwd`, unsupported attachment type, unsupported model capability, or unsupported `reasoning_effort`. Missing `cwd` returns `{"detail": "Working directory does not exist: ..."}`.
 - `409` when the session already has a running task. Body shape: `{"detail": {"message": "...", "run": {...}}}`.
 - `500` for config/runtime failures other than invalid request values.
 
@@ -135,12 +135,13 @@ Return provider, model, and capability metadata for the web UI.
   "default_reasoning_effort": "auto",
   "reasoning_effort_options": ["auto", "none", "low", "medium", "high", "xhigh"],
   "cwd": "...",
+  "cwd_exists": true,
   "project": "...",
   "config_paths": ["..."]
 }
 ```
 
-`GET /api/config` returns `503` when no provider can be resolved.
+`GET /api/config` returns `503` when no provider can be resolved. `cwd_exists` is `false` when the resolved working directory no longer exists; chat and session-create routes reject such requests with `400`.
 
 ## Settings
 
@@ -203,7 +204,7 @@ Session routes are implemented in `mycode-go/internal/server/sessions.go`.
 List sessions. Optional `cwd` filters by the exact stored cwd. Each session includes `is_running`.
 
 ```json
-{"sessions": [{"id": "...", "title": "...", "cwd": "...", "message_format_version": 6, "is_running": false}]}
+{"sessions": [{"id": "...", "title": "...", "cwd": "...", "message_format_version": 7, "is_running": false}]}
 ```
 
 ### `POST /api/sessions`
@@ -216,7 +217,7 @@ Request:
 {"cwd": null}
 ```
 
-`cwd` defaults to the server's current working directory. The server allocates a uuid-like hex session id.
+`cwd` defaults to the server's current working directory and must point at an existing directory; missing directories return `400 {"detail": "Working directory does not exist: ..."}`. The server allocates a uuid-like hex session id.
 
 ### `GET /api/sessions/{id}`
 
@@ -230,6 +231,8 @@ Load a session. If the session has an active run, the response overlays in-memor
   "pending_events": [...]
 }
 ```
+
+`document` block payloads in `messages` are returned with an empty `data` field so the on-disk PDF base64 is not re-shipped on every load. The full payload remains in `messages.jsonl` for replay.
 
 Missing sessions return `{"session": null, "messages": [], "active_run": null, "pending_events": []}`.
 
@@ -283,7 +286,7 @@ Return the server process cwd:
 | `tool_start`          | `tool_call: {id, name, input}`                                               |
 | `tool_output`         | `tool_use_id: str`, `output: str`                                            |
 | `tool_done`           | `tool_use_id: str`, `output: str`, `is_error: bool`, `metadata?`, `content?` |
-| `compact`             | `message: str`                                                               |
+| `compact`             | _empty payload; the `compact` JSONL record has already been persisted_       |
 | `error`               | `message: str`                                                               |
 | `permission_request`  | `request_id: str`, `tool_use_id: str`, `tool_name: str`, `preview: str`      |
 | `permission_resolved` | `request_id: str`, `decision: "allow" \| "deny"`                             |

@@ -191,11 +191,10 @@ func (s *Store) LoadSession(sessionID string) (*Data, error) {
 		return nil, err
 	}
 	// Visible state = raw JSONL minus rewound tails. `compact` markers stay
-	// inline; the agent substitutes them when calling the provider.
+	// inline; the agent substitutes them when calling the provider. Orphan
+	// tool_use blocks (e.g. left open by a server crash) are closed by the
+	// provider adapter at replay time, not here — load_session is read-only.
 	visible := ApplyRewind(rawMessages)
-	if err := s.repairInterruptedToolLoop(sessionID, &meta, &visible); err != nil {
-		return nil, err
-	}
 
 	return &Data{Session: summarize(sessionID, meta), Messages: visible}, nil
 }
@@ -298,77 +297,6 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string)
 // SessionDir returns the absolute session directory.
 func (s *Store) SessionDir(sessionID string) string {
 	return s.sessionDir(sessionID)
-}
-
-func (s *Store) repairInterruptedToolLoop(sessionID string, meta *Meta, messages *[]message.Message) error {
-	visible := *messages
-	pendingIDs := make([]string, 0)
-	pendingIndex := -1
-	for i := len(visible) - 1; i >= 0; i-- {
-		msg := visible[i]
-		if msg.Role != "assistant" {
-			continue
-		}
-		for _, block := range msg.Content {
-			if block.Type == "tool_use" && block.ID != "" {
-				pendingIDs = append(pendingIDs, block.ID)
-			}
-		}
-		if len(pendingIDs) > 0 {
-			pendingIndex = i
-			break
-		}
-	}
-
-	if pendingIndex == -1 {
-		return nil
-	}
-
-	completedIDs := map[string]struct{}{}
-	for _, msg := range visible[pendingIndex+1:] {
-		if msg.Role != "user" {
-			continue
-		}
-		for _, block := range msg.Content {
-			if block.Type == "tool_result" && block.ToolUseID != "" {
-				completedIDs[block.ToolUseID] = struct{}{}
-			}
-		}
-	}
-
-	missing := make([]string, 0, len(pendingIDs))
-	for _, id := range pendingIDs {
-		if _, ok := completedIDs[id]; !ok {
-			missing = append(missing, id)
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-
-	repairBlocks := make([]message.Block, 0, len(missing))
-	for _, id := range missing {
-		repairBlocks = append(repairBlocks, message.ToolResultBlock(
-			id,
-			"error: tool call was interrupted",
-			nil,
-			true,
-			nil,
-			nil,
-		))
-	}
-	repair := message.BuildMessage("user", repairBlocks, nil)
-	if err := appendJSONL(s.messagesPath(sessionID), repair); err != nil {
-		return err
-	}
-
-	meta.UpdatedAt = now()
-	if err := s.writeMeta(sessionID, *meta); err != nil {
-		return err
-	}
-
-	*messages = append(*messages, repair)
-	return nil
 }
 
 func (s *Store) readMessages(sessionID string) ([]message.Message, error) {
