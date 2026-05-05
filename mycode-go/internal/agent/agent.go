@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/legibet/mycode-go/internal/config"
@@ -96,6 +97,13 @@ func New(opts Options) (*Agent, error) {
 
 	sessionDir := cmp.Or(opts.SessionDir, cwd)
 	sessionID := cmp.Or(opts.SessionID, filepath.Base(sessionDir))
+	// Transcript path is only meaningful when a session backs the agent on
+	// disk. Without it, the compact projection skips the "read the original
+	// log at: <path>" hint, matching Python's transcript_path=None branch.
+	transcriptPath := ""
+	if opts.SessionDir != "" {
+		transcriptPath = filepath.Join(opts.SessionDir, "messages.jsonl")
+	}
 	permission := opts.Permission
 	if permission.Level == "" {
 		permission = config.DefaultPermissionConfig()
@@ -137,7 +145,7 @@ func New(opts Options) (*Agent, error) {
 		Project:            project,
 		SessionDir:         sessionDir,
 		SessionID:          sessionID,
-		TranscriptPath:     filepath.Join(sessionDir, "messages.jsonl"),
+		TranscriptPath:     transcriptPath,
 		APIKey:             opts.APIKey,
 		APIBase:            opts.APIBase,
 		MaxTurns:           opts.MaxTurns,
@@ -456,7 +464,10 @@ func (a *Agent) compactIfNeeded(ctx context.Context, persist PersistFunc, out ch
 		return false
 	}
 
-	compactMessages := append(ApplyCompactReplay(a.Messages, a.TranscriptPath), message.UserTextMessage(CompactSummaryPrompt, nil))
+	compactMessages := slices.Concat(
+		ApplyCompactReplay(a.Messages, a.TranscriptPath),
+		[]message.Message{message.UserTextMessage(CompactSummaryPrompt, nil)},
+	)
 	req := provider.Request{
 		Provider:           a.Provider,
 		Model:              a.Model,
