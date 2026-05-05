@@ -1839,9 +1839,30 @@
       "supports_pdf_input": false,
       "supports_reasoning": true
     },
+    "openrouter/owl-alpha": {
+      "context_window": 1048756,
+      "max_output_tokens": 262144,
+      "supports_image_input": false,
+      "supports_pdf_input": false,
+      "supports_reasoning": true
+    },
     "openrouter/pareto-code": {
       "context_window": 200000,
       "max_output_tokens": 200000,
+      "supports_image_input": false,
+      "supports_pdf_input": false,
+      "supports_reasoning": true
+    },
+    "poolside/laguna-m.1:free": {
+      "context_window": 131072,
+      "max_output_tokens": 8192,
+      "supports_image_input": false,
+      "supports_pdf_input": false,
+      "supports_reasoning": true
+    },
+    "poolside/laguna-xs.2:free": {
+      "context_window": 131072,
+      "max_output_tokens": 8192,
       "supports_image_input": false,
       "supports_pdf_input": false,
       "supports_reasoning": true
@@ -2059,6 +2080,13 @@
     "x-ai/grok-4.20-multi-agent-beta": {
       "context_window": 2000000,
       "max_output_tokens": 30000,
+      "supports_image_input": true,
+      "supports_pdf_input": false,
+      "supports_reasoning": true
+    },
+    "x-ai/grok-4.3": {
+      "context_window": 1000000,
+      "max_output_tokens": 1000000,
       "supports_image_input": true,
       "supports_pdf_input": false,
       "supports_reasoning": true
