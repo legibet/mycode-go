@@ -6,11 +6,13 @@ Authoritative context for agent runs. Keep this file short and in sync with the 
 
 `mycode-go` is a personal minimal coding agent with a web UI and a small CLI. It keeps `.mycode` config and session compatibility with the original Python version.
 
-This branch is the Go rewrite of the Python backend on `main`. It tracks Python `main` for external behavior, but it is not a line-by-line port:
+This repository uses three long-lived branches:
 
-- `web/` is synced directly from Python `main` by cherry-picking web-only commits.
-- Go backend code mirrors external behavior, disk formats, and API contracts from Python `main` (`cli/` and `mycode/`).
-- Go backend internals should stay idiomatic Go. Do not copy Python package layout or implementation details unless it simplifies compatibility.
+- `main` — Python implementation, source of truth for `web/`, message/session formats, HTTP API, and SSE contracts.
+- `mycode-go` (**this branch**) — Go rewrite with CLI, HTTP server, and shared `web/`. It tracks `main`, keeps Go internals idiomatic, and stays free of Wails code.
+- `mycode-go-wails` — Wails desktop adapter on top of `mycode-go`. It tracks `mycode-go` and owns desktop-specific entry points, build files, and the web transport adapter.
+
+Sync direction is one-way: `main` → `mycode-go` → `mycode-go-wails`.
 
 ## Current Sync
 
@@ -18,11 +20,7 @@ Synced with Python `main` through:
 
 - `ec31daa refactor(sdk): extract compact module from session.py and agent.py`
 
-Repository branch model (three-tier, see `docs/branching.md`):
-
-- `main` — Python implementation, primary development branch, source of truth for web/ and external contracts.
-- `mycode-go` (**this branch**) — Go rewrite with HTTP, web UI, and a small non-interactive CLI. Tracks `main`. Internal `core` service layer is transport-agnostic so the desktop branch can reuse it.
-- `mycode-go-wails` — adds a Wails desktop adapter on top of `mycode-go`. Tracks `mycode-go`. Wails toolchain, `main.go`/`app.go`, and the `web/utils/transport.ts` abstraction live only there.
+Wails build and desktop details live only on `mycode-go-wails`, in that branch's `docs/wails.md`.
 
 Priorities:
 
