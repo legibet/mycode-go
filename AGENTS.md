@@ -1,242 +1,154 @@
 # mycode-go — Agent Context
 
-Authoritative context for agent runs. Keep this file short and in sync with the Go branch.
+Always-loaded context for agent runs on this branch. Detailed specs live in `docs/`; this file points at them rather than duplicating their content.
 
 ## Product
 
-`mycode-go` is a personal minimal coding agent with a web UI and a small CLI. It keeps `.mycode` config and session compatibility with the original Python version.
+`mycode-go` is the Go rewrite of `mycode`: a minimal coding agent with a small CLI, HTTP server, and shared React web UI. It keeps `.mycode` config, message, session, API, and SSE compatibility with the Python `main` branch.
 
-This repository uses three long-lived branches:
+Branches:
 
-- `main` — Python implementation, source of truth for `web/`, message/session formats, HTTP API, and SSE contracts.
-- `mycode-go` (**this branch**) — Go rewrite with CLI, HTTP server, and shared `web/`. It tracks `main`, keeps Go internals idiomatic, and stays free of Wails code.
-- `mycode-go-wails` — Wails desktop adapter on top of `mycode-go`. It tracks `mycode-go` and owns desktop-specific entry points, build files, and the web transport adapter.
+- `main` — Python implementation; source of truth for `web/`, message/session formats, HTTP API, and SSE contracts.
+- `mycode-go` — this Go rewrite; tracks `main`, keeps Go internals idiomatic, and stays free of Wails code.
+- `mycode-go-wails` — Wails desktop adapter on top of `mycode-go`; owns desktop entry points and build files.
 
-Sync direction is one-way: `main` → `mycode-go` → `mycode-go-wails`.
+Sync direction: `main` → `mycode-go` → `mycode-go-wails`.
 
-## Current Sync
+Current sync: Python `main` through `86ecefc fix(web): update component styles for consistency`. Web commits through that point were cherry-picked directly. Python SDK/CLI refactors in this range were reviewed and do not require Go behavior changes. Release-only commits do not apply here. `models_catalog.json` was regenerated from the shared update script.
 
-Synced with Python `main` through:
+Priorities: small readable core · one message model · one agent loop · append-only sessions · provider adapters at the boundary · Python-compatible contracts.
 
-- `ec31daa refactor(sdk): extract compact module from session.py and agent.py`
+## Guardrails
 
-Wails build and desktop details live only on `mycode-go-wails`, in that branch's `docs/wails.md`.
+- 4 built-in tools only: `read`, `write`, `edit`, `bash`.
+- Provider-specific behavior stays inside adapters, never in the agent loop.
+- Sessions stay append-only and human-inspectable.
+- CLI and server stay thin wrappers over `mycode-go/internal/agent` and `internal/core`.
+- Keep `web/` byte-for-byte aligned with Python `main` unless a Go-branch-only web patch is explicitly documented.
 
-Priorities:
+When in doubt, prefer the simpler and more explicit design.
 
-- small readable core
-- one message model
-- one agent loop
-- append-only sessions
-- provider adapters at the boundary
-- Python-compatible message/session/API contracts
+## Project Layout
 
-## Core Rules
+```text
+mycode-go/
+  cmd/mycode-go/              # CLI: run, web, session list, --version
+  internal/agent/             # agent loop and compact replay
+  internal/core/              # transport-agnostic service layer and RunManager
+  internal/message/           # canonical block-based message model
+  internal/tools/             # the 4 built-in tools and execution
+  internal/permissions/       # CLI/web tool permission policy
+  internal/session/           # append-only JSONL store, compact, rewind, repair
+  internal/config/            # layered config loading and provider resolution
+  internal/models/            # bundled model metadata lookup
+  internal/prompt/            # system prompt, AGENTS discovery, skills discovery
+  internal/provider/          # provider adapters
+    anthropic.go              # anthropic, moonshotai, minimax
+    google.go                 # google
+    openai_responses.go       # openai
+    openai_chat.go            # openai_chat, deepseek, zai, openrouter
+  internal/server/            # HTTP adapter and SSE framing
+  internal/workspace/         # workspace browser
 
-- 4 built-in tools only: `read`, `write`, `edit`, `bash`
-- Provider-specific behavior stays inside adapters
-- Keep the runtime explicit and easy to inspect
-- Prefer simple Go over framework-heavy designs
-- Do not add abstraction layers unless they remove real complexity
-- New session writes use the current Python-compatible format only; do not add legacy session compatibility paths unless explicitly requested
-- Keep `web/` byte-for-byte aligned with Python `main` unless a Go-branch-only web patch is explicitly documented
+web/src/                      # shared React + Vite UI from Python main
+  hooks/useChat.ts            # chat state + SSE streaming
+  utils/messages.ts           # canonical blocks → UI messages
 
-## Source Map
-
-Core runtime:
-
-- `mycode-go/internal/core/*.go` — transport-agnostic service layer (chat/sessions/runs/config/workspace) shared by HTTP and future adapters; owns `RunManager`
-- `mycode-go/internal/agent/agent.go` — the only orchestration loop
-- `mycode-go/internal/agent/compact.go` — compact threshold check, persisted compact event, lazy projection for provider replay
-- `mycode-go/internal/message/message.go` — canonical message/block format
-- `mycode-go/internal/tools/*.go` — 4 built-in tools and execution
-- `mycode-go/internal/permissions/*.go` — CLI/web tool permission policy and conservative bash classification
-- `mycode-go/internal/session/store.go` — append-only JSONL storage, compact, rewind, repair
-- `mycode-go/internal/config/*.go` — layered config loading and provider resolution
-- `mycode-go/internal/models/catalog.go` — bundled model metadata lookup
-- `mycode-go/internal/prompt/prompt.go` — runtime system prompt assembly, AGENTS discovery, skills discovery
-
-Providers:
-
-- `mycode-go/internal/provider/base.go` — adapter contract and replay helpers
-- `mycode-go/internal/provider/registry.go` — adapter registry
-- `mycode-go/internal/provider/specs.go` — built-in provider metadata
-- `mycode-go/internal/provider/anthropic.go` — `anthropic`, `moonshotai`, `minimax`
-- `mycode-go/internal/provider/openai_responses.go` — `openai`
-- `mycode-go/internal/provider/openai_chat.go` — `openai_chat`, `deepseek`, `zai`, `openrouter`
-- `mycode-go/internal/provider/google.go` — `google`
-
-Server:
-
-- `mycode-go/internal/server/app.go` + `mycode-go/internal/server/*.go` — thin HTTP adapter over `internal/core.Service`; owns SSE framing and request parsing only
-- `mycode-go/internal/workspace/workspace.go` — workspace browser
-
-CLI:
-
-- `mycode-go/cmd/mycode-go/*.go` — `run`, `web`, `session list`, `--version`, and bare-message convenience mode
-
-Web UI:
-
-- `web/src/hooks/useChat.ts` — chat state and SSE streaming
-- `web/src/utils/messages.ts` — canonical blocks to UI messages
+scripts/
+  update_models_catalog.py    # regenerates mycode-go/internal/models/models_catalog.json
+  sync_web_dist.sh            # copies web/dist into Go's embedded webdist directory
+```
 
 ## Internal Message Model
 
-All runtime, persistence, and API data use the same block-based JSON format:
+A single block-based JSON format is used at runtime, in persistence, and over the API. Block types: `text` · `image` · `document` · `thinking` · `tool_use` · `tool_result`.
 
-```json
-{
-  "role": "assistant",
-  "content": [
-    {"type": "thinking", "text": "..."},
-    {"type": "text", "text": "..."},
-    {"type": "tool_use", "id": "call_1", "name": "read", "input": {"path": "x.go"}},
-    {"type": "tool_result", "tool_use_id": "call_1", "output": "...", "metadata": {}, "is_error": false}
-  ],
-  "meta": {
-    "provider": "anthropic",
-    "model": "claude-sonnet-4-6",
-    "stop_reason": "tool_use",
-    "total_tokens": 1456,
-    "context_window": 200000,
-    "native": {}
-  }
-}
-```
+Tool results are stored as `user` messages whose `tool_result` blocks carry provider-facing `output` plus optional structured UI `metadata`. `thinking` blocks are first-class session data. Session `meta.json` stores only `cwd`, `title`, `created_at`, `updated_at`, and `message_format_version=7`; provider/model/api_base live on per-turn messages.
 
-Block types:
-
-- `text`
-- `image`
-- `document`
-- `thinking`
-- `tool_use`
-- `tool_result`
-
-Tool results are stored as a `user` message with `tool_result` blocks. `thinking` blocks are first-class session data.
-
-`tool_result.output` is provider-facing text. `tool_result.metadata` is structured UI data and is optional. Do not write `model_text` or `display_text`.
-
-Session `meta.json` stores only `cwd`, `title`, `created_at`, `updated_at`, and `message_format_version=7`. The API adds `id` from the directory name. Provider/model/api_base live on per-turn messages, not in session meta.
+Full schema, JSONL record types, replay rules, compact, and rewind behavior live in `docs/sessions.md`.
 
 ## Agent Loop
 
-`mycode-go/internal/agent/agent.go` runs one user turn:
+Per user turn (`mycode-go/internal/agent/agent.go`):
 
-1. Append user message
-2. Stream one provider turn (messages are projected through `ApplyCompactReplay` so the latest `compact` marker becomes a summary continuation, while staying inline in storage)
-3. Persist the assistant message
-4. Execute tool calls locally
-5. Append tool results as a `user` message
-6. Repeat until there are no tool calls
-7. Optionally compact context when usage crosses `compact_threshold`; the compact event is persisted inline and the next provider call projects it
+1. Append the user message.
+2. Stream one provider turn through `ApplyCompactReplay`.
+3. Persist the assistant message.
+4. Execute local tool calls.
+5. Append a `user` tool-result message.
+6. Repeat until there are no tool calls.
+7. Optionally compact when usage crosses `compact_threshold`; the compact event is persisted inline and projected on the next provider call.
 
-## Provider Types
+## Provider Adapters
 
-See `docs/providers.md` for details. All provider ids are preserved:
-
-- `anthropic`
-- `moonshotai`
-- `minimax`
-- `openai`
-- `openai_chat`
-- `deepseek`
-- `zai`
-- `openrouter`
-- `google`
+Adapter ids: `anthropic`, `moonshotai`, `minimax`, `google`, `openai`, `openai_chat`, `deepseek`, `zai`, `openrouter`. Provider wire-format quirks, reasoning replay, image/PDF serialization, and env vars live in `docs/providers.md`.
 
 ## SSE Contract
 
-Do not change these event names or shapes without updating server and web UI.
+`GET /api/runs/{run_id}/stream` event types: `reasoning`, `reasoning_done`, `text`, `tool_start`, `tool_output`, `tool_done`, `compact`, `error`, `permission_request`, `permission_resolved`, `usage`. Every event carries a monotonically increasing `seq`.
 
-- `reasoning` — `delta`
-- `reasoning_done` — `duration_ms`
-- `text` — `delta`
-- `tool_start` — `tool_call: {id, name, input}`
-- `tool_output` — `tool_use_id`, `output`
-- `tool_done` — `tool_use_id`, `output`, `is_error`, optional `metadata`, optional `content`
-- `compact` — `message`
-- `error` — `message`
-- `permission_request` — `request_id`, `tool_use_id`, `tool_name`, `preview`
-- `permission_resolved` — `request_id`, `decision` (`"allow"` or `"deny"`)
-- `usage` — `total_tokens`, optional `model`, optional `provider`, optional `context_window`
+Event names and payload shapes are a cross-component contract. Changes need to land in server and web UI together. Full payload fields and reconnect semantics live in `docs/api.md`.
 
-Every event also carries `seq`.
+## Detailed Specs
+
+Read the relevant doc before related changes.
+
+| Area                                                                 | Doc                                           |
+| -------------------------------------------------------------------- | --------------------------------------------- |
+| `internal/{agent,message,tools}`                                     | `docs/sdk.md`                                 |
+| `internal/session` or anything touching JSONL / compact / rewind     | `docs/sessions.md`                            |
+| `internal/provider/*`                                                | `docs/providers.md`                           |
+| `internal/core`, `internal/server`, SSE events, or routes            | `docs/api.md`                                 |
+| `internal/config`, `internal/prompt`, `internal/permissions`, models | `docs/config.md`                              |
+| `web/src/**`                                                         | `docs/web.md`                                 |
+| Cross-cutting contract changes                                       | `docs/api.md` + `docs/sdk.md` + `docs/web.md` |
+
+For third-party SDKs and APIs touched by adapter or runtime code, prefer `context7` lookups over assumptions.
 
 ## Interfaces
 
-CLI:
+CLI commands: `mycode-go <message>`, `mycode-go run "..."`, `mycode-go web [--dev]`, `mycode-go session list`. This Go rewrite does not include the Python terminal TUI.
 
-- `mycode-go <message>` — convenience alias for one non-interactive run
-- `mycode-go run "..."` — one non-interactive run
-- `mycode-go web [--dev]` — web server
-- `mycode-go session list` — list sessions
+Server routes are mounted under `/api`: chat runs, run stream/cancel/decide, config, settings, sessions, and workspaces. Endpoint schemas and run lifecycle details live in `docs/api.md`.
 
-This Go rewrite does not include terminal TUI.
+## Sync Rules
 
-Server:
+When syncing from Python `main`:
 
-- `POST /api/chat`
-- `GET /api/runs/{run_id}/stream`
-- `POST /api/runs/{run_id}/cancel`
-- `POST /api/runs/{run_id}/decide`
-- `GET /api/config`
-- `GET /api/settings`
-- `PUT /api/settings`
-- session CRUD at `/api/sessions`
-- workspace browser at `/api/workspaces`
+- Fetch `main` into `refs/remotes/local-main/main`.
+- Directly cherry-pick `web/` commits.
+- Reimplement backend commits in Go only when they affect CLI behavior, API/SSE contracts, message/session formats, tools, providers, config, models, prompts, or web expectations.
+- Skip Python-only release/package/TUI work unless it changes shared behavior.
+- Keep `web/` commits separate from Go backend, config, model, and docs commits.
+
+Useful checks:
+
+```bash
+git log --reverse --oneline <last-sync>..refs/remotes/local-main/main -- web/
+git diff --stat refs/remotes/local-main/main -- web
+```
 
 ## Commit Conventions
 
-`web/` changes and backend changes must be in **separate commits**.
-
-Commit message format: `type(scope): description`
+Format: `type(scope): description`.
 
 Scopes:
 
 - `web` — changes under `web/` only
 - `backend` — Go backend changes only
 - `cli` — CLI changes only
+- `docs` — documentation only
 
-When syncing web changes from `main`:
-
-```bash
-# fetch Python main into this repository
-git fetch /Users/legibet/projects/mycode main:refs/remotes/local-main/main
-
-# find web commits since last sync
-git log --reverse --oneline <last-sync>..refs/remotes/local-main/main -- web/
-
-# cherry-pick a specific web commit
-git cherry-pick <hash>
-
-# verify web is fully synced
-git diff --stat refs/remotes/local-main/main -- web
-```
-
-Backend sync rules:
-
-- Compare Python `main` behavior after the recorded sync commit.
-- Directly cherry-pick `web/` commits.
-- Reimplement backend commits in Go when they affect CLI behavior, API/SSE contracts, message/session formats, tools, providers, config, models, prompts, or web expectations.
-- Skip Python-only release/package/TUI work unless it changes shared behavior.
-- Update `docs/` and this file when contracts or sync status change.
+When a sync needs both web and backend/docs/model changes, make separate commits.
 
 ## Dev Workflow
-
-Backend:
 
 ```bash
 go -C mycode-go test ./...
 go -C mycode-go vet ./...
 cd mycode-go && golangci-lint run ./...
 go -C mycode-go run ./cmd/mycode-go web --dev
-uv run --no-project python ./scripts/update_models_catalog.py # only supported way to update models_catalog.json
-```
 
-Web:
-
-```bash
 pnpm --dir web install
 pnpm --dir web typecheck
 pnpm --dir web test:run
@@ -245,20 +157,16 @@ pnpm --dir web build
 ./scripts/sync_web_dist.sh
 ```
 
-Compatibility smoke:
+Update bundled model metadata with:
 
 ```bash
-# Python writes a v7 session and Go must read it.
-# Go writes a v7 session and Python must read it.
-# Check tool_result.output and edit metadata patch/stats both ways.
+uv run --no-project python ./scripts/update_models_catalog.py
 ```
 
-## Guardrails
+Compatibility smoke:
 
-Preserve unless explicitly asked to change:
-
-- 4-tool core stays unchanged
-- append-only sessions stay human-inspectable
-- CLI and server stay thin wrappers over `mycode-go/internal/agent`
-- provider quirks stay in adapters
-- no unnecessary abstraction layers
+```text
+Python writes a v7 session and Go must read it.
+Go writes a v7 session and Python must read it.
+Check tool_result.output and edit metadata patch/stats both ways.
+```

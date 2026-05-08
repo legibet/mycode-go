@@ -122,7 +122,7 @@ The bash classifier is conservative. Compound commands, shell redirection, comma
 
 ## Model Metadata
 
-`mycode-go/internal/models/models_catalog.json` is copied from Python `main`'s `mycode/src/mycode/models_catalog.json` and looked up through `mycode-go/internal/models/catalog.go`.
+`mycode-go/internal/models/models_catalog.json` is generated from `models.dev` by `scripts/update_models_catalog.py` and kept aligned with Python `main`'s `mycode/src/mycode/models_catalog.json`. Runtime lookup lives in `mycode-go/internal/models/catalog.go`.
 
 Metadata fields:
 
