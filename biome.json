@@ -5,7 +5,8 @@
       "**",
       "!**/node_modules",
       "!**/dist",
-      "!**/.vite"
+      "!**/.vite",
+      "!**/components/ui/**"
     ]
   },
   "formatter": {
@@ -22,7 +23,7 @@
         "noUnknownAtRules": {
           "level": "error",
           "options": {
-            "ignore": ["tailwind"]
+            "ignore": ["tailwind", "theme", "custom-variant", "source", "utility", "reference"]
           }
         }
       }
