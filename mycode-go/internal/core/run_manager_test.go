@@ -235,7 +235,7 @@ func TestRunManagerPermissionDecision(t *testing.T) {
 
 	result := make(chan permissions.ReviewDecision, 1)
 	go func() {
-		result <- manager.requestDecision(context.Background(), "session-1", permissions.ReviewRequest{
+		result <- manager.requestDecision(t.Context(), "session-1", permissions.ReviewRequest{
 			ToolCallID: "call-1",
 			ToolName:   "bash",
 			Preview:    "go test ./...",

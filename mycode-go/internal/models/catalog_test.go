@@ -1,7 +1,7 @@
 package models
 
 import (
-	"sync"
+	"slices"
 	"testing"
 )
 
@@ -111,16 +111,14 @@ func TestLookupDoesNotRetryAfterFirstCatalogLoad(t *testing.T) {
 func withCatalog(t *testing.T, raw string, fn func()) {
 	t.Helper()
 
-	originalJSON := append([]byte(nil), catalogJSON...)
-	originalCatalog := catalog
+	originalJSON := slices.Clone(catalogJSON)
+	originalLoad := loadCatalog
 	catalogJSON = []byte(raw)
-	catalog = nil
-	loadOnce = sync.Once{}
+	loadCatalog = newCatalogLoader()
 
 	t.Cleanup(func() {
 		catalogJSON = originalJSON
-		catalog = originalCatalog
-		loadOnce = sync.Once{}
+		loadCatalog = originalLoad
 	})
 
 	fn()

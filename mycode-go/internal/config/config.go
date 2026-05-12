@@ -259,7 +259,7 @@ func Load(cwd string) (Settings, error) {
 			if _, exists := entry["models"]; exists {
 				merged["models"] = entry["models"]
 				if order := loaded.ModelOrder[name]; len(order) > 0 {
-					mergedModelOrder[name] = append([]string(nil), order...)
+					mergedModelOrder[name] = slices.Clone(order)
 				} else {
 					delete(mergedModelOrder, name)
 				}
@@ -301,11 +301,11 @@ func DefaultPermissionConfig() PermissionConfig {
 }
 
 func PermissionLevelOptions() []string {
-	return append([]string(nil), validPermissionLevels...)
+	return slices.Clone(validPermissionLevels)
 }
 
 func PermissionModeOptions() []string {
-	return append([]string(nil), validPermissionModes...)
+	return slices.Clone(validPermissionModes)
 }
 
 // ParseConfigOrder preserves model order lost by map unmarshalling.
@@ -364,12 +364,12 @@ func NormalizeReasoningEffort(value string) (string, error) {
 }
 
 func IsAPIKeyEnvRef(value string) string {
-	text := strings.TrimSpace(value)
-	if !strings.HasPrefix(text, "${") || !strings.HasSuffix(text, "}") {
+	inner, ok := strings.CutPrefix(strings.TrimSpace(value), "${")
+	if !ok {
 		return ""
 	}
-	name := strings.TrimSuffix(strings.TrimPrefix(text, "${"), "}")
-	if name == "" {
+	name, ok := strings.CutSuffix(inner, "}")
+	if !ok || name == "" {
 		return ""
 	}
 	for i, r := range name {
@@ -397,7 +397,7 @@ func ValidateGlobalConfig(data any) (map[string]any, error) {
 	}
 	raw, ok := data.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("config must be an object")
+		return nil, errors.New("config must be an object")
 	}
 
 	out := map[string]any{}
@@ -422,13 +422,13 @@ func ValidateGlobalConfig(data any) (map[string]any, error) {
 	if rawProviders, exists := raw["providers"]; exists && rawProviders != nil {
 		providersRaw, ok := rawProviders.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("providers must be an object")
+			return nil, errors.New("providers must be an object")
 		}
 		providers := map[string]any{}
 		for name, rawProvider := range providersRaw {
 			cleanedName := strings.TrimSpace(name)
 			if cleanedName == "" {
-				return nil, fmt.Errorf("provider name must be a non-empty string")
+				return nil, errors.New("provider name must be a non-empty string")
 			}
 			cleaned, err := validateProviderPayload(cleanedName, rawProvider)
 			if err != nil {
@@ -710,7 +710,7 @@ func buildProviders(rawProviders map[string]map[string]any, order []string, mode
 			for _, model := range spec.DefaultModels {
 				modelsMap[model] = ModelConfig{}
 			}
-			orderedModels = append([]string(nil), spec.DefaultModels...)
+			orderedModels = slices.Clone(spec.DefaultModels)
 		}
 		reasoningEffort := ""
 		if value, exists := raw["reasoning_effort"]; exists && value != nil {
@@ -783,7 +783,7 @@ func normalizeModels(raw any, order []string) (map[string]ModelConfig, []string)
 func validateDefaultConfig(value any) (map[string]any, error) {
 	raw, ok := value.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("default must be an object")
+		return nil, errors.New("default must be an object")
 	}
 
 	out := map[string]any{}
@@ -811,7 +811,7 @@ func validateDefaultConfig(value any) (map[string]any, error) {
 		}
 		value, ok := parseCompactThreshold(threshold)
 		if !ok {
-			return nil, fmt.Errorf("default.compact_threshold must be a number in [0, 1] or false")
+			return nil, errors.New("default.compact_threshold must be a number in [0, 1] or false")
 		}
 		out["compact_threshold"] = value
 	}
@@ -825,7 +825,7 @@ func validatePermissionPayload(value any) (any, error) {
 	}
 	raw, ok := value.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("permission must be a string or object")
+		return nil, errors.New("permission must be a string or object")
 	}
 	out := map[string]any{}
 	if value, exists := raw["level"]; exists {
@@ -1133,7 +1133,7 @@ func parseOrderedObject(data []byte) (orderedObject, error) {
 	}
 	delim, ok := token.(json.Delim)
 	if !ok || delim != '{' {
-		return orderedObject{}, fmt.Errorf("expected object")
+		return orderedObject{}, errors.New("expected object")
 	}
 	result := orderedObject{values: map[string]json.RawMessage{}}
 	for decoder.More() {
@@ -1143,7 +1143,7 @@ func parseOrderedObject(data []byte) (orderedObject, error) {
 		}
 		key, ok := token.(string)
 		if !ok {
-			return orderedObject{}, fmt.Errorf("expected object key")
+			return orderedObject{}, errors.New("expected object key")
 		}
 		var raw json.RawMessage
 		if err := decoder.Decode(&raw); err != nil {

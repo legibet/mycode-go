@@ -24,17 +24,24 @@ type Metadata struct {
 	SupportsPDFInput   *bool  `json:"supports_pdf_input,omitempty"`
 }
 
-var (
-	loadOnce sync.Once
-	catalog  map[string]map[string]rawMetadata
-)
-
 type rawMetadata struct {
 	ContextWindow      int   `json:"context_window"`
 	MaxOutputTokens    int   `json:"max_output_tokens"`
 	SupportsReasoning  *bool `json:"supports_reasoning"`
 	SupportsImageInput *bool `json:"supports_image_input"`
 	SupportsPDFInput   *bool `json:"supports_pdf_input"`
+}
+
+var loadCatalog = newCatalogLoader()
+
+func newCatalogLoader() func() map[string]map[string]rawMetadata {
+	return sync.OnceValue(func() map[string]map[string]rawMetadata {
+		var parsed map[string]map[string]rawMetadata
+		if err := json.Unmarshal(catalogJSON, &parsed); err != nil {
+			return map[string]map[string]rawMetadata{}
+		}
+		return parsed
+	})
 }
 
 // Lookup resolves metadata for a (provider, model) pair. Tries the exact
@@ -46,7 +53,7 @@ func Lookup(providerType, model string) *Metadata {
 	if providerType == "" || requestedModel == "" {
 		return nil
 	}
-	loadCatalog()
+	catalog := loadCatalog()
 	if len(catalog) == 0 {
 		return nil
 	}
@@ -95,17 +102,6 @@ func Lookup(providerType, model string) *Metadata {
 		return build(match)
 	}
 	return nil
-}
-
-func loadCatalog() {
-	loadOnce.Do(func() {
-		var parsed map[string]map[string]rawMetadata
-		if err := json.Unmarshal(catalogJSON, &parsed); err != nil {
-			catalog = map[string]map[string]rawMetadata{}
-			return
-		}
-		catalog = parsed
-	})
 }
 
 // defaultProvider guesses the owning provider from a bare model name.

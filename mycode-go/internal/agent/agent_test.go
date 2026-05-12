@@ -68,7 +68,7 @@ func TestChatPersistsReasoningBlocks(t *testing.T) {
 	}
 
 	persisted := []message.Message{}
-	events := collectEvents(agent.Chat(context.Background(), message.UserTextMessage("hello", nil), func(msg message.Message) error {
+	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), func(msg message.Message) error {
 		persisted = append(persisted, msg)
 		return nil
 	}))
@@ -125,7 +125,7 @@ func TestChatRespectsExplicitTurnLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events := collectEvents(agent.Chat(context.Background(), message.UserTextMessage("hello", nil), nil))
+	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), nil))
 	last := events[len(events)-1]
 	if last.Type != "error" || last.Data["message"] != "max_turns reached" {
 		t.Fatalf("unexpected events: %#v", events)
@@ -160,7 +160,7 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	collectEvents(agent.Chat(context.Background(), message.UserTextMessage("hello", nil), nil))
+	collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), nil))
 
 	if len(adapter.requests) != 1 || adapter.requests[0].SessionID != "session-explicit" {
 		t.Fatalf("unexpected requests: %#v", adapter.requests)
@@ -207,7 +207,7 @@ func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events := collectEvents(agent.Chat(context.Background(), message.UserTextMessage("hello", nil), nil))
+	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), nil))
 
 	found := false
 	for _, event := range events {
@@ -258,7 +258,7 @@ func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events := collectEvents(agent.Chat(context.Background(), message.UserTextMessage("hello", nil), nil))
+	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), nil))
 
 	if len(adapter.requests) != 2 {
 		t.Fatalf("unexpected requests: %#v", adapter.requests)

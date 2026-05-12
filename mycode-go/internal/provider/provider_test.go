@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -217,7 +216,7 @@ func TestOpenAIResponsesTextStreamIgnoresTrailingEmptyEvent(t *testing.T) {
 	defer server.Close()
 
 	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
-	stream := adapter.StreamTurn(context.Background(), Request{
+	stream := adapter.StreamTurn(t.Context(), Request{
 		Model:     "gpt-5.4-mini",
 		APIKey:    "sk-test",
 		APIBase:   server.URL,
@@ -265,7 +264,7 @@ func TestOpenAIResponsesToolCallStreamIgnoresTrailingEmptyEvent(t *testing.T) {
 	defer server.Close()
 
 	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
-	stream := adapter.StreamTurn(context.Background(), Request{
+	stream := adapter.StreamTurn(t.Context(), Request{
 		Model:     "gpt-5.4-mini",
 		APIKey:    "sk-test",
 		APIBase:   server.URL,

@@ -1,7 +1,7 @@
 package message
 
 import (
-	"fmt"
+	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -144,11 +144,11 @@ func ValidateMediaSupport(msg Message, supportsImage, supportsPDF bool) error {
 		switch block.Type {
 		case "image":
 			if !supportsImage {
-				return fmt.Errorf("current model does not support image input")
+				return errors.New("current model does not support image input")
 			}
 		case "document":
 			if !supportsPDF {
-				return fmt.Errorf("current model does not support PDF input")
+				return errors.New("current model does not support PDF input")
 			}
 		}
 	}

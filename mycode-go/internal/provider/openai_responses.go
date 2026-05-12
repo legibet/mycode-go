@@ -49,7 +49,7 @@ func (a openAIResponsesAdapter) StreamTurn(ctx context.Context, req Request) <-c
 		data := bytes.NewBuffer(nil)
 
 		flush := func() error {
-			raw := bytes.TrimSpace(append([]byte(nil), data.Bytes()...))
+			raw := bytes.TrimSpace(bytes.Clone(data.Bytes()))
 			data.Reset()
 			if len(raw) == 0 || bytes.Equal(raw, []byte("[DONE]")) {
 				return nil
@@ -88,7 +88,7 @@ func (a openAIResponsesAdapter) StreamTurn(ctx context.Context, req Request) <-c
 			return
 		}
 		if final == nil {
-			out <- StreamEvent{Type: "provider_error", Err: fmt.Errorf("openai responses stream ended before response.completed")}
+			out <- StreamEvent{Type: "provider_error", Err: errors.New("openai responses stream ended before response.completed")}
 			return
 		}
 

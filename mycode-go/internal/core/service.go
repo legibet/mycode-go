@@ -528,7 +528,7 @@ func buildUserMessage(req ChatRequest, cwd string) (message.Message, error) {
 	if len(req.Input) == 0 {
 		text := strings.TrimSpace(req.Message)
 		if text == "" {
-			return message.Message{}, fmt.Errorf("message or input is required")
+			return message.Message{}, errors.New("message or input is required")
 		}
 		return message.UserTextMessage(text, nil), nil
 	}
@@ -568,7 +568,7 @@ func buildUserMessage(req ChatRequest, cwd string) (message.Message, error) {
 		blocks = append(blocks, block)
 	}
 	if len(blocks) == 0 {
-		return message.Message{}, fmt.Errorf("input must include at least one non-empty block")
+		return message.Message{}, errors.New("input must include at least one non-empty block")
 	}
 	return message.BuildMessage("user", blocks, nil), nil
 }
@@ -576,7 +576,7 @@ func buildUserMessage(req ChatRequest, cwd string) (message.Message, error) {
 func buildImageBlock(block ChatInputBlock, cwd string) (message.Block, error) {
 	if block.Data != "" {
 		if strings.TrimSpace(block.MIMEType) == "" {
-			return message.Block{}, fmt.Errorf("image data requires mime_type")
+			return message.Block{}, errors.New("image data requires mime_type")
 		}
 		return message.ImageBlock(block.Data, block.MIMEType, cmp.Or(block.Name, "image"), nil), nil
 	}
@@ -606,7 +606,7 @@ func buildDocumentBlock(block ChatInputBlock, cwd string) (message.Block, error)
 	if block.Data != "" {
 		mimeType := cmp.Or(block.MIMEType, "application/pdf")
 		if mimeType != "application/pdf" {
-			return message.Block{}, fmt.Errorf("unsupported document mime_type")
+			return message.Block{}, errors.New("unsupported document mime_type")
 		}
 		return message.DocumentBlock(block.Data, mimeType, cmp.Or(block.Name, "document.pdf"), nil), nil
 	}
