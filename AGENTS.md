@@ -14,7 +14,7 @@ Branches:
 
 Sync direction: `main` → `mycode-go` → `mycode-go-wails`.
 
-Current sync: Python `main` through `d441ed1 refactor(web): reduce unnecessary effects`. Web commits through that point were cherry-picked directly. Python SDK/CLI refactors in this range were reviewed and do not require Go behavior changes. `2724b4c Release 0.8.4` only updates Python package metadata and `uv.lock`, so it does not apply here. `models_catalog.json` was regenerated from the shared update script.
+Current sync: Python `main` through `977696c Release 0.8.6`. Web commits through `bb3bc3e refactor(web): reduce unnecessary effects` were cherry-picked directly and `web/` is byte-for-byte aligned with Python `main`. Release commits `2724b4c Release 0.8.4`, `92f17df Release 0.8.5`, and `977696c Release 0.8.6` only update Python package metadata and `uv.lock`, so they do not apply here. No Go backend, API/SSE, session, provider, config, prompt, tool, or model catalog changes were needed for this sync.
 
 Priorities: small readable core · one message model · one agent loop · append-only sessions · provider adapters at the boundary · Python-compatible contracts.
 
