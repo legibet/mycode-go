@@ -83,6 +83,8 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 	var savedOutputPath string
 	doneReading := false
 	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
 	for !doneReading {
 		if time.Now().After(deadline) {
@@ -136,7 +138,7 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 			if onOutput != nil {
 				onOutput(line)
 			}
-		case <-time.After(100 * time.Millisecond):
+		case <-ticker.C:
 		}
 	}
 

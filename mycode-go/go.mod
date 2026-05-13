@@ -2,6 +2,8 @@ module github.com/legibet/mycode-go
 
 go 1.26.0
 
+toolchain go1.26.3
+
 require (
 	github.com/anthropics/anthropic-sdk-go v1.38.0
 	github.com/openai/openai-go/v3 v3.32.0

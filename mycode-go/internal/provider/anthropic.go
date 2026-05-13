@@ -54,8 +54,7 @@ func (a anthropicAdapter) StreamTurn(ctx context.Context, req Request) <-chan St
 				out <- StreamEvent{Type: "provider_error", Err: err}
 				return
 			}
-			switch variant := event.AsAny().(type) {
-			case anthropic.ContentBlockDeltaEvent:
+			if variant, ok := event.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
 				switch delta := variant.Delta.AsAny().(type) {
 				case anthropic.ThinkingDelta:
 					if delta.Thinking != "" {

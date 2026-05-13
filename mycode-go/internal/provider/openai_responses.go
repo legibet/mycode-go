@@ -472,8 +472,7 @@ func (a openAIResponsesAdapter) convertResponse(response responses.Response, out
 			blocks = append(blocks, message.ThinkingBlock(strings.Join(textParts, ""), map[string]any{"native": native}))
 		case responses.ResponseOutputMessage:
 			for _, part := range variant.Content {
-				switch content := part.AsAny().(type) {
-				case responses.ResponseOutputText:
+				if content, ok := part.AsAny().(responses.ResponseOutputText); ok {
 					meta := map[string]any{}
 					if annotations := dumpJSON(content.Annotations); annotations != nil {
 						meta["native"] = map[string]any{"annotations": annotations}

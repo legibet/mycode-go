@@ -265,7 +265,7 @@ func normalizeText(text string) (string, []int) {
 		content := strings.TrimRight(line, "\r\n")
 		trimmed := strings.TrimRight(content, " \t")
 		builder.WriteString(trimmed)
-		for i := 0; i < len(trimmed); i++ {
+		for i := range len(trimmed) {
 			indexMap = append(indexMap, pos+i)
 		}
 		if len(content) != len(line) {

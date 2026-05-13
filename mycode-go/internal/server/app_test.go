@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/legibet/mycode-go/internal/core"
@@ -76,7 +75,7 @@ func TestWorkspaceRoutes(t *testing.T) {
 		if payload.Path != "projects" {
 			t.Fatalf("unexpected path: %s", payload.Path)
 		}
-		if !strings.HasSuffix(payload.Current, filepath.Join("projects")) {
+		if filepath.Base(payload.Current) != "projects" {
 			t.Fatalf("unexpected current path: %s", payload.Current)
 		}
 		if len(payload.Entries) != 1 || payload.Entries[0].Name != "demo" || payload.Entries[0].Path != "projects/demo" {
