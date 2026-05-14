@@ -85,7 +85,7 @@ Stream run events as SSE (`text/event-stream`).
 
 ### `POST /api/runs/{run_id}/cancel`
 
-Cancel a running task. Returns:
+Cancel a running task and wait for final run state:
 
 ```json
 {"status": "ok", "run": {...}}
@@ -301,5 +301,6 @@ The web UI replays `pending_events` from `GET /api/sessions/{id}`, then reconnec
 - One active run per session.
 - Events are buffered for reconnect.
 - Pending permission decisions are tracked per active run.
+- Cancelling waits for final state and clears the active session before returning.
 - Finished runs are pruned after 300 seconds.
 - `snapshotSession()` returns base messages plus buffered events for active-run recovery.

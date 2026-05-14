@@ -135,8 +135,7 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 	}
 
 	updated := text
-	for i := len(matches) - 1; i >= 0; i-- {
-		match := matches[i]
+	for _, match := range slices.Backward(matches) {
 		updated = updated[:match.start] + match.newText + updated[match.end:]
 	}
 	if updated == text {

@@ -14,7 +14,7 @@ Branches:
 
 Sync direction: `main` → `mycode-go` → `mycode-go-wails`.
 
-Current sync: Python `main` through `977696c Release 0.8.6`. Web commits through `bb3bc3e refactor(web): reduce unnecessary effects` were cherry-picked directly and `web/` is byte-for-byte aligned with Python `main`. Release commits `2724b4c Release 0.8.4`, `92f17df Release 0.8.5`, and `977696c Release 0.8.6` only update Python package metadata and `uv.lock`, so they do not apply here. No Go backend, API/SSE, session, provider, config, prompt, tool, or model catalog changes were needed for this sync.
+Current sync: Python `main` through `5794aee`. Web commits through `bb3bc3e refactor(web): reduce unnecessary effects` were cherry-picked directly and `web/` is byte-for-byte aligned with Python `main`. Backend commit `5794aee` was reimplemented in Go: interrupted provider streams persist partial assistant content, cancelled streaming bash tools preserve already emitted output, and run cancellation waits for final run state.
 
 Priorities: small readable core · one message model · one agent loop · append-only sessions · provider adapters at the boundary · Python-compatible contracts.
 
@@ -73,9 +73,9 @@ Per user turn (`mycode-go/internal/agent/agent.go`):
 
 1. Append the user message.
 2. Stream one provider turn through `ApplyCompactReplay`.
-3. Persist the assistant message.
+3. Persist the assistant message. If the provider stream is cancelled after deltas arrive, persist a partial assistant message before emitting `error: cancelled`.
 4. Execute local tool calls.
-5. Append a `user` tool-result message.
+5. Append a `user` tool-result message. If a streaming bash tool is cancelled, the final tool result includes already emitted output followed by `error: cancelled`.
 6. Repeat until there are no tool calls.
 7. Optionally compact when usage crosses `compact_threshold`; the compact event is persisted inline and projected on the next provider call.
 
@@ -93,15 +93,14 @@ Event names and payload shapes are a cross-component contract. Changes need to l
 
 Read the relevant doc before related changes.
 
-| Area                                                                 | Doc                                           |
-| -------------------------------------------------------------------- | --------------------------------------------- |
-| `internal/{agent,message,tools}`                                     | `docs/sdk.md`                                 |
-| `internal/session` or anything touching JSONL / compact / rewind     | `docs/sessions.md`                            |
-| `internal/provider/*`                                                | `docs/providers.md`                           |
-| `internal/core`, `internal/server`, SSE events, or routes            | `docs/api.md`                                 |
-| `internal/config`, `internal/prompt`, `internal/permissions`, models | `docs/config.md`                              |
-| `web/src/**`                                                         | `docs/web.md`                                 |
-| Cross-cutting contract changes                                       | `docs/api.md` + `docs/sdk.md` + `docs/web.md` |
+| Area                                                                 | Doc                                                   |
+| -------------------------------------------------------------------- | ----------------------------------------------------- |
+| `internal/{agent,message,tools,session}`                             | `docs/sessions.md`                                    |
+| `internal/provider/*`                                                | `docs/providers.md`                                   |
+| `internal/core`, `internal/server`, SSE events, or routes            | `docs/api.md`                                         |
+| `internal/config`, `internal/prompt`, `internal/permissions`, models | `docs/config.md`                                      |
+| `web/src/**`                                                         | `docs/web.md`                                         |
+| Cross-cutting contract changes                                       | `docs/api.md` + `docs/sessions.md` + `docs/web.md`    |
 
 For third-party SDKs and APIs touched by adapter or runtime code, prefer `context7` lookups over assumptions.
 

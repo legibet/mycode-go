@@ -47,6 +47,8 @@ Canonical messages are block-based:
 
 `assistant.meta.total_tokens` is the canonical token count for a provider call: prompt plus generated text, tool calls, and reasoning. `assistant.meta.context_window` is stamped from the resolved model metadata so clients can render consumed-context percentage without resolving the model again.
 
+Cancelled provider streams persist received `thinking` / `text` blocks as a partial assistant message before `error: cancelled`.
+
 ## Record Types
 
 ### Regular Message
@@ -104,6 +106,8 @@ Bash keeps up to 5 MB in memory. Larger output spills to:
 ```
 
 The returned `output` contains the visible tail and a "Full output" path.
+
+Cancelled streaming bash results keep already emitted output and append `error: cancelled`.
 
 ## Store API
 

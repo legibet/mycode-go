@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
@@ -301,8 +302,7 @@ func (a anthropicAdapter) projectToolCallID(toolCallID string, used map[string]s
 }
 
 func (a anthropicAdapter) applyCacheControl(messages []map[string]any) {
-	for index := len(messages) - 1; index >= 0; index-- {
-		msg := messages[index]
+	for _, msg := range slices.Backward(messages) {
 		role, _ := msg["role"].(string)
 		if role != "user" {
 			continue
@@ -317,8 +317,8 @@ func (a anthropicAdapter) applyCacheControl(messages []map[string]any) {
 				}
 			}
 		}
-		for i := len(content) - 1; i >= 0; i-- {
-			blockType, _ := content[i]["type"].(string)
+		for i, block := range slices.Backward(content) {
+			blockType, _ := block["type"].(string)
 			if blockType != "text" && blockType != "image" && blockType != "document" && blockType != "tool_result" {
 				continue
 			}

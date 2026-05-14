@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/legibet/mycode-go/internal/config"
@@ -146,13 +147,24 @@ func (a *Agent) Chat(ctx context.Context, userInput message.Message, onPersist P
 		}
 
 		for turn := 0; a.MaxTurns <= 0 || turn < a.MaxTurns; turn++ {
-			assistant, err := a.streamAssistantTurn(ctx, out)
+			assistant, cancelled, err := a.streamAssistantTurn(ctx, out)
 			if err != nil {
-				if ctx.Err() != nil {
-					a.emitError(out, "cancelled")
-				} else {
-					a.emitError(out, err.Error())
+				a.emitError(out, err.Error())
+				return
+			}
+			if cancelled {
+				if assistant != nil {
+					a.Messages = append(a.Messages, message.Clone(*assistant))
+					if err := persist(*assistant); err != nil {
+						a.emitError(out, err.Error())
+						return
+					}
 				}
+				a.emitError(out, "cancelled")
+				return
+			}
+			if assistant == nil {
+				a.emitError(out, "provider produced no assistant message")
 				return
 			}
 
@@ -214,7 +226,7 @@ func (a *Agent) Chat(ctx context.Context, userInput message.Message, onPersist P
 	return out
 }
 
-func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*message.Message, error) {
+func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*message.Message, bool, error) {
 	req := provider.Request{
 		Provider:           a.Provider,
 		Model:              a.Model,
@@ -231,6 +243,7 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 	}
 
 	var assistant *message.Message
+	partialContent := []message.Block{}
 	var thinkingStartedAt time.Time
 	thinkingDurationMs := -1
 	for event := range a.Adapter.StreamTurn(ctx, req) {
@@ -240,6 +253,11 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 				if thinkingStartedAt.IsZero() {
 					thinkingStartedAt = time.Now()
 				}
+				if len(partialContent) > 0 && partialContent[len(partialContent)-1].Type == "thinking" {
+					partialContent[len(partialContent)-1].Text += event.Text
+				} else {
+					partialContent = append(partialContent, message.ThinkingBlock(event.Text, nil))
+				}
 				out <- Event{Type: "reasoning", Data: map[string]any{"delta": event.Text}}
 			}
 		case "text_delta":
@@ -247,6 +265,11 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 				if !thinkingStartedAt.IsZero() && thinkingDurationMs < 0 {
 					thinkingDurationMs = max(0, int(time.Since(thinkingStartedAt).Milliseconds()))
 					out <- Event{Type: "reasoning_done", Data: map[string]any{"duration_ms": thinkingDurationMs}}
+				}
+				if len(partialContent) > 0 && partialContent[len(partialContent)-1].Type == "text" {
+					partialContent[len(partialContent)-1].Text += event.Text
+				} else {
+					partialContent = append(partialContent, message.TextBlock(event.Text, nil))
 				}
 				out <- Event{Type: "text", Data: map[string]any{"delta": event.Text}}
 			}
@@ -257,33 +280,57 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 			}
 			assistant = event.Msg
 		case "provider_error":
-			if event.Err != nil {
-				return nil, event.Err
+			if ctx.Err() != nil {
+				return a.cancelledAssistantMessage(partialContent, thinkingStartedAt, thinkingDurationMs), true, nil
 			}
-			return nil, errors.New("provider error")
+			if event.Err != nil {
+				return nil, false, event.Err
+			}
+			return nil, false, errors.New("provider error")
 		}
 	}
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return a.cancelledAssistantMessage(partialContent, thinkingStartedAt, thinkingDurationMs), true, nil
 	}
 	if assistant == nil {
-		return nil, errors.New("provider produced no assistant message")
+		return nil, false, errors.New("provider produced no assistant message")
 	}
 
-	if thinkingDurationMs >= 0 {
-		for i := len(assistant.Content) - 1; i >= 0; i-- {
-			if assistant.Content[i].Type != "thinking" {
-				continue
-			}
-			if assistant.Content[i].Meta == nil {
-				assistant.Content[i].Meta = map[string]any{}
-			}
-			assistant.Content[i].Meta["duration_ms"] = thinkingDurationMs
-			break
+	applyThinkingDuration(assistant.Content, thinkingDurationMs)
+	return assistant, false, nil
+}
+
+func (a *Agent) cancelledAssistantMessage(blocks []message.Block, thinkingStartedAt time.Time, thinkingDurationMs int) *message.Message {
+	if len(blocks) == 0 {
+		return nil
+	}
+	if !thinkingStartedAt.IsZero() && thinkingDurationMs < 0 {
+		thinkingDurationMs = max(0, int(time.Since(thinkingStartedAt).Milliseconds()))
+	}
+	applyThinkingDuration(blocks, thinkingDurationMs)
+
+	msg := message.BuildMessage("assistant", blocks, map[string]any{
+		"provider":       a.Provider,
+		"model":          a.Model,
+		"context_window": a.ContextWindow,
+	})
+	return &msg
+}
+
+func applyThinkingDuration(blocks []message.Block, durationMs int) {
+	if durationMs < 0 {
+		return
+	}
+	for i, block := range slices.Backward(blocks) {
+		if block.Type != "thinking" {
+			continue
 		}
+		if blocks[i].Meta == nil {
+			blocks[i].Meta = map[string]any{}
+		}
+		blocks[i].Meta["duration_ms"] = durationMs
+		return
 	}
-
-	return assistant, nil
 }
 
 func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block, out chan<- Event) (message.Message, bool) {
@@ -308,7 +355,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 		toolCall.Input = input
 		result, stop := a.authorizeTool(ctx, toolCall, input)
 		if result == nil {
-			runResult := a.runTool(toolCall, out)
+			runResult := a.runTool(ctx, toolCall, out)
 			result = &runResult
 		}
 		toolResults = append(toolResults, message.ToolResultBlock(
@@ -336,7 +383,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 		if stop {
 			return message.BuildMessage("user", toolResults, nil), true
 		}
-		if result.Output == "error: cancelled" && ctx.Err() != nil {
+		if result.IsError && ctx.Err() != nil && strings.HasSuffix(result.Output, "error: cancelled") {
 			return message.BuildMessage("user", toolResults, nil), true
 		}
 	}
@@ -371,7 +418,7 @@ func (a *Agent) emitError(out chan<- Event, msg string) {
 	out <- Event{Type: "error", Data: map[string]any{"message": msg}}
 }
 
-func (a *Agent) runTool(toolCall message.Block, out chan<- Event) tools.Result {
+func (a *Agent) runTool(ctx context.Context, toolCall message.Block, out chan<- Event) tools.Result {
 	switch toolCall.Name {
 	case "read":
 		return a.Tools.Read(asString(toolCall.Input["path"]), asInt(toolCall.Input["offset"]), asInt(toolCall.Input["limit"]))
@@ -380,12 +427,21 @@ func (a *Agent) runTool(toolCall message.Block, out chan<- Event) tools.Result {
 	case "edit":
 		return a.Tools.Edit(asString(toolCall.Input["path"]), asEdits(toolCall.Input["edits"]))
 	case "bash":
-		return a.Tools.Bash(toolCall.ID, asString(toolCall.Input["command"]), asInt(toolCall.Input["timeout"]), func(text string) {
+		outputParts := []string{}
+		result := a.Tools.Bash(toolCall.ID, asString(toolCall.Input["command"]), asInt(toolCall.Input["timeout"]), func(text string) {
+			if ctx.Err() != nil {
+				return
+			}
+			outputParts = append(outputParts, text)
 			out <- Event{Type: "tool_output", Data: map[string]any{
 				"tool_use_id": toolCall.ID,
 				"output":      text,
 			}}
 		})
+		if ctx.Err() != nil && result.Output == "error: cancelled" && len(outputParts) > 0 {
+			result.Output = strings.Join(append(outputParts, "error: cancelled"), "\n")
+		}
+		return result
 	default:
 		return tools.Result{Output: "error: unknown tool: " + toolCall.Name, IsError: true}
 	}

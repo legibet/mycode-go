@@ -176,11 +176,12 @@ func TestRunManagerCancelOnlyMarksTargetRunCancelled(t *testing.T) {
 	if cancelled == nil {
 		t.Fatal("expected cancelled run info")
 	}
-
-	waitFor(t, time.Second, func() bool {
-		state := manager.getRun(firstRun["id"].(string))
-		return state != nil && state.info()["status"] == "cancelled"
-	})
+	if cancelled["status"] != "cancelled" {
+		t.Fatalf("unexpected cancelled run: %#v", cancelled)
+	}
+	if manager.hasActiveRun("session-1") {
+		t.Fatal("expected session-1 to have no active run")
+	}
 
 	updatedFirst := manager.getRun(firstRun["id"].(string))
 	updatedSecond := manager.getRun(secondRun["id"].(string))

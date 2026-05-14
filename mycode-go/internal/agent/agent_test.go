@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/message"
@@ -34,6 +35,24 @@ func (f *fakeAdapter) StreamTurn(_ context.Context, req provider.Request) <-chan
 		for _, event := range events {
 			out <- event
 		}
+	}()
+	return out
+}
+
+type slowProviderAdapter struct {
+	spec provider.Spec
+}
+
+func (a *slowProviderAdapter) Spec() provider.Spec {
+	return a.spec
+}
+
+func (a *slowProviderAdapter) StreamTurn(ctx context.Context, _ provider.Request) <-chan provider.StreamEvent {
+	out := make(chan provider.StreamEvent, 1)
+	go func() {
+		defer close(out)
+		out <- provider.StreamEvent{Type: "thinking_delta", Text: "working"}
+		<-ctx.Done()
 	}()
 	return out
 }
@@ -86,6 +105,66 @@ func TestChatPersistsReasoningBlocks(t *testing.T) {
 	thinkingBlock := persisted[1].Content[0]
 	if thinkingBlock.Meta == nil || thinkingBlock.Meta["duration_ms"] != durationMs {
 		t.Fatalf("thinking block missing duration_ms in meta: %#v", thinkingBlock)
+	}
+}
+
+func TestChatPersistsPartialAssistantOnProviderCancel(t *testing.T) {
+	dir := t.TempDir()
+	adapter := &slowProviderAdapter{spec: provider.Spec{ID: "openai"}}
+	agent, err := New(Agent{
+		Model:              "gpt-5.5",
+		Provider:           "openai",
+		CWD:                dir,
+		SessionDir:         filepath.Join(dir, "session"),
+		SessionID:          "session",
+		MaxTokens:          4096,
+		ContextWindow:      128000,
+		CompactThreshold:   0.8,
+		SupportsImageInput: true,
+		SupportsPDFInput:   true,
+		Adapter:            adapter,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	persisted := []message.Message{}
+	stream := agent.Chat(ctx, message.UserTextMessage("hello", nil), func(msg message.Message) error {
+		persisted = append(persisted, msg)
+		return nil
+	})
+
+	var first Event
+	select {
+	case first = <-stream:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first event")
+	}
+	if first.Type != "reasoning" || first.Data["delta"] != "working" {
+		t.Fatalf("unexpected first event: %#v", first)
+	}
+	cancel()
+	remaining := collectEvents(stream)
+
+	if len(remaining) != 1 || remaining[0].Type != "error" || remaining[0].Data["message"] != "cancelled" {
+		t.Fatalf("unexpected remaining events: %#v", remaining)
+	}
+	if len(persisted) != 2 {
+		t.Fatalf("unexpected persisted messages: %#v", persisted)
+	}
+	last := persisted[1]
+	if last.Role != "assistant" || len(last.Content) != 1 {
+		t.Fatalf("unexpected partial assistant: %#v", last)
+	}
+	if last.Content[0].Type != "thinking" || last.Content[0].Text != "working" {
+		t.Fatalf("unexpected partial content: %#v", last.Content)
+	}
+	if _, ok := last.Content[0].Meta["duration_ms"].(int); !ok {
+		t.Fatalf("missing thinking duration: %#v", last.Content[0].Meta)
+	}
+	if last.Meta["provider"] != "openai" || last.Meta["model"] != "gpt-5.5" || last.Meta["context_window"] != 128000 {
+		t.Fatalf("unexpected partial meta: %#v", last.Meta)
 	}
 }
 
@@ -218,6 +297,67 @@ func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected denied tool_done event: %#v", events)
+	}
+}
+
+func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
+	dir := t.TempDir()
+	agent, err := New(Agent{
+		Model:              "gpt-5.4",
+		Provider:           "openai",
+		CWD:                dir,
+		SessionDir:         filepath.Join(dir, "session"),
+		SessionID:          "session",
+		MaxTokens:          4096,
+		ContextWindow:      128000,
+		CompactThreshold:   0.8,
+		SupportsImageInput: true,
+		SupportsPDFInput:   true,
+		Permission:         config.PermissionConfig{Level: "yolo"},
+		Adapter: &fakeAdapter{
+			spec: provider.Spec{ID: "openai"},
+			turns: [][]provider.StreamEvent{{
+				{
+					Type: "message_done",
+					Msg: new(message.AssistantMessage([]message.Block{
+						message.ToolUseBlock("call-1", "bash", map[string]any{
+							"command": "printf 'live\\n'; sleep 1",
+						}, nil),
+					}, "openai", "gpt-5.4", "", "", 0, nil)),
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := agent.Chat(ctx, message.UserTextMessage("run bash", nil), nil)
+	events := []Event{}
+	for event := range stream {
+		events = append(events, event)
+		if event.Type == "tool_output" {
+			cancel()
+			agent.Cancel()
+			break
+		}
+	}
+	events = append(events, collectEvents(stream)...)
+
+	var toolDone *Event
+	for i := range events {
+		if events[i].Type == "tool_done" {
+			toolDone = &events[i]
+			break
+		}
+	}
+	if toolDone == nil {
+		t.Fatalf("missing tool_done: %#v", events)
+	}
+	if toolDone.Data["output"] != "live\nerror: cancelled" || toolDone.Data["is_error"] != true {
+		t.Fatalf("unexpected tool_done: %#v", toolDone.Data)
 	}
 }
 

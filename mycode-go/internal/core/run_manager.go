@@ -84,6 +84,7 @@ type runState struct {
 	nextSeq    int
 	finishedAt time.Time
 	cancel     context.CancelFunc
+	done       chan struct{}
 
 	pendingDecisions map[string]chan permissions.ReviewDecision
 }
@@ -98,6 +99,7 @@ func newRunState(id, sessionID string, userMessage message.Message, baseMessages
 		status:           runStatusRunning,
 		nextSeq:          1,
 		cancel:           cancel,
+		done:             make(chan struct{}),
 		pendingDecisions: map[string]chan permissions.ReviewDecision{},
 	}
 }
@@ -279,11 +281,12 @@ func (m *RunManager) cancelRun(runID string) map[string]any {
 	if state == nil {
 		return nil
 	}
-	state.agent.Cancel()
-	state.denyPendingDecisions()
 	if state.cancel != nil {
 		state.cancel()
 	}
+	state.agent.Cancel()
+	state.denyPendingDecisions()
+	<-state.done
 	return state.info()
 }
 
@@ -365,6 +368,8 @@ func (m *RunManager) emit(state *runState, event map[string]any) {
 }
 
 func (m *RunManager) run(ctx context.Context, state *runState, onPersist func(message.Message) error) {
+	defer close(state.done)
+
 	var lastError string
 	for event := range state.agent.Chat(ctx, state.userMessage, onPersist) {
 		if event.Type == "error" {
