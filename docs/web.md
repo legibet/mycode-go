@@ -1,13 +1,13 @@
 # Web UI
 
-React + Vite app in `web/`. Built assets are copied to `cli/src/mycode_cli/server/static/` for packaged serving.
+React + Vite app in `web/`. Built assets are copied to `mycode-go/internal/server/webdist/` for Go embedding.
 
 ## Serving Modes
 
-- `mycode web` — serves packaged web assets from `cli/src/mycode_cli/server/static/`
-- `mycode web --dev` — API only with backend hot reload; no static files (pair with `pnpm --dir web dev`)
+- `mycode-go web` — serves packaged web assets from the embedded `webdist` filesystem, or from `MYCODE_WEB_DIST` / local `web/dist` during development.
+- `mycode-go web --dev` — API only; no static files (pair with `pnpm --dir web dev`).
 
-CORS is enabled for all origins in the FastAPI app.
+CORS is disabled by default for the packaged web app. The API-only dev handler allows only `http://localhost:5173` and `http://127.0.0.1:5173` for the Vite dev server.
 
 ## Component Structure
 
@@ -85,6 +85,8 @@ Rendering rules:
 - `image` blocks → inline image preview in `MessageBubble`
 - `compact-marker` entries → `CompactMarker` (a thin labelled divider, no interactivity)
 
+`MessageList` renders long histories as a tail window: initial session load renders the latest messages and scrolls to the bottom before paint. Scrolling near the top prepends older messages in batches and preserves the current viewport by restoring the previous distance from the bottom. Auto-scroll follows incoming message updates only while the user is already near the bottom; local height changes such as expanding tools do not trigger it.
+
 ## Streaming
 
 1. `POST /api/chat` → get `{run, session}`
@@ -95,6 +97,8 @@ Rendering rules:
 6. 409 conflict: attach to the existing run's stream
 
 A live `compact` SSE event is consumed by the reducer at the position it arrives — the marker lands between whatever just streamed and whatever streams next, mirroring where the agent emitted it (e.g. between two tool calls of the same turn). The server has already persisted the `compact` JSONL record at the same point, so a later session reload renders the same marker without any extra round-trip.
+
+`permission_request` opens the approval prompt. `permission_resolved` clears it. `deny` cancels the active run.
 
 Streaming state tracking:
 
@@ -116,15 +120,17 @@ Web UI config is persisted to `localStorage`:
 - `provider`, `model`, `cwd`, `reasoningEffort`
 - `auto` and empty string both mean "do not send reasoning_effort to server"
 - The reasoning effort selector in the sidebar only renders when `supports_reasoning_effort` is true AND the current model appears in `reasoning_models` (from `GET /api/config`)
+- Settings editor options come from `provider_type_env_vars` and `provider_type_default_models`
 
 ## Build
 
 ```bash
-pnpm --dir web test:run                                # run web UI tests once
-pnpm --dir web dev                                     # dev server (Vite HMR)
-uv build --package mycode-cli                          # builds web assets and packages static/ into wheel/sdist
+pnpm --dir web check
+pnpm --dir web typecheck
+pnpm --dir web test:run
+pnpm --dir web dev
+pnpm --dir web build
+./scripts/sync_web_dist.sh
 ```
 
-Built `web/dist/` is **not** the serving path. `cli/hatch_build.py` copies the built output into `cli/src/mycode_cli/server/static/` during `mycode-cli` package builds, which is what gets packaged and served.
-
-If `cli/src/mycode_cli/server/static/` is missing at startup, the server falls back to API-only mode with a warning log.
+`./scripts/sync_web_dist.sh` copies `web/dist/` into `mycode-go/internal/server/webdist/`. The Go build tag `embedweb` embeds that directory for release builds. Without embedded assets, the server can still serve an explicit `MYCODE_WEB_DIST` or local `web/dist` directory.

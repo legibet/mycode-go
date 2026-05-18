@@ -2,7 +2,7 @@
 
 >There are many coding agents, but this one is mine.
 
-A minimal coding agent. Inspired by [pi](https://github.com/badlogic/pi-mono).
+A minimal coding agent.
 
 - Minimal core.
 - Unified message format and robust cross-provider replay.
@@ -50,17 +50,17 @@ API keys are discovered automatically from environment variables (see Providers 
 
 ## Providers & Models
 
-| Provider          | id            | Env var              | Default models                                     |
-| ----------------- | ------------- | -------------------- | -------------------------------------------------- |
-| Anthropic         | `anthropic`   | `ANTHROPIC_API_KEY`  | `claude-sonnet-4-6`, `claude-opus-4-6`             |
-| OpenAI            | `openai`      | `OPENAI_API_KEY`     | `gpt-5.4`, `gpt-5.4-mini`                          |
-| Google Gemini     | `google`      | `GEMINI_API_KEY`     | `gemini-3.1-pro-preview`, `gemini-3-flash-preview` |
-| Moonshot          | `moonshotai`  | `MOONSHOT_API_KEY`   | `kimi-k2.6`                                        |
-| MiniMax           | `minimax`     | `MINIMAX_API_KEY`    | `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`           |
-| DeepSeek          | `deepseek`    | `DEEPSEEK_API_KEY`   | `deepseek-chat`, `deepseek-reasoner`               |
-| Z.AI              | `zai`         | `ZAI_API_KEY`        | `glm-5.1`, `glm-5-turbo`                           |
-| OpenRouter        | `openrouter`  | `OPENROUTER_API_KEY` | `openrouter/auto`                                  |
-| OpenAI-compatible | `openai_chat` | —                    | (configured per provider)                          |
+| Provider          | id            | Env var                            | Default models                                     |
+| ----------------- | ------------- | ---------------------------------- | -------------------------------------------------- |
+| Anthropic         | `anthropic`   | `ANTHROPIC_API_KEY`                | `claude-sonnet-4-6`, `claude-opus-4-7`             |
+| OpenAI            | `openai`      | `OPENAI_API_KEY`                   | `gpt-5.5`, `gpt-5.4-mini`                          |
+| Google Gemini     | `google`      | `GEMINI_API_KEY`, `GOOGLE_API_KEY` | `gemini-3.1-pro-preview`, `gemini-3-flash-preview` |
+| Moonshot          | `moonshotai`  | `MOONSHOT_API_KEY`                 | `kimi-k2.6`                                        |
+| MiniMax           | `minimax`     | `MINIMAX_API_KEY`                  | `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`           |
+| DeepSeek          | `deepseek`    | `DEEPSEEK_API_KEY`                 | `deepseek-v4-pro`, `deepseek-v4-flash`             |
+| Z.AI              | `zai`         | `ZAI_API_KEY`                      | `glm-5.1`, `glm-5-turbo`                           |
+| OpenRouter        | `openrouter`  | `OPENROUTER_API_KEY`               | `openrouter/auto`                                  |
+| OpenAI-compatible | `openai_chat` | -                                  | (configured per provider)                          |
 
 All four interface families use official Go SDKs:
 

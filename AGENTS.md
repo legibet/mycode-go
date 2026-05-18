@@ -14,7 +14,7 @@ Branches:
 
 Sync direction: `main` → `mycode-go` → `mycode-go-wails`.
 
-Current sync: Python `main` through `5794aee`. Web commits through `bb3bc3e refactor(web): reduce unnecessary effects` were cherry-picked directly and `web/` is byte-for-byte aligned with Python `main`. Backend commit `5794aee` was reimplemented in Go: interrupted provider streams persist partial assistant content, cancelled streaming bash tools preserve already emitted output, and run cancellation waits for final run state.
+Current sync: Python `main` through `d547f05`. Web commits through `d547f05 fix(web): window long chat histories` were cherry-picked directly and `web/` is byte-for-byte aligned with Python `main`. Backend commits through `ac05007` were reimplemented where they affect Go behavior: chat request shape errors return `422`, explicit permission denial cancels the active run, packaged serving has no CORS, dev API allows only the Vite localhost origins, interrupted provider streams persist partial assistant content, cancelled streaming bash tools preserve already emitted output, and run cancellation waits for final run state. Later Python-only dependency, release, pyright, and SDK comment-cleanup commits were reviewed and skipped for Go.
 
 Priorities: small readable core · one message model · one agent loop · append-only sessions · provider adapters at the boundary · Python-compatible contracts.
 

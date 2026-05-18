@@ -4,6 +4,12 @@ Base prefix: `/api`. Routes are wired in `mycode-go/internal/server/app.go`; req
 
 The API matches the Python web contract from `main` so the same browser session can switch between Python and Go backends.
 
+## Serving and CORS
+
+`mycode-go web` serves packaged static assets and does not enable CORS.
+
+`mycode-go web --dev` starts the API-only handler for Vite development and allows only `http://localhost:5173` and `http://127.0.0.1:5173`.
+
 ## Chat
 
 ### `POST /api/chat`
@@ -70,7 +76,8 @@ Response:
 
 Errors:
 
-- `400` for invalid request data, invalid `rewind_to`, missing or invalid `cwd`, unsupported attachment type, unsupported model capability, or unsupported `reasoning_effort`. Missing `cwd` returns `{"detail": "Working directory does not exist: ..."}`.
+- `422` for invalid request shape: missing `message`/`input`, both non-empty `message` and `input`, or invalid inline media fields.
+- `400` for invalid request data after shape validation: invalid `rewind_to`, missing or invalid `cwd`, unsupported attachment file type, unsupported model capability, or unsupported `reasoning_effort`. Missing `cwd` returns `{"detail": "Working directory does not exist: ..."}`.
 - `409` when the session already has a running task. Body shape: `{"detail": {"message": "...", "run": {...}}}`.
 - `500` for config/runtime failures other than invalid request values.
 
@@ -78,7 +85,7 @@ Errors:
 
 Stream run events as SSE (`text/event-stream`).
 
-- `after` resumes from a sequence number.
+- `after` resumes from a sequence number and must be `>= 0`.
 - Each event is JSON encoded as one SSE `data:` line.
 - Stream completion is `data: [DONE]`.
 - Every event carries monotonically increasing `seq`.
@@ -102,6 +109,8 @@ Request:
 ```
 
 `decision` must be `"allow"` or `"deny"`. Returns `{"status": "ok"}`.
+
+An explicit `"deny"` marks the run as cancelled and calls `Agent.Cancel()` so the run exits instead of continuing with a permission-denied tool result.
 
 Errors:
 
@@ -197,7 +206,7 @@ Returns the same shape as `GET /api/settings`. Invalid provider types, invalid p
 
 ## Sessions
 
-Session routes are implemented in `mycode-go/internal/server/sessions.go`.
+Session routes are wired in `mycode-go/internal/server/app.go` and implemented through `mycode-go/internal/core/service.go`.
 
 ### `GET /api/sessions?cwd=...`
 
@@ -246,7 +255,7 @@ Truncate `messages.jsonl`, reset the title, and keep `meta.json`. Returns `409` 
 
 ## Workspaces
 
-Workspace routes are implemented in `mycode-go/internal/server/workspaces.go`.
+Workspace routes are wired in `mycode-go/internal/server/app.go` and implemented through `mycode-go/internal/core/service.go` plus `mycode-go/internal/workspace`.
 
 ### `GET /api/workspaces/roots`
 
@@ -302,5 +311,6 @@ The web UI replays `pending_events` from `GET /api/sessions/{id}`, then reconnec
 - Events are buffered for reconnect.
 - Pending permission decisions are tracked per active run.
 - Cancelling waits for final state and clears the active session before returning.
+- Explicit permission `deny` marks the run as cancelled and cancels the agent.
 - Finished runs are pruned after 300 seconds.
 - `snapshotSession()` returns base messages plus buffered events for active-run recovery.

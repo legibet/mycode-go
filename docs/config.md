@@ -15,7 +15,7 @@ Loaded in order, later values overriding earlier values:
 
 Explicit CLI flags or API request fields override both config files.
 
-The web settings panel edits only `~/.mycode/config.json`; project-level files must be edited directly and continue to override it.
+The web settings panel edits only `~/.mycode/config.json`; project-level files must be edited directly and continue to override it. Settings API validation lives in `mycode-go/internal/config` and `mycode-go/internal/core/service.go`; runtime resolution stays in `mycode-go/internal/config`.
 
 ## Schema
 
@@ -117,6 +117,8 @@ Modes:
 
 - `ask` prompts in the web UI for calls outside the configured level. In non-interactive CLI runs, `ask` is handled as `deny`.
 - `deny` returns `error: permission denied` to the model without prompting.
+
+When the web user explicitly denies a permission prompt, the active run is cancelled and finishes with status `cancelled`.
 
 The bash classifier is conservative. Compound commands, shell redirection, command substitution, destructive programs, `sed -i`, dangerous `find` flags, `git reset`, `git clean`, `git checkout`, `git restore`, and force pushes require `yolo` or web approval.
 
