@@ -32,6 +32,11 @@ func NewHandler(serveWeb bool) http.Handler {
 	return newApp(serveWeb, "", nil, nil)
 }
 
+// NewDevHandler builds the API-only handler used with the Vite dev server.
+func NewDevHandler() http.Handler {
+	return withDevCORS(NewHandler(false))
+}
+
 func newApp(serveWeb bool, webRoot string, store *session.Store, runs *core.RunManager) *app {
 	resolvedWebRoot := webRoot
 	var webFS fs.FS
@@ -75,11 +80,6 @@ func newApp(serveWeb bool, webRoot string, store *session.Store, runs *core.RunM
 }
 
 func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
 		a.api.ServeHTTP(w, r)
 		return
@@ -426,11 +426,27 @@ func writeSSE(w io.Writer, payload any) error {
 	return err
 }
 
-func setCORSHeaders(w http.ResponseWriter) {
+func withDevCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if setDevCORSHeaders(w, r) && r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func setDevCORSHeaders(w http.ResponseWriter, r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin != "http://localhost:5173" && origin != "http://127.0.0.1:5173" {
+		return false
+	}
 	h := w.Header()
-	h.Set("Access-Control-Allow-Origin", "*")
+	h.Set("Access-Control-Allow-Origin", origin)
+	h.Set("Vary", "Origin")
 	h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	h.Set("Access-Control-Allow-Headers", "*")
+	h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	return true
 }
 
 // eventSeq falls back to the previous value so SSE replay sequence stays monotonic.

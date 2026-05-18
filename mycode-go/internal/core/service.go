@@ -134,8 +134,8 @@ func NewService(opts Options) *Service {
 }
 
 func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
-	if req.Message != "" && len(req.Input) > 0 {
-		return ChatResponse{}, statusError(http.StatusBadRequest, "message and input are mutually exclusive")
+	if err := validateChatRequestShape(req); err != nil {
+		return ChatResponse{}, err
 	}
 
 	cwd := RequestCWD(req.CWD)
@@ -522,6 +522,42 @@ func RequestCWD(value string) string {
 		return absolute
 	}
 	return resolved
+}
+
+func validateChatRequestShape(req ChatRequest) error {
+	hasMessage := strings.TrimSpace(req.Message) != ""
+	hasInput := len(req.Input) > 0
+	if hasMessage && hasInput {
+		return statusError(http.StatusUnprocessableEntity, "message and input are mutually exclusive")
+	}
+	if !hasMessage && !hasInput {
+		return statusError(http.StatusUnprocessableEntity, "message or input is required")
+	}
+
+	for _, block := range req.Input {
+		switch block.Type {
+		case "text":
+			continue
+		case "image":
+			if strings.TrimSpace(block.Path) == "" && block.Data == "" {
+				return statusError(http.StatusUnprocessableEntity, "image input requires path or data")
+			}
+			if block.Data != "" && strings.TrimSpace(block.MIMEType) == "" {
+				return statusError(http.StatusUnprocessableEntity, "image data requires mime_type")
+			}
+		case "document":
+			if strings.TrimSpace(block.Path) == "" && block.Data == "" {
+				return statusError(http.StatusUnprocessableEntity, "document input requires path or data")
+			}
+			mimeType := strings.TrimSpace(block.MIMEType)
+			if mimeType != "" && mimeType != "application/pdf" {
+				return statusError(http.StatusUnprocessableEntity, "unsupported document mime_type")
+			}
+		default:
+			return statusError(http.StatusUnprocessableEntity, fmt.Sprintf("unsupported input block type: %s", block.Type))
+		}
+	}
+	return nil
 }
 
 func buildUserMessage(req ChatRequest, cwd string) (message.Message, error) {

@@ -288,3 +288,59 @@ func TestRunManagerPermissionDecision(t *testing.T) {
 
 	close(adapter.release)
 }
+
+func TestRunManagerPermissionDenyCancelsRun(t *testing.T) {
+	manager := NewRunManager(nil)
+	adapter := &blockingAdapter{
+		spec:    provider.Spec{ID: "openai"},
+		release: make(chan struct{}),
+	}
+	agent := newTestAgent(t, adapter)
+	run, err := manager.startRun("session-1", message.UserTextMessage("hello", nil), nil, agent, func(message.Message) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan permissions.ReviewDecision, 1)
+	go func() {
+		result <- manager.requestDecision(t.Context(), "session-1", permissions.ReviewRequest{
+			ToolCallID: "call-1",
+			ToolName:   "bash",
+			Preview:    "go test ./...",
+		})
+	}()
+
+	var requestID string
+	waitFor(t, time.Second, func() bool {
+		state := manager.getRun(run["id"].(string))
+		if state == nil {
+			return false
+		}
+		pending, _ := state.pendingAfter(0)
+		for _, event := range pending {
+			if event["type"] == "permission_request" {
+				requestID, _ = event["request_id"].(string)
+				return requestID != ""
+			}
+		}
+		return false
+	})
+
+	if !manager.resolveDecision(run["id"].(string), requestID, permissions.ReviewDeny) {
+		t.Fatal("expected decision to resolve")
+	}
+
+	select {
+	case decision := <-result:
+		if decision != permissions.ReviewDeny {
+			t.Fatalf("unexpected decision: %q", decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("decision did not return")
+	}
+
+	waitFor(t, time.Second, func() bool {
+		state := manager.getRun(run["id"].(string))
+		return state != nil && state.info()["status"] == "cancelled" && !manager.hasActiveRun("session-1")
+	})
+}

@@ -83,6 +83,7 @@ type runState struct {
 	events     []runEvent
 	nextSeq    int
 	finishedAt time.Time
+	cancelReq  bool
 	cancel     context.CancelFunc
 	done       chan struct{}
 
@@ -174,6 +175,17 @@ func (r *runState) denyPendingDecisions() {
 		default:
 		}
 	}
+}
+
+func (r *runState) requestCancel() {
+	r.mu.Lock()
+	r.cancelReq = true
+	r.mu.Unlock()
+
+	if r.cancel != nil {
+		r.cancel()
+	}
+	r.agent.Cancel()
 }
 
 // finish records terminal status and returns the synthetic "done" event for SSE.
@@ -281,10 +293,7 @@ func (m *RunManager) cancelRun(runID string) map[string]any {
 	if state == nil {
 		return nil
 	}
-	if state.cancel != nil {
-		state.cancel()
-	}
-	state.agent.Cancel()
+	state.requestCancel()
 	state.denyPendingDecisions()
 	<-state.done
 	return state.info()
@@ -336,7 +345,11 @@ func (m *RunManager) resolveDecision(runID, requestID string, decision permissio
 	if state == nil {
 		return false
 	}
-	return state.resolveDecision(requestID, decision)
+	resolved := state.resolveDecision(requestID, decision)
+	if resolved && decision == permissions.ReviewDeny {
+		state.requestCancel()
+	}
+	return resolved
 }
 
 func (m *RunManager) hasActiveRun(sessionID string) bool {
@@ -380,12 +393,15 @@ func (m *RunManager) run(ctx context.Context, state *runState, onPersist func(me
 		m.emit(state, state.appendEvent(event))
 	}
 
+	state.mu.RLock()
+	cancelRequested := state.cancelReq
+	state.mu.RUnlock()
+
 	status := runStatusCompleted
-	switch lastError {
-	case "cancelled":
+	switch {
+	case cancelRequested, lastError == "cancelled":
 		status = runStatusCancelled
-	case "":
-	default:
+	case lastError != "":
 		status = runStatusFailed
 	}
 	m.emit(state, state.finish(status, lastError))

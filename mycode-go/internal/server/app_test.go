@@ -122,6 +122,44 @@ func TestServeStaticFromConfiguredWebRoot(t *testing.T) {
 	})
 }
 
+func TestDefaultAppDoesNotEnableCORS(t *testing.T) {
+	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodOptions, "/api/settings", nil)
+	request.Header.Set("Origin", "https://example.com")
+	request.Header.Set("Access-Control-Request-Method", "GET")
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("unexpected CORS header: %s", recorder.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
+func TestDevAppAllowsOnlyLocalViteCORS(t *testing.T) {
+	handler := NewDevHandler()
+
+	allowed := httptest.NewRecorder()
+	allowedReq := httptest.NewRequest(http.MethodOptions, "/api/settings", nil)
+	allowedReq.Header.Set("Origin", "http://localhost:5173")
+	allowedReq.Header.Set("Access-Control-Request-Method", "GET")
+	handler.ServeHTTP(allowed, allowedReq)
+
+	if allowed.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
+		t.Fatalf("unexpected allowed CORS header: %s", allowed.Header().Get("Access-Control-Allow-Origin"))
+	}
+
+	denied := httptest.NewRecorder()
+	deniedReq := httptest.NewRequest(http.MethodOptions, "/api/settings", nil)
+	deniedReq.Header.Set("Origin", "https://example.com")
+	deniedReq.Header.Set("Access-Control-Request-Method", "GET")
+	handler.ServeHTTP(denied, deniedReq)
+
+	if denied.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("unexpected denied CORS header: %s", denied.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
 func TestSessionLifecycle(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	handler := newApp(false, "", store, core.NewRunManager(nil))
@@ -212,8 +250,8 @@ func TestChatRejectsMutuallyExclusiveMessageAndInput(t *testing.T) {
 			},
 		},
 	)
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", recorder.Code)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d", recorder.Code)
 	}
 
 	var payload struct {
@@ -222,6 +260,24 @@ func TestChatRejectsMutuallyExclusiveMessageAndInput(t *testing.T) {
 	decodeBody(t, recorder, &payload)
 	if payload.Detail != "message and input are mutually exclusive" {
 		t.Fatalf("unexpected detail: %s", payload.Detail)
+	}
+}
+
+func TestChatRequestShapeValidation(t *testing.T) {
+	cases := []map[string]any{
+		{"message": "hi", "input": []map[string]any{{"type": "text", "text": "also hi"}}},
+		{"message": "   "},
+		{"input": []map[string]any{{"type": "image", "data": "abc"}}},
+		{"input": []map[string]any{{"type": "document", "data": "abc", "mime_type": "text/plain"}}},
+		{"input": []map[string]any{{"type": "image"}}},
+	}
+	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+
+	for _, payload := range cases {
+		recorder := performJSON(t, handler, http.MethodPost, "/api/chat", payload)
+		if recorder.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for %#v, got %d: %s", payload, recorder.Code, recorder.Body.String())
+		}
 	}
 }
 
