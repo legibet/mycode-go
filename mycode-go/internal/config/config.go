@@ -125,7 +125,7 @@ func ResolveSessionsDir() string {
 
 // ResolveProject returns the nearest Git project root, or cwd when no .git is found.
 func ResolveProject(cwd string) string {
-	cwdPath := util.ExpandAbs(cwd)
+	cwdPath := util.ResolveSymlinks(cwd)
 	for path := cwdPath; path != "" && path != "."; {
 		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 			return path
@@ -141,8 +141,8 @@ func ResolveProject(cwd string) string {
 
 // ProjectDirs returns directories from project to cwd, inclusive.
 func ProjectDirs(cwd, project string) []string {
-	cwdPath := util.ExpandAbs(cwd)
-	projectPath := util.ExpandAbs(project)
+	cwdPath := util.ResolveSymlinks(cwd)
+	projectPath := util.ResolveSymlinks(project)
 	if projectPath == "" {
 		projectPath = ResolveProject(cwdPath)
 	}
@@ -173,7 +173,7 @@ func Load(cwd string) (Settings, error) {
 		}
 		cwd = wd
 	}
-	resolvedCWD := util.ExpandAbs(cwd)
+	resolvedCWD := util.ResolveSymlinks(cwd)
 	resolvedProject := ResolveProject(resolvedCWD)
 
 	settings := Settings{
@@ -190,9 +190,9 @@ func Load(cwd string) (Settings, error) {
 	providerOrder := []string{}
 	seenProviders := map[string]struct{}{}
 
-	configPaths := []string{filepath.Join(ResolveHome(), "config.json")}
+	configPaths := []string{util.ResolveSymlinks(filepath.Join(ResolveHome(), "config.json"))}
 	for _, dir := range ProjectDirs(resolvedCWD, resolvedProject) {
-		configPaths = append(configPaths, filepath.Join(dir, ".mycode", "config.json"))
+		configPaths = append(configPaths, util.ResolveSymlinks(filepath.Join(dir, ".mycode", "config.json")))
 	}
 	for _, path := range configPaths {
 		loaded, ok := loadConfig(path)
@@ -1214,10 +1214,9 @@ func asBoolPtr(value any) *bool {
 // is added on top of the validated set so the UI can render the unset case.
 var ReasoningEffortOptions = []string{"auto", "none", "low", "medium", "high", "xhigh"}
 
-// ResponseReasoningEffort maps an unset effort to the UI's "auto" sentinel.
-func ResponseReasoningEffort(value string) string {
+func ResponseReasoningEffort(value string) any {
 	if strings.TrimSpace(value) == "" {
-		return "auto"
+		return nil
 	}
 	return value
 }

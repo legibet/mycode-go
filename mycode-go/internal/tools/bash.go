@@ -58,13 +58,19 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 	readerErrors := make(chan error, 1)
 	go func() {
 		defer close(lines)
-		scanner := bufio.NewScanner(reader)
-		scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-		for scanner.Scan() {
-			lines <- strings.TrimRight(scanner.Text(), "\n")
-		}
-		if err := scanner.Err(); err != nil {
-			readerErrors <- err
+		buffered := bufio.NewReader(reader)
+		for {
+			line, err := buffered.ReadString('\n')
+			if len(line) > 0 {
+				lines <- strings.TrimRight(line, "\n")
+			}
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			if err != nil {
+				readerErrors <- err
+				return
+			}
 		}
 	}()
 

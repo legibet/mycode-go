@@ -17,6 +17,7 @@ import (
 	"github.com/legibet/mycode-go/internal/prompt"
 	"github.com/legibet/mycode-go/internal/provider"
 	"github.com/legibet/mycode-go/internal/tools"
+	"github.com/legibet/mycode-go/internal/util"
 )
 
 // Event is one normalized streaming event sent to the API and CLI.
@@ -67,9 +68,7 @@ func New(a Agent) (*Agent, error) {
 			a.CWD = "."
 		}
 	}
-	if absolute, err := filepath.Abs(a.CWD); err == nil {
-		a.CWD = absolute
-	}
+	a.CWD = util.ResolveSymlinks(a.CWD)
 
 	// Only persisted sessions have a stable transcript path to include in the
 	// compact continuation prompt.
@@ -353,7 +352,14 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 		}}
 
 		toolCall.Input = input
-		result, stop := a.authorizeTool(ctx, toolCall, input)
+		var result *tools.Result
+		stop := false
+		switch toolCall.Name {
+		case "read", "write", "edit", "bash":
+			result, stop = a.authorizeTool(ctx, toolCall, input)
+		default:
+			result = &tools.Result{Output: "error: unknown tool: " + toolCall.Name, IsError: true}
+		}
 		if result == nil {
 			runResult := a.runTool(ctx, toolCall, out)
 			result = &runResult

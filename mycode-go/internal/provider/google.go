@@ -60,7 +60,13 @@ func (a googleAdapter) StreamTurn(ctx context.Context, req Request) <-chan Strea
 		finishMessage := ""
 		var totalTokens int
 
-		for response, err := range client.Models.GenerateContentStream(requestCtx, req.Model, a.buildContents(req), config) {
+		contents, err := a.buildContents(req)
+		if err != nil {
+			out <- StreamEvent{Type: "provider_error", Err: err}
+			return
+		}
+
+		for response, err := range client.Models.GenerateContentStream(requestCtx, req.Model, contents, config) {
 			if err != nil {
 				out <- StreamEvent{Type: "provider_error", Err: err}
 				return
@@ -107,7 +113,7 @@ func (a googleAdapter) StreamTurn(ctx context.Context, req Request) <-chan Strea
 	return out
 }
 
-func (a googleAdapter) buildContents(req Request) []*genai.Content {
+func (a googleAdapter) buildContents(req Request) ([]*genai.Content, error) {
 	contents := make([]*genai.Content, 0)
 	toolNames := map[string]string{}
 	for _, msg := range prepareMessages(req, defaultProjectToolCallID) {
@@ -151,10 +157,16 @@ func (a googleAdapter) buildContents(req Request) []*genai.Content {
 				case "text":
 					parts = append(parts, genai.NewPartFromText(block.Text))
 				case "image":
-					mimeType, data := loadImageBlockPayload(block)
+					mimeType, data, err := loadImageBlockPayload(block)
+					if err != nil {
+						return nil, err
+					}
 					parts = append(parts, genai.NewPartFromBytes(decodeBase64(data), mimeType))
 				case "document":
-					mimeType, data, _ := loadDocumentBlockPayload(block)
+					mimeType, data, _, err := loadDocumentBlockPayload(block)
+					if err != nil {
+						return nil, err
+					}
 					parts = append(parts, genai.NewPartFromBytes(decodeBase64(data), mimeType))
 				case "tool_result":
 					response := map[string]any{"result": block.Output}
@@ -171,7 +183,7 @@ func (a googleAdapter) buildContents(req Request) []*genai.Content {
 			}
 		}
 	}
-	return contents
+	return contents, nil
 }
 
 func (a googleAdapter) buildConfig(req Request) *genai.GenerateContentConfig {

@@ -26,13 +26,17 @@ func RandomHex16() string {
 	return hex.EncodeToString(buf)
 }
 
-// ExpandAbs resolves "~/" to the user's home directory and returns the
+// ExpandAbs resolves "~" to the user's home directory and returns the
 // cleaned absolute form of path. Returns "" for empty input.
 func ExpandAbs(path string) string {
 	if path == "" {
 		return ""
 	}
-	if rest, ok := strings.CutPrefix(path, "~/"); ok {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = home
+		}
+	} else if rest, ok := strings.CutPrefix(path, "~/"); ok {
 		if home, err := os.UserHomeDir(); err == nil {
 			path = filepath.Join(home, rest)
 		}
@@ -42,6 +46,41 @@ func ExpandAbs(path string) string {
 		return filepath.Clean(path)
 	}
 	return filepath.Clean(absolute)
+}
+
+// ResolveSymlinks returns an absolute path with symlinks resolved for every
+// existing path component. Missing trailing components are kept as written.
+func ResolveSymlinks(path string) string {
+	path = ExpandAbs(path)
+	if path == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+
+	sep := string(filepath.Separator)
+	volume := filepath.VolumeName(path)
+	rest := strings.TrimPrefix(path, volume)
+	current := volume
+	if strings.HasPrefix(rest, sep) {
+		current += sep
+		rest = strings.TrimLeft(rest, sep)
+	}
+
+	parts := strings.Split(rest, sep)
+	for i, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		next := filepath.Join(current, part)
+		resolved, err := filepath.EvalSymlinks(next)
+		if err != nil {
+			return filepath.Clean(filepath.Join(append([]string{current}, parts[i:]...)...))
+		}
+		current = resolved
+	}
+	return filepath.Clean(current)
 }
 
 // xmlAttrEscaper handles the four characters that must be escaped inside an

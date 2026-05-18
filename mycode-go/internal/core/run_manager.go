@@ -188,23 +188,12 @@ func (r *runState) requestCancel() {
 	r.agent.Cancel()
 }
 
-// finish records terminal status and returns the synthetic "done" event for SSE.
-func (r *runState) finish(status runStatus, errText string) map[string]any {
+func (r *runState) finish(status runStatus, errText string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.status = status
 	r.errorText = errText
 	r.finishedAt = time.Now()
-	r.nextSeq++
-	payload := map[string]any{
-		"seq":    r.nextSeq - 1,
-		"type":   "done",
-		"status": string(status),
-	}
-	if errText != "" {
-		payload["error"] = errText
-	}
-	return payload
 }
 
 func (r *runState) pendingAfter(after int) ([]map[string]any, bool) {
@@ -404,7 +393,7 @@ func (m *RunManager) run(ctx context.Context, state *runState, onPersist func(me
 	case lastError != "":
 		status = runStatusFailed
 	}
-	m.emit(state, state.finish(status, lastError))
+	state.finish(status, lastError)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

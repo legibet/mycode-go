@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/legibet/mycode-go/internal/message"
 	"github.com/legibet/mycode-go/internal/util"
 )
+
+const defaultRequestTimeout = 300 * time.Second
 
 // Request is one provider turn request.
 type Request struct {
@@ -273,12 +276,24 @@ func messageNativeMeta(msg message.Message) map[string]any {
 	return raw
 }
 
-func loadImageBlockPayload(block message.Block) (mimeType string, data string) {
-	return cmp.Or(block.MIMEType, "image/png"), block.Data
+func loadImageBlockPayload(block message.Block) (mimeType string, data string, err error) {
+	if block.MIMEType == "" {
+		return "", "", fmt.Errorf("image block is missing mime_type")
+	}
+	if block.Data == "" {
+		return "", "", fmt.Errorf("image block is missing data")
+	}
+	return block.MIMEType, block.Data, nil
 }
 
-func loadDocumentBlockPayload(block message.Block) (mimeType string, data string, name string) {
-	return cmp.Or(block.MIMEType, "application/pdf"), block.Data, cmp.Or(block.Name, "document.pdf")
+func loadDocumentBlockPayload(block message.Block) (mimeType string, data string, name string, err error) {
+	if block.MIMEType == "" {
+		return "", "", "", fmt.Errorf("document block is missing mime_type")
+	}
+	if block.Data == "" {
+		return "", "", "", fmt.Errorf("document block is missing data")
+	}
+	return block.MIMEType, block.Data, block.Name, nil
 }
 
 func decodeBase64(data string) []byte {

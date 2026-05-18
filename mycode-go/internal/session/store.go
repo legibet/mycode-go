@@ -2,9 +2,11 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -293,22 +295,32 @@ func (s *Store) readMessages(sessionID string) ([]message.Message, error) {
 	}
 	defer func() { _ = file.Close() }()
 
-	scanner := bufio.NewScanner(file)
-	// Large tool_result outputs occasionally exceed bufio's default 64KB buffer.
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-
+	reader := bufio.NewReader(file)
 	out := make([]message.Message, 0)
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	for {
+		line, err := reader.ReadBytes('\n')
+		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return out, err
+			}
 			continue
 		}
 		var msg message.Message
 		if err := json.Unmarshal(line, &msg); err == nil {
 			out = append(out, msg)
 		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return out, err
+		}
 	}
-	return out, scanner.Err()
+	return out, nil
 }
 
 func (s *Store) readMeta(sessionID string) (Meta, error) {

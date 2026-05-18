@@ -35,13 +35,21 @@ func (a anthropicAdapter) StreamTurn(ctx context.Context, req Request) <-chan St
 	go func() {
 		defer close(out)
 
-		opts := []option.RequestOption{option.WithAPIKey(req.APIKey)}
+		opts := []option.RequestOption{
+			option.WithAPIKey(req.APIKey),
+			option.WithRequestTimeout(defaultRequestTimeout),
+		}
 		if strings.TrimSpace(req.APIBase) != "" {
 			opts = append(opts, option.WithBaseURL(strings.TrimRight(req.APIBase, "/")))
 		}
 		client := anthropic.NewClient(opts...)
 
-		bodyBytes, err := json.Marshal(a.buildPayload(req))
+		payload, err := a.buildPayload(req)
+		if err != nil {
+			out <- StreamEvent{Type: "provider_error", Err: err}
+			return
+		}
+		bodyBytes, err := json.Marshal(payload)
 		if err != nil {
 			out <- StreamEvent{Type: "provider_error", Err: err}
 			return
@@ -79,11 +87,15 @@ func (a anthropicAdapter) StreamTurn(ctx context.Context, req Request) <-chan St
 	return out
 }
 
-func (a anthropicAdapter) buildPayload(req Request) map[string]any {
+func (a anthropicAdapter) buildPayload(req Request) (map[string]any, error) {
 	prepared := prepareMessages(req, a.projectToolCallID)
 	messages := make([]map[string]any, 0, len(prepared))
 	for _, msg := range prepared {
-		messages = append(messages, a.serializeMessage(msg))
+		serialized, err := a.serializeMessage(msg)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, serialized)
 	}
 	a.applyCacheControl(messages)
 
@@ -117,30 +129,34 @@ func (a anthropicAdapter) buildPayload(req Request) map[string]any {
 	if outputConfig := a.outputConfig(req); outputConfig != nil {
 		payload["output_config"] = outputConfig
 	}
-	return payload
+	return payload, nil
 }
 
-func (a anthropicAdapter) serializeMessage(msg message.Message) map[string]any {
+func (a anthropicAdapter) serializeMessage(msg message.Message) (map[string]any, error) {
 	blocks := make([]map[string]any, 0, len(msg.Content))
 	for _, block := range msg.Content {
-		blocks = append(blocks, a.serializeBlock(block))
+		serialized, err := a.serializeBlock(block)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, serialized)
 	}
 	return map[string]any{
 		"role":    msg.Role,
 		"content": blocks,
-	}
+	}, nil
 }
 
-func (a anthropicAdapter) serializeBlock(block message.Block) map[string]any {
+func (a anthropicAdapter) serializeBlock(block message.Block) (map[string]any, error) {
 	switch block.Type {
 	case "text":
-		return map[string]any{"type": "text", "text": block.Text}
+		return map[string]any{"type": "text", "text": block.Text}, nil
 	case "thinking":
 		payload := map[string]any{"type": "thinking", "thinking": block.Text}
 		if signature, _ := blockNativeMeta(block)["signature"].(string); signature != "" {
 			payload["signature"] = signature
 		}
-		return payload
+		return payload, nil
 	case "tool_use":
 		payload := map[string]any{
 			"type":  "tool_use",
@@ -151,9 +167,12 @@ func (a anthropicAdapter) serializeBlock(block message.Block) map[string]any {
 		if caller := blockNativeMeta(block)["caller"]; caller != nil {
 			payload["caller"] = caller
 		}
-		return payload
+		return payload, nil
 	case "image":
-		mimeType, data := loadImageBlockPayload(block)
+		mimeType, data, err := loadImageBlockPayload(block)
+		if err != nil {
+			return nil, err
+		}
 		return map[string]any{
 			"type": "image",
 			"source": map[string]any{
@@ -161,9 +180,12 @@ func (a anthropicAdapter) serializeBlock(block message.Block) map[string]any {
 				"media_type": mimeType,
 				"data":       data,
 			},
-		}
+		}, nil
 	case "document":
-		mimeType, data, _ := loadDocumentBlockPayload(block)
+		mimeType, data, _, err := loadDocumentBlockPayload(block)
+		if err != nil {
+			return nil, err
+		}
 		return map[string]any{
 			"type": "document",
 			"source": map[string]any{
@@ -171,7 +193,7 @@ func (a anthropicAdapter) serializeBlock(block message.Block) map[string]any {
 				"media_type": mimeType,
 				"data":       data,
 			},
-		}
+		}, nil
 	case "tool_result":
 		contentBlocks := make([]map[string]any, 0)
 		for _, child := range ToolResultContentBlocks(block) {
@@ -179,7 +201,10 @@ func (a anthropicAdapter) serializeBlock(block message.Block) map[string]any {
 			case "text":
 				contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": child.Text})
 			case "image":
-				mimeType, data := loadImageBlockPayload(child)
+				mimeType, data, err := loadImageBlockPayload(child)
+				if err != nil {
+					return nil, err
+				}
 				contentBlocks = append(contentBlocks, map[string]any{
 					"type": "image",
 					"source": map[string]any{
@@ -199,9 +224,9 @@ func (a anthropicAdapter) serializeBlock(block message.Block) map[string]any {
 			"tool_use_id": block.ToolUseID,
 			"content":     content,
 			"is_error":    block.IsError != nil && *block.IsError,
-		}
+		}, nil
 	default:
-		return dumpJSONMap(block)
+		return dumpJSONMap(block), nil
 	}
 }
 

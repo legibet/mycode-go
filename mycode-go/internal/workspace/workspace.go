@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/legibet/mycode-go/internal/util"
 )
 
 type BrowseEntry struct {
@@ -46,10 +48,7 @@ func Roots() []string {
 		if value == "" {
 			continue
 		}
-		resolved, err := filepath.Abs(value)
-		if err != nil {
-			continue
-		}
+		resolved := util.ResolveSymlinks(value)
 		if _, err := os.Stat(resolved); err != nil {
 			continue
 		}
@@ -69,19 +68,12 @@ func Roots() []string {
 // Browse returns child directories of root/relativePath. The root must be in
 // Roots() and the resolved target must stay inside root.
 func Browse(root, relativePath string) BrowseResult {
-	requestedRoot, err := filepath.Abs(root)
-	if err != nil {
-		return BrowseResult{Root: root, Error: "Invalid root"}
-	}
+	requestedRoot := util.ResolveSymlinks(root)
 	if !slices.Contains(Roots(), requestedRoot) {
 		return BrowseResult{Root: root, Error: "Invalid root"}
 	}
 
-	target := filepath.Join(requestedRoot, relativePath)
-	target, err = filepath.Abs(target)
-	if err != nil {
-		return BrowseResult{Root: requestedRoot, Current: requestedRoot, Error: err.Error()}
-	}
+	target := util.ResolveSymlinks(filepath.Join(requestedRoot, relativePath))
 	if !withinRoot(requestedRoot, target) {
 		return BrowseResult{Root: requestedRoot, Current: requestedRoot, Error: "Path outside root"}
 	}

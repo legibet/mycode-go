@@ -15,19 +15,19 @@ import (
 	"unicode/utf8"
 
 	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/internal/util"
 )
 
 // ResolvePath resolves a path relative to cwd.
 func ResolvePath(path, cwd string) string {
 	expanded := path
-	if strings.HasPrefix(expanded, "~/") {
-		home, _ := os.UserHomeDir()
-		expanded = filepath.Join(home, strings.TrimPrefix(expanded, "~/"))
+	if expanded == "~" || strings.HasPrefix(expanded, "~/") {
+		expanded = util.ExpandAbs(expanded)
 	}
 	if filepath.IsAbs(expanded) {
-		return filepath.Clean(expanded)
+		return util.ResolveSymlinks(expanded)
 	}
-	return filepath.Clean(filepath.Join(cwd, expanded))
+	return util.ResolveSymlinks(filepath.Join(cwd, expanded))
 }
 
 // DetectImageMIMEType returns a supported image type.
@@ -182,13 +182,13 @@ func (e *Executor) Read(path string, offset, limit int) Result {
 		return errorResult("error: not a file: " + path)
 	}
 
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
-	}
-	if imageType := detectImageMIMEType(filePath, data); imageType != "" {
+	if imageType := detectImageMIMEType(filePath, readFileHeader(filePath, 16)); imageType != "" {
 		if !e.supportsImageInput {
 			return errorResult("error: image input is not supported by the current model")
+		}
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
 		}
 		summary := "Read image file [" + imageType + "]"
 		return Result{
@@ -199,10 +199,6 @@ func (e *Executor) Read(path string, offset, limit int) Result {
 			},
 		}
 	}
-	if !utf8.Valid(data) {
-		return errorResult("error: file is not valid utf-8 text: " + path)
-	}
-
 	startLine := 1
 	if offset > 0 {
 		startLine = offset
@@ -212,35 +208,53 @@ func (e *Executor) Read(path string, offset, limit int) Result {
 		lineLimit = limit
 	}
 
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	file, err := os.Open(filePath)
+	if err != nil {
+		return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
+	}
+	defer func() { _ = file.Close() }()
+
+	reader := bufio.NewReader(file)
 	lines := []string{}
 	totalLines := 0
 	nextOffset := 0
 	firstShortened := 0
 	shortenedLines := 0
 
-	for scanner.Scan() {
-		totalLines++
-		if totalLines < startLine {
-			continue
+	for {
+		rawLine, err := reader.ReadBytes('\n')
+		if len(rawLine) > 0 {
+			if !utf8.Valid(rawLine) {
+				return errorResult("error: file is not valid utf-8 text: " + path)
+			}
+			totalLines++
+			if totalLines >= startLine {
+				if len(lines) >= lineLimit {
+					nextOffset = totalLines
+					break
+				}
+				line := strings.TrimRight(string(rawLine), "\r\n")
+				if len(line) > ReadMaxLineChars {
+					runes := []rune(line)
+					if len(runes) <= ReadMaxLineChars {
+						lines = append(lines, line)
+						continue
+					}
+					if firstShortened == 0 {
+						firstShortened = totalLines
+					}
+					shortenedLines++
+					line = string(runes[:ReadMaxLineChars]) + " ... [line truncated]"
+				}
+				lines = append(lines, line)
+			}
 		}
-		if len(lines) >= lineLimit {
-			nextOffset = totalLines
+		if errors.Is(err, io.EOF) {
 			break
 		}
-		line := strings.TrimRight(scanner.Text(), "\r\n")
-		if len(line) > ReadMaxLineChars {
-			if firstShortened == 0 {
-				firstShortened = totalLines
-			}
-			shortenedLines++
-			line = line[:ReadMaxLineChars] + " ... [line truncated]"
+		if err != nil {
+			return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
 		}
-		lines = append(lines, line)
-	}
-	if err := scanner.Err(); err != nil {
-		return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
 	}
 	if totalLines < startLine && (totalLines != 0 || startLine != 1) {
 		return errorResult(fmt.Sprintf("error: offset %d beyond end of file (%d lines)", offset, totalLines))

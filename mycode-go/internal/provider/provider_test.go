@@ -20,6 +20,37 @@ import (
 var pdfBytes = []byte("%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
 var pngBytes = mustBase64Decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1X8AAAAASUVORK5CYII=")
 
+type payloadBuilder interface {
+	buildPayload(Request) (map[string]any, error)
+}
+
+func mustPayload(t *testing.T, adapter payloadBuilder, req Request) map[string]any {
+	t.Helper()
+	payload, err := adapter.buildPayload(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func mustAnthropicBlock(t *testing.T, adapter anthropicAdapter, block message.Block) map[string]any {
+	t.Helper()
+	payload, err := adapter.serializeBlock(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func mustContents(t *testing.T, adapter googleAdapter, req Request) []*genai.Content {
+	t.Helper()
+	contents, err := adapter.buildContents(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return contents
+}
+
 func TestRepairMessagesForReplayDowngradesUnsupportedPDF(t *testing.T) {
 	replay := RepairMessagesForReplay([]message.Message{
 		message.BuildMessage("user", []message.Block{
@@ -50,7 +81,7 @@ func TestAllBuiltInProvidersRegisterAdapters(t *testing.T) {
 
 func TestOpenAIChatPayloadUsesExtraBody(t *testing.T) {
 	deepSeek := newOpenAIChatAdapter("deepseek").(openAIChatAdapter)
-	deepSeekNone := deepSeek.buildPayload(Request{
+	deepSeekNone := mustPayload(t, deepSeek, Request{
 		Model:           "deepseek-v4-pro",
 		ReasoningEffort: "none",
 	})
@@ -60,7 +91,7 @@ func TestOpenAIChatPayloadUsesExtraBody(t *testing.T) {
 		t.Fatalf("unexpected DeepSeek none payload: %#v", deepSeekNone)
 	}
 
-	deepSeekHigh := deepSeek.buildPayload(Request{
+	deepSeekHigh := mustPayload(t, deepSeek, Request{
 		Model:           "deepseek-v4-pro",
 		ReasoningEffort: "high",
 	})
@@ -70,7 +101,7 @@ func TestOpenAIChatPayloadUsesExtraBody(t *testing.T) {
 		t.Fatalf("unexpected DeepSeek high payload: %#v", deepSeekHigh)
 	}
 
-	deepSeekXHigh := deepSeek.buildPayload(Request{
+	deepSeekXHigh := mustPayload(t, deepSeek, Request{
 		Model:           "deepseek-v4-pro",
 		ReasoningEffort: "xhigh",
 	})
@@ -79,7 +110,7 @@ func TestOpenAIChatPayloadUsesExtraBody(t *testing.T) {
 	}
 
 	zai := newOpenAIChatAdapter("zai").(openAIChatAdapter)
-	zaiPayload := zai.buildPayload(Request{
+	zaiPayload := mustPayload(t, zai, Request{
 		Model: "glm-5.1",
 	})
 	if _, ok := zaiPayload["thinking"]; ok {
@@ -95,7 +126,7 @@ func TestOpenAIChatPayloadUsesExtraBody(t *testing.T) {
 	}
 
 	openRouter := newOpenAIChatAdapter("openrouter").(openAIChatAdapter)
-	routerPayload := openRouter.buildPayload(Request{
+	routerPayload := mustPayload(t, openRouter, Request{
 		Model:           "openai/gpt-5",
 		ReasoningEffort: "high",
 	})
@@ -117,7 +148,7 @@ func TestAnthropicSerializeBlockReplaysCaller(t *testing.T) {
 	block := message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, map[string]any{
 		"native": map[string]any{"caller": "assistant"},
 	})
-	payload := adapter.serializeBlock(block)
+	payload := mustAnthropicBlock(t, adapter, block)
 	if payload["caller"] != "assistant" {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
@@ -170,7 +201,7 @@ func TestOpenAIResponsesSerializeToolMakesOptionalFieldsNullable(t *testing.T) {
 
 func TestOpenAIResponsesBuildPayloadIncludesPromptCacheKey(t *testing.T) {
 	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
-	payload := adapter.buildPayload(Request{
+	payload := mustPayload(t, adapter, Request{
 		Model:     "gpt-5.4",
 		SessionID: "session_123",
 		Messages: []message.Message{
@@ -299,7 +330,7 @@ func TestOpenAIResponsesToolCallStreamIgnoresTrailingEmptyEvent(t *testing.T) {
 
 func TestOpenAIResponsesReplaysNativeOutputItemsForToolResults(t *testing.T) {
 	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
-	payload := adapter.buildPayload(Request{
+	payload := mustPayload(t, adapter, Request{
 		Model: "gpt-5.4",
 		Messages: []message.Message{
 			message.AssistantMessage([]message.Block{
@@ -362,7 +393,7 @@ func TestOpenAIResponsesReplaysNativeOutputItemsForToolResults(t *testing.T) {
 
 func TestOpenAIResponsesFallbackReplaySkipsReasoningBlocks(t *testing.T) {
 	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
-	payload := adapter.buildPayload(Request{
+	payload := mustPayload(t, adapter, Request{
 		Model: "gpt-5.4",
 		Messages: []message.Message{
 			message.AssistantMessage([]message.Block{
@@ -416,7 +447,7 @@ func TestUserPDFInputSerialization(t *testing.T) {
 	}
 
 	responsesAdapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
-	responsesPayload := responsesAdapter.buildPayload(request)
+	responsesPayload := mustPayload(t, responsesAdapter, request)
 	input := responsesPayload["input"].([]any)
 	content := input[0].(map[string]any)["content"].([]any)
 	fileInput, _ := content[1].(map[string]any)
@@ -425,7 +456,7 @@ func TestUserPDFInputSerialization(t *testing.T) {
 	}
 
 	chatAdapter := newOpenAIChatAdapter("openai_chat").(openAIChatAdapter)
-	chatPayload := chatAdapter.buildPayload(request)
+	chatPayload := mustPayload(t, chatAdapter, request)
 	chatMessages := chatPayload["messages"].([]any)
 	chatContent := chatMessages[0].(map[string]any)["content"].([]any)
 	filePart := chatContent[1].(map[string]any)
@@ -434,7 +465,7 @@ func TestUserPDFInputSerialization(t *testing.T) {
 	}
 
 	anthropicAdapter := newAnthropicAdapter("anthropic").(anthropicAdapter)
-	anthropicPayload := anthropicAdapter.buildPayload(Request{
+	anthropicPayload := mustPayload(t, anthropicAdapter, Request{
 		Model:              "claude-sonnet-4-6",
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
@@ -447,7 +478,7 @@ func TestUserPDFInputSerialization(t *testing.T) {
 	}
 
 	googleAdapter := newGoogleAdapter().(googleAdapter)
-	googleContent := googleAdapter.buildContents(Request{
+	googleContent := mustContents(t, googleAdapter, Request{
 		Model:              "gemini-3-flash-preview",
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
@@ -545,7 +576,7 @@ func TestRepairMessagesForReplayFiltersImagesWhenDisabled(t *testing.T) {
 
 func TestOpenAIResponsesFallsBackToFullReplayForCrossProviderHistory(t *testing.T) {
 	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
-	payload := adapter.buildPayload(Request{
+	payload := mustPayload(t, adapter, Request{
 		Model: "gpt-5.4",
 		Messages: []message.Message{
 			message.UserTextMessage("double 21", nil),
@@ -587,7 +618,7 @@ func TestOpenAIResponsesFallsBackToFullReplayForCrossProviderHistory(t *testing.
 
 func TestOpenAIResponsesSerializesToolResultImages(t *testing.T) {
 	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
-	payload := adapter.buildPayload(Request{
+	payload := mustPayload(t, adapter, Request{
 		Model:              "gpt-5.4",
 		SupportsImageInput: true,
 		Messages: []message.Message{
@@ -659,7 +690,7 @@ func TestOpenAIResponsesConvertsFinalResponseBlocks(t *testing.T) {
 	if _, ok := first["acknowledged_safety_checks"]; ok {
 		t.Fatalf("unexpected union junk in stored output item: %#v", first)
 	}
-	replayPayload := adapter.buildPayload(Request{
+	replayPayload := mustPayload(t, adapter, Request{
 		Model:     "gpt-5.4",
 		Messages:  []message.Message{msg},
 		MaxTokens: 4096,
@@ -766,7 +797,7 @@ func TestRepairMessagesPreservesEmptyNativeReasoningBlocks(t *testing.T) {
 
 func TestOpenAIChatReplaysNativeReasoningField(t *testing.T) {
 	adapter := newOpenAIChatAdapter("openai_chat").(openAIChatAdapter)
-	payload := adapter.buildPayload(Request{
+	payload := mustPayload(t, adapter, Request{
 		Model: "test-model",
 		Messages: []message.Message{
 			message.AssistantMessage([]message.Block{
@@ -786,7 +817,7 @@ func TestOpenAIChatReplaysNativeReasoningField(t *testing.T) {
 
 func TestOpenAIChatReplaysReasoningByDefault(t *testing.T) {
 	adapter := newOpenAIChatAdapter("openai_chat").(openAIChatAdapter)
-	payload := adapter.buildPayload(Request{
+	payload := mustPayload(t, adapter, Request{
 		Model: "test-model",
 		Messages: []message.Message{
 			message.AssistantMessage([]message.Block{
@@ -807,7 +838,7 @@ func TestOpenAIChatReplaysReasoningByDefault(t *testing.T) {
 func TestDeepSeekReplaysReasoningAcrossTurns(t *testing.T) {
 	adapter := newOpenAIChatAdapter("deepseek").(openAIChatAdapter)
 
-	withToolCall := adapter.buildPayload(Request{
+	withToolCall := mustPayload(t, adapter, Request{
 		Model: "test-model",
 		Messages: []message.Message{
 			message.AssistantMessage([]message.Block{
@@ -825,7 +856,7 @@ func TestDeepSeekReplaysReasoningAcrossTurns(t *testing.T) {
 		t.Fatalf("unexpected payload: %#v", withToolCall)
 	}
 
-	withNextUserTurn := adapter.buildPayload(Request{
+	withNextUserTurn := mustPayload(t, adapter, Request{
 		Model: "test-model",
 		Messages: []message.Message{
 			message.AssistantMessage([]message.Block{
@@ -903,7 +934,7 @@ func TestAnthropicBuildPayloadMapsReasoningConfig(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.model+"/"+tc.effort, func(t *testing.T) {
-			payload := adapter.buildPayload(Request{
+			payload := mustPayload(t, adapter, Request{
 				Model:           tc.model,
 				MaxTokens:       8192,
 				ReasoningEffort: tc.effort,
@@ -926,7 +957,7 @@ func TestAnthropicBuildPayloadMapsReasoningConfig(t *testing.T) {
 
 func TestAnthropicBuildPayloadAddsCacheControlToLatestUserBlock(t *testing.T) {
 	adapter := newAnthropicAdapter("anthropic").(anthropicAdapter)
-	payload := adapter.buildPayload(Request{
+	payload := mustPayload(t, adapter, Request{
 		Model:     "test-model",
 		MaxTokens: 4096,
 		System:    "You are helpful.",
@@ -990,7 +1021,7 @@ func TestGoogleBuildConfigMapsReasoningEffort(t *testing.T) {
 
 func TestOpenAIChatAssistantReplayIncludesEmptyContent(t *testing.T) {
 	adapter := newOpenAIChatAdapter("openai_chat").(openAIChatAdapter)
-	payload := adapter.buildPayload(Request{
+	payload := mustPayload(t, adapter, Request{
 		Model: "gpt-5.4",
 		Messages: []message.Message{
 			message.AssistantMessage([]message.Block{

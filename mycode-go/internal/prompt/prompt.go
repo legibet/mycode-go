@@ -57,8 +57,8 @@ type Skill struct {
 
 // Build returns the runtime system prompt.
 func Build(cwd, project, home string) string {
-	resolvedCWD := util.ExpandAbs(cwd)
-	resolvedProject := util.ExpandAbs(project)
+	resolvedCWD := util.ResolveSymlinks(cwd)
+	resolvedProject := util.ResolveSymlinks(project)
 	parts := []string{basePrompt}
 	if section := loadInstructions(resolvedCWD, resolvedProject, home); section != "" {
 		parts = append(parts, section)
@@ -93,13 +93,13 @@ func loadInstructions(cwd, project, home string) string {
 }
 
 func discoverInstructionFiles(cwd, project, home string) []string {
-	resolvedCWD := util.ExpandAbs(cwd)
-	resolvedProject := util.ExpandAbs(project)
-	resolvedHome := util.ExpandAbs(home)
+	resolvedCWD := util.ResolveSymlinks(cwd)
+	resolvedProject := util.ResolveSymlinks(project)
+	resolvedHome := util.ResolveSymlinks(home)
 	files := []string{}
 
 	globalCandidate := filepath.Join(resolvedHome, "AGENTS.md")
-	compatCandidate := filepath.Join(util.ExpandAbs(userHomeDir()), ".agents", "AGENTS.md")
+	compatCandidate := filepath.Join(util.ResolveSymlinks(userHomeDir()), ".agents", "AGENTS.md")
 	if isFile(globalCandidate) {
 		files = append(files, globalCandidate)
 	} else if isFile(compatCandidate) {
@@ -139,10 +139,10 @@ func loadSkills(cwd, project, home string) string {
 // DiscoverSkills merges skills across global home, ~/.agents (compat),
 // project AGENTS, and project .mycode/skills.
 func DiscoverSkills(cwd, project, home string) []Skill {
-	cwdPath := util.ExpandAbs(cwd)
-	projectPath := util.ExpandAbs(project)
-	homePath := util.ExpandAbs(home)
-	compatHome := util.ExpandAbs(userHomeDir())
+	cwdPath := util.ResolveSymlinks(cwd)
+	projectPath := util.ResolveSymlinks(project)
+	homePath := util.ResolveSymlinks(home)
+	compatHome := util.ResolveSymlinks(userHomeDir())
 
 	type skillRoot struct {
 		path   string

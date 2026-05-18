@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/legibet/mycode-go/internal/util"
 )
 
 func TestInstructions(t *testing.T) {
@@ -34,7 +36,8 @@ func TestInstructions(t *testing.T) {
 		if len(files) != 2 {
 			t.Fatalf("unexpected files: %#v", files)
 		}
-		if files[0] != filepath.Join(home, "AGENTS.md") || files[1] != filepath.Join(cwd, "AGENTS.md") {
+		if files[0] != util.ResolveSymlinks(filepath.Join(home, "AGENTS.md")) ||
+			files[1] != util.ResolveSymlinks(filepath.Join(cwd, "AGENTS.md")) {
 			t.Fatalf("unexpected files: %#v", files)
 		}
 
@@ -86,6 +89,31 @@ func TestInstructions(t *testing.T) {
 		cwdIdx := strings.Index(prompt, "Current cwd")
 		if parentIdx >= cwdIdx {
 			t.Fatalf("parent should appear before cwd in prompt")
+		}
+	})
+
+	t.Run("loads project agents through symlink cwd", func(t *testing.T) {
+		root := t.TempDir()
+		home := filepath.Join(root, "home", ".mycode")
+		userHomeDir = func() string { return filepath.Join(root, "home") }
+		project := filepath.Join(root, "real-project")
+		cwd := filepath.Join(project, "apps", "api")
+		if err := os.MkdirAll(cwd, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		linkProject := filepath.Join(root, "linked-project")
+		if err := os.Symlink(project, linkProject); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		writeText(t, filepath.Join(project, "AGENTS.md"), "Parent project")
+		writeText(t, filepath.Join(cwd, "AGENTS.md"), "Current cwd")
+
+		prompt := loadInstructions(filepath.Join(linkProject, "apps", "api"), project, home)
+		if !strings.Contains(prompt, "Parent project") || !strings.Contains(prompt, "Current cwd") {
+			t.Fatalf("unexpected prompt: %q", prompt)
 		}
 	})
 

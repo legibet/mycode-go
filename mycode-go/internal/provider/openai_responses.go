@@ -34,7 +34,9 @@ func (a openAIResponsesAdapter) StreamTurn(ctx context.Context, req Request) <-c
 	go func() {
 		defer close(out)
 
-		resp, err := a.openStream(ctx, req)
+		requestCtx, cancel := context.WithTimeout(ctx, defaultRequestTimeout)
+		defer cancel()
+		resp, err := a.openStream(requestCtx, req)
 		if err != nil {
 			out <- StreamEvent{Type: "provider_error", Err: err}
 			return
@@ -103,7 +105,10 @@ func (a openAIResponsesAdapter) StreamTurn(ctx context.Context, req Request) <-c
 }
 
 func (a openAIResponsesAdapter) openStream(ctx context.Context, req Request) (*http.Response, error) {
-	payload := a.buildPayload(req)
+	payload, err := a.buildPayload(req)
+	if err != nil {
+		return nil, err
+	}
 	payload["stream"] = true
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -217,13 +222,17 @@ func openAIResponsesHTTPError(status string, raw []byte) error {
 	return fmt.Errorf("openai responses request failed with status %s", status)
 }
 
-func (a openAIResponsesAdapter) buildPayload(req Request) map[string]any {
+func (a openAIResponsesAdapter) buildPayload(req Request) (map[string]any, error) {
 	prepared := prepareMessages(req, defaultProjectToolCallID)
 	inputItems := make([]any, 0)
 	for _, msg := range prepared {
 		switch msg.Role {
 		case "user":
-			inputItems = append(inputItems, a.serializeUserMessage(msg)...)
+			serialized, err := a.serializeUserMessage(msg)
+			if err != nil {
+				return nil, err
+			}
+			inputItems = append(inputItems, serialized...)
 		case "assistant":
 			if nativeItems := a.nativeOutputItems(msg); len(nativeItems) > 0 {
 				inputItems = append(inputItems, nativeItems...)
@@ -257,10 +266,10 @@ func (a openAIResponsesAdapter) buildPayload(req Request) map[string]any {
 	if req.ReasoningEffort != "" {
 		payload["reasoning"] = map[string]any{"effort": req.ReasoningEffort}
 	}
-	return payload
+	return payload, nil
 }
 
-func (a openAIResponsesAdapter) serializeUserMessage(msg message.Message) []any {
+func (a openAIResponsesAdapter) serializeUserMessage(msg message.Message) ([]any, error) {
 	items := make([]any, 0)
 	blocks := msg.Content
 	messageBlocks := make([]message.Block, 0, len(blocks))
@@ -269,7 +278,11 @@ func (a openAIResponsesAdapter) serializeUserMessage(msg message.Message) []any 
 			messageBlocks = append(messageBlocks, block)
 		}
 	}
-	if content := a.serializeInputContent(messageBlocks); len(content) > 0 {
+	content, err := a.serializeInputContent(messageBlocks)
+	if err != nil {
+		return nil, err
+	}
+	if len(content) > 0 {
 		items = append(items, map[string]any{
 			"type":    "message",
 			"role":    "user",
@@ -291,7 +304,10 @@ func (a openAIResponsesAdapter) serializeUserMessage(msg message.Message) []any 
 		}
 		output := any(block.Output)
 		if hasImages {
-			output = a.serializeInputContent(resultBlocks)
+			output, err = a.serializeInputContent(resultBlocks)
+			if err != nil {
+				return nil, err
+			}
 		}
 		items = append(items, map[string]any{
 			"type":    "function_call_output",
@@ -299,31 +315,37 @@ func (a openAIResponsesAdapter) serializeUserMessage(msg message.Message) []any 
 			"output":  output,
 		})
 	}
-	return items
+	return items, nil
 }
 
-func (a openAIResponsesAdapter) serializeInputContent(blocks []message.Block) []any {
+func (a openAIResponsesAdapter) serializeInputContent(blocks []message.Block) ([]any, error) {
 	content := make([]any, 0, len(blocks))
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
 			content = append(content, map[string]any{"type": "input_text", "text": block.Text})
 		case "image":
-			mimeType, data := loadImageBlockPayload(block)
+			mimeType, data, err := loadImageBlockPayload(block)
+			if err != nil {
+				return nil, err
+			}
 			content = append(content, map[string]any{
 				"type":      "input_image",
 				"image_url": "data:" + mimeType + ";base64," + data,
 			})
 		case "document":
-			mimeType, data, name := loadDocumentBlockPayload(block)
+			mimeType, data, name, err := loadDocumentBlockPayload(block)
+			if err != nil {
+				return nil, err
+			}
 			content = append(content, map[string]any{
 				"type":      "input_file",
-				"filename":  name,
+				"filename":  cmp.Or(name, "document.pdf"),
 				"file_data": "data:" + mimeType + ";base64," + data,
 			})
 		}
 	}
-	return content
+	return content, nil
 }
 
 func (a openAIResponsesAdapter) nativeOutputItems(msg message.Message) []any {

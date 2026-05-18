@@ -35,13 +35,21 @@ func (a openAIChatAdapter) StreamTurn(ctx context.Context, req Request) <-chan S
 	go func() {
 		defer close(out)
 
-		opts := []option.RequestOption{option.WithAPIKey(req.APIKey)}
+		opts := []option.RequestOption{
+			option.WithAPIKey(req.APIKey),
+			option.WithRequestTimeout(defaultRequestTimeout),
+		}
 		if strings.TrimSpace(req.APIBase) != "" {
 			opts = append(opts, option.WithBaseURL(strings.TrimRight(req.APIBase, "/")))
 		}
 		client := openai.NewClient(opts...)
 
-		bodyBytes, err := json.Marshal(a.buildPayload(req))
+		payload, err := a.buildPayload(req)
+		if err != nil {
+			out <- StreamEvent{Type: "provider_error", Err: err}
+			return
+		}
+		bodyBytes, err := json.Marshal(payload)
 		if err != nil {
 			out <- StreamEvent{Type: "provider_error", Err: err}
 			return
@@ -144,7 +152,7 @@ func (a openAIChatAdapter) StreamTurn(ctx context.Context, req Request) <-chan S
 	return out
 }
 
-func (a openAIChatAdapter) buildPayload(req Request) map[string]any {
+func (a openAIChatAdapter) buildPayload(req Request) (map[string]any, error) {
 	messagesPayload := make([]any, 0)
 	if strings.TrimSpace(req.System) != "" {
 		messagesPayload = append(messagesPayload, map[string]any{
@@ -153,7 +161,11 @@ func (a openAIChatAdapter) buildPayload(req Request) map[string]any {
 		})
 	}
 	for _, msg := range prepareMessages(req, defaultProjectToolCallID) {
-		messagesPayload = append(messagesPayload, a.serializeMessage(msg)...)
+		serialized, err := a.serializeMessage(msg)
+		if err != nil {
+			return nil, err
+		}
+		messagesPayload = append(messagesPayload, serialized...)
 	}
 
 	payload := map[string]any{
@@ -209,10 +221,10 @@ func (a openAIChatAdapter) buildPayload(req Request) map[string]any {
 			}
 		}
 	}
-	return payload
+	return payload, nil
 }
 
-func (a openAIChatAdapter) serializeMessage(msg message.Message) []any {
+func (a openAIChatAdapter) serializeMessage(msg message.Message) ([]any, error) {
 	switch msg.Role {
 	case "user":
 		payloadMessages := make([]any, 0, len(msg.Content)+1)
@@ -230,7 +242,10 @@ func (a openAIChatAdapter) serializeMessage(msg message.Message) []any {
 				mediaContent = append(mediaContent, map[string]any{"type": "text", "text": block.Text})
 			case "image":
 				hasMedia = true
-				mimeType, data := loadImageBlockPayload(block)
+				mimeType, data, err := loadImageBlockPayload(block)
+				if err != nil {
+					return nil, err
+				}
 				mediaContent = append(mediaContent, map[string]any{
 					"type": "image_url",
 					"image_url": map[string]any{
@@ -239,11 +254,14 @@ func (a openAIChatAdapter) serializeMessage(msg message.Message) []any {
 				})
 			case "document":
 				hasMedia = true
-				mimeType, data, name := loadDocumentBlockPayload(block)
+				mimeType, data, name, err := loadDocumentBlockPayload(block)
+				if err != nil {
+					return nil, err
+				}
 				mediaContent = append(mediaContent, map[string]any{
 					"type": "file",
 					"file": map[string]any{
-						"filename":  name,
+						"filename":  cmp.Or(name, "document.pdf"),
 						"file_data": "data:" + mimeType + ";base64," + data,
 					},
 				})
@@ -270,7 +288,7 @@ func (a openAIChatAdapter) serializeMessage(msg message.Message) []any {
 			})
 		}
 		payloadMessages = append(payloadMessages, toolMessages...)
-		return payloadMessages
+		return payloadMessages, nil
 	case "assistant":
 		textParts := make([]string, 0)
 		thinkingBlocks := make([]message.Block, 0)
@@ -306,9 +324,9 @@ func (a openAIChatAdapter) serializeMessage(msg message.Message) []any {
 		if len(thinkingBlocks) > 0 {
 			maps.Copy(payload, serializeChatReasoning(thinkingBlocks))
 		}
-		return []any{payload}
+		return []any{payload}, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
