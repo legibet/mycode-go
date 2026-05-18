@@ -77,6 +77,7 @@ function getErrorDetail(
 }
 
 function getRunFromDetail(detail: ChatErrorResponse["detail"]): RunInfo | null {
+  if (Array.isArray(detail)) return null;
   return typeof detail === "object" && detail?.run ? detail.run : null;
 }
 
@@ -85,6 +86,10 @@ function getMessageFromDetail(
   fallback: string,
 ): string {
   if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail)) {
+    const firstMessage = detail.find((item) => item.msg)?.msg;
+    return firstMessage || fallback;
+  }
   if (detail && typeof detail === "object" && detail.message) {
     return detail.message;
   }
@@ -321,6 +326,8 @@ export function useChat(config: LocalConfig) {
 
   const fetchSessions = useCallback(async (): Promise<SessionSummary[]> => {
     const requestCwd = config.cwd;
+    if (requestCwd !== cwdRef.current) return [];
+
     try {
       const res = await fetch(
         `/api/sessions?cwd=${encodeURIComponent(requestCwd)}`,
@@ -512,20 +519,21 @@ export function useChat(config: LocalConfig) {
       const requestCwd = options?.requestCwd ?? config.cwd;
       const requestToken =
         options?.requestToken ?? sessionRequestTokenRef.current;
-      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
-      if (!res.ok) throw new Error("Failed to load session");
-
-      const data = (await res.json()) as SessionResponse;
-      if (
-        !isCurrentWorkspaceRequest({
+      const isStillCurrent = () =>
+        isCurrentWorkspaceRequest({
           pendingRequestToken: sessionRequestTokenRef.current,
           requestToken,
           activeCwd: cwdRef.current,
           requestCwd,
-        })
-      ) {
-        return null;
-      }
+        });
+
+      if (!isStillCurrent()) return null;
+
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+      if (!res.ok) throw new Error("Failed to load session");
+
+      const data = (await res.json()) as SessionResponse;
+      if (!isStillCurrent()) return null;
       if (!data.session) return null;
 
       setActiveSessionSnapshot(data.session);
@@ -1059,6 +1067,7 @@ export function useChat(config: LocalConfig) {
 
     void (async () => {
       try {
+        if (!isStillCurrent()) return;
         const preferredSessionId = loadActiveSession(requestCwd);
         const res = await fetch(
           `/api/sessions?cwd=${encodeURIComponent(requestCwd)}`,
