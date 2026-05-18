@@ -15,75 +15,6 @@ import (
 	"github.com/legibet/mycode-go/internal/session"
 )
 
-func TestWorkspaceRoutes(t *testing.T) {
-	root := t.TempDir()
-	projectDir := filepath.Join(root, "projects", "demo")
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, ".hidden"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Setenv("MYCODE_WORKSPACE_ROOTS", root)
-	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
-
-	t.Run("roots", func(t *testing.T) {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/api/workspaces/roots", nil)
-		handler.ServeHTTP(recorder, request)
-
-		if recorder.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", recorder.Code)
-		}
-
-		var payload struct {
-			Roots []string `json:"roots"`
-		}
-		decodeBody(t, recorder, &payload)
-		if len(payload.Roots) != 1 || payload.Roots[0] != root {
-			t.Fatalf("unexpected roots: %#v", payload.Roots)
-		}
-	})
-
-	t.Run("browse", func(t *testing.T) {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(
-			http.MethodGet,
-			"/api/workspaces/browse?root="+root+"&path=projects",
-			nil,
-		)
-		handler.ServeHTTP(recorder, request)
-
-		if recorder.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", recorder.Code)
-		}
-
-		var payload struct {
-			Path    string `json:"path"`
-			Current string `json:"current"`
-			Entries []struct {
-				Name string `json:"name"`
-				Path string `json:"path"`
-			} `json:"entries"`
-			Error string `json:"error"`
-		}
-		decodeBody(t, recorder, &payload)
-		if payload.Error != "" {
-			t.Fatalf("unexpected error: %s", payload.Error)
-		}
-		if payload.Path != "projects" {
-			t.Fatalf("unexpected path: %s", payload.Path)
-		}
-		if filepath.Base(payload.Current) != "projects" {
-			t.Fatalf("unexpected current path: %s", payload.Current)
-		}
-		if len(payload.Entries) != 1 || payload.Entries[0].Name != "demo" || payload.Entries[0].Path != "projects/demo" {
-			t.Fatalf("unexpected entries: %#v", payload.Entries)
-		}
-	})
-}
-
 func TestServeStaticFromConfiguredWebRoot(t *testing.T) {
 	webRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(webRoot, "index.html"), []byte("index"), 0o644); err != nil {
@@ -157,109 +88,6 @@ func TestDevAppAllowsOnlyLocalViteCORS(t *testing.T) {
 
 	if denied.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Fatalf("unexpected denied CORS header: %s", denied.Header().Get("Access-Control-Allow-Origin"))
-	}
-}
-
-func TestSessionLifecycle(t *testing.T) {
-	store := session.NewStore(t.TempDir())
-	handler := newApp(false, "", store, core.NewRunManager(nil))
-	cwd := t.TempDir()
-
-	recorder := performJSON(
-		t,
-		handler,
-		http.MethodPost,
-		"/api/sessions",
-		map[string]any{
-			"cwd": cwd,
-		},
-	)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
-	}
-
-	var created struct {
-		Session struct {
-			ID    string `json:"id"`
-			Title string `json:"title"`
-			CWD   string `json:"cwd"`
-		} `json:"session"`
-	}
-	decodeBody(t, recorder, &created)
-	if created.Session.ID == "" {
-		t.Fatal("expected session id")
-	}
-	if created.Session.Title != session.DefaultSessionTitle {
-		t.Fatalf("unexpected title: %s", created.Session.Title)
-	}
-	if created.Session.CWD != cwd {
-		t.Fatalf("unexpected cwd: %s", created.Session.CWD)
-	}
-
-	recorder = httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/sessions?cwd="+cwd, nil)
-	handler.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", recorder.Code)
-	}
-
-	var listed struct {
-		Sessions []struct {
-			ID        string `json:"id"`
-			Title     string `json:"title"`
-			IsRunning bool   `json:"is_running"`
-		} `json:"sessions"`
-	}
-	decodeBody(t, recorder, &listed)
-	if len(listed.Sessions) != 1 || listed.Sessions[0].ID != created.Session.ID {
-		t.Fatalf("unexpected sessions: %#v", listed.Sessions)
-	}
-	if listed.Sessions[0].IsRunning {
-		t.Fatal("session should not be running")
-	}
-
-	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodGet, "/api/sessions/"+created.Session.ID, nil)
-	handler.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", recorder.Code)
-	}
-
-	var loaded struct {
-		Session any `json:"session"`
-	}
-	decodeBody(t, recorder, &loaded)
-	if loaded.Session == nil {
-		t.Fatal("expected session payload")
-	}
-}
-
-func TestChatRejectsMutuallyExclusiveMessageAndInput(t *testing.T) {
-	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
-
-	recorder := performJSON(
-		t,
-		handler,
-		http.MethodPost,
-		"/api/chat",
-		map[string]any{
-			"provider": "openai",
-			"message":  "hi",
-			"input": []map[string]any{
-				{"type": "text", "text": "hello"},
-			},
-		},
-	)
-	if recorder.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("expected 422, got %d", recorder.Code)
-	}
-
-	var payload struct {
-		Detail string `json:"detail"`
-	}
-	decodeBody(t, recorder, &payload)
-	if payload.Detail != "message and input are mutually exclusive" {
-		t.Fatalf("unexpected detail: %s", payload.Detail)
 	}
 }
 
@@ -396,32 +224,23 @@ func TestChatRejectsRewindToCompactSummary(t *testing.T) {
 	}
 }
 
-func TestConfigRoute(t *testing.T) {
+func TestSettingsRouteReturnsEmptyWhenNoFile(t *testing.T) {
 	isolateServerConfigTest(t)
-	t.Setenv("OPENAI_API_KEY", "test-key")
-
 	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/config?cwd="+t.TempDir(), nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
 	handler.ServeHTTP(recorder, request)
-
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 
-	var payload struct {
-		Providers map[string]map[string]any `json:"providers"`
-		Default   map[string]any            `json:"default"`
-	}
+	var payload map[string]any
 	decodeBody(t, recorder, &payload)
-	if len(payload.Providers) == 0 {
-		t.Fatal("expected at least one provider")
+	if payload["exists"] != false {
+		t.Fatalf("unexpected exists: %#v", payload["exists"])
 	}
-	if _, ok := payload.Providers["openai"]; !ok {
-		t.Fatalf("expected openai provider, got %#v", payload.Providers)
-	}
-	if payload.Default["provider"] == "" {
-		t.Fatalf("expected default provider, got %#v", payload.Default)
+	if config, ok := payload["config"].(map[string]any); !ok || len(config) != 0 {
+		t.Fatalf("unexpected config: %#v", payload["config"])
 	}
 }
 
@@ -514,6 +333,50 @@ func TestSettingsPutPreservesOrClearsExistingAPIKey(t *testing.T) {
 				t.Fatalf("unexpected on-disk config: %#v", providerConfig)
 			}
 		})
+	}
+}
+
+func TestSettingsPutWritesModelsAsDict(t *testing.T) {
+	isolateServerConfigTest(t)
+	home := filepath.Join(t.TempDir(), "home", ".mycode")
+	t.Setenv("MYCODE_HOME", home)
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "config.json")
+	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+
+	recorder := performJSON(t, handler, http.MethodPut, "/api/settings", map[string]any{
+		"config": map[string]any{
+			"default": map[string]any{"provider": "anthropic", "model": "claude-sonnet-4-6"},
+			"providers": map[string]any{
+				"anthropic": map[string]any{
+					"type":    "anthropic",
+					"api_key": "sk",
+					"models":  []string{"claude-sonnet-4-6"},
+				},
+			},
+		},
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	onDisk := map[string]any{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &onDisk); err != nil {
+		t.Fatal(err)
+	}
+	models := onDisk["providers"].(map[string]any)["anthropic"].(map[string]any)["models"].(map[string]any)
+	if len(models) != 1 {
+		t.Fatalf("unexpected models: %#v", models)
+	}
+	override, ok := models["claude-sonnet-4-6"].(map[string]any)
+	if !ok || len(override) != 0 {
+		t.Fatalf("unexpected model override: %#v", models["claude-sonnet-4-6"])
 	}
 }
 

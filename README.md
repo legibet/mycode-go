@@ -4,24 +4,17 @@
 
 A minimal coding agent.
 
-- Minimal core.
-- Unified message format and robust cross-provider replay.
-- 4 built-in tools: `read`, `write`, `edit`, `bash`.
-- Inspectable runtime, append-only JSONL sessions.
-- Native image and pdf input support.
+- Minimal Go backend.
+- Multiple provider support and robust message replay.
+- 4 built-in tools (`read`, `write`, `edit`, `bash`), expanded via skills.
 - Mobile-friendly web UI.
+- Native image and pdf input support.
 
-This repository is the Go rewrite of the original backend. The web API, SSE contract, session format, provider ids, and core runtime behavior stay aligned with the Python version. The old terminal TUI is not included in this rewrite. The CLI and binary name are `mycode-go`. Config and session directories stay compatible with the original `.mycode` layout.
-
-Repository layout:
-
-- `mycode-go/` — Go module, CLI, server, runtime
-- `web/` — React + Vite frontend source
-- `dist/` — built binaries
+This branch is the Go CLI/server rewrite. It keeps the `.mycode` config and session layout, HTTP API, SSE events, provider ids, and web UI contract aligned with `mycode` on Python `main`. The terminal TUI and Python SDK are not part of this branch.
 
 ## Quick Start
 
-Build a user-ready binary with the web UI embedded:
+Build a binary with the web UI embedded:
 
 ```bash
 make build
@@ -30,7 +23,6 @@ make build
 Single message, non-interactive:
 
 ```bash
-./dist/mycode-go "explain how the session store works"
 ./dist/mycode-go run "explain how the session store works"
 ```
 
@@ -43,43 +35,35 @@ Resume the latest session for the current cwd:
 Web UI (default at `http://127.0.0.1:8000`):
 
 ```bash
-./dist/mycode-go web (--port <port> --hostname <hostname>)
+./dist/mycode-go web [--port <port>] [--hostname <hostname>]
 ```
 
-API keys are discovered automatically from environment variables (see Providers & Models).
+API keys are discovered automatically from environment variables (see Providers).
 
-## Providers & Models
+## Providers
 
-| Provider          | id            | Env var                            | Default models                                     |
-| ----------------- | ------------- | ---------------------------------- | -------------------------------------------------- |
-| Anthropic         | `anthropic`   | `ANTHROPIC_API_KEY`                | `claude-sonnet-4-6`, `claude-opus-4-7`             |
-| OpenAI            | `openai`      | `OPENAI_API_KEY`                   | `gpt-5.5`, `gpt-5.4-mini`                          |
-| Google Gemini     | `google`      | `GEMINI_API_KEY`, `GOOGLE_API_KEY` | `gemini-3.1-pro-preview`, `gemini-3-flash-preview` |
-| Moonshot          | `moonshotai`  | `MOONSHOT_API_KEY`                 | `kimi-k2.6`                                        |
-| MiniMax           | `minimax`     | `MINIMAX_API_KEY`                  | `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`           |
-| DeepSeek          | `deepseek`    | `DEEPSEEK_API_KEY`                 | `deepseek-v4-pro`, `deepseek-v4-flash`             |
-| Z.AI              | `zai`         | `ZAI_API_KEY`                      | `glm-5.1`, `glm-5-turbo`                           |
-| OpenRouter        | `openrouter`  | `OPENROUTER_API_KEY`               | `openrouter/auto`                                  |
-| OpenAI-compatible | `openai_chat` | -                                  | (configured per provider)                          |
-
-All four interface families use official Go SDKs:
-
-- Anthropic Messages API and Anthropic-compatible endpoints: `github.com/anthropics/anthropic-sdk-go`
-- OpenAI Responses API: `github.com/openai/openai-go/v3`
-- OpenAI Chat Completions and compatible chat endpoints: `github.com/openai/openai-go/v3`
-- Google Gemini: `google.golang.org/genai`
+| Provider          | id            | Env var                            |
+| ----------------- | ------------- | ---------------------------------- |
+| Anthropic         | `anthropic`   | `ANTHROPIC_API_KEY`                |
+| OpenAI            | `openai`      | `OPENAI_API_KEY`                   |
+| Google Gemini     | `google`      | `GEMINI_API_KEY`, `GOOGLE_API_KEY` |
+| Moonshot          | `moonshotai`  | `MOONSHOT_API_KEY`                 |
+| MiniMax           | `minimax`     | `MINIMAX_API_KEY`                  |
+| DeepSeek          | `deepseek`    | `DEEPSEEK_API_KEY`                 |
+| Z.AI              | `zai`         | `ZAI_API_KEY`                      |
+| OpenRouter        | `openrouter`  | `OPENROUTER_API_KEY`               |
+| OpenAI-compatible | `openai_chat` | -                                  |
 
 ## Configuration
 
-No config file is required. It is only used for:
+A config file is optional. API keys from the environment are usually sufficient.
 
-1. Setting default provider, model, and other options
-2. Overriding built-in provider settings
-3. Adding custom providers with any built-in provider type
-4. Customizing model metadata for built-in and custom models
-5. Controlling tool execution permissions
+Create `~/.mycode/config.json` (global) or `.mycode/config.json` under the current project to:
 
-Config is loaded from `~/.mycode/config.json` (global) and `{cwd}/.mycode/config.json` (project-specific, takes precedence).
+- set a default provider, model, and reasoning effort
+- expose additional models on an existing provider
+- register a custom endpoint, such as a private or regional deployment
+- set tool permission defaults
 
 ```json
 {
@@ -122,14 +106,14 @@ Config is loaded from `~/.mycode/config.json` (global) and `{cwd}/.mycode/config
 }
 ```
 
-- Built-in provider ids can be overridden by key without specifying `type`. Custom providers must set `type`.
+- To override a built-in provider, reuse its id as the key; custom providers must declare `type`.
 - `reasoning_effort` controls extended thinking for supported models: `auto` (default) · `none` · `low` · `medium` · `high` · `xhigh`.
 - `permission.level` controls automatic tool execution: `readonly` · `safe` · `standard` · `yolo`; default `safe`.
-- `permission.mode` is `ask` or `deny`; web prompts on `ask`, while non-interactive CLI runs treat `ask` as `deny`.
+- `permission.mode` is `ask` or `deny`; non-interactive CLI runs treat `ask` as `deny`.
 - API keys in config accept `${ENV_VAR}` references.
-- Model metadata is bundled locally and can be overridden per model in config.
+- Model metadata is bundled from [models.dev](https://models.dev); `{}` is enough for most models.
 
-> Built-in Moonshot, MiniMax, and Z.AI defaults use international endpoints. Override `base_url` in config for China endpoints.
+> Built-in Moonshot, MiniMax, and Z.AI providers default to international endpoints. Override `base_url` for China endpoints.
 
 ## CLI Reference
 
@@ -160,22 +144,12 @@ make web-dev
 pnpm --dir web dev
 ```
 
-Sync web assets into the embedded static directory:
+Other useful shortcuts: `make web-check` · `make lint-go` · `make build`
 
-```bash
-make web-build
-```
-
-Refresh the bundled model catalog from models.dev:
+Refresh the bundled model catalog:
 
 ```bash
 make update-models-catalog
-```
-
-Build the binary:
-
-```bash
-make build
 ```
 
 ## License

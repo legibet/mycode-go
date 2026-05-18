@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	// MessageFormatVersion is the persisted session format version. Bumping
-	// it is a Python-side compatibility decision.
+	// MessageFormatVersion is the shared persisted session format version.
+	// Change it only with a cross-runtime migration plan.
 	MessageFormatVersion = 7
 	DefaultSessionTitle  = "New chat"
 )

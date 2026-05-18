@@ -2,20 +2,20 @@
 
 Source: `mycode-go/internal/config/`
 
-The config format and resolution order match the Python CLI under `main`'s `cli/` tree. The Go implementation keeps the logic in Go structs and functions.
-
 ## Config Files
 
 Loaded in order, later values overriding earlier values:
 
-1. `~/.mycode/config.json`
+1. `~/.mycode/config.json` — global
 2. `.mycode/config.json` files from `project` to `cwd`
 
 `project` is the nearest parent directory containing `.git`. When no `.git` is found, `project` is `cwd`.
 
-Explicit CLI flags or API request fields override both config files.
+Explicit request args (CLI flags, API params) override both.
 
-The web settings panel edits only `~/.mycode/config.json`; project-level files must be edited directly and continue to override it. Settings API validation lives in `mycode-go/internal/config` and `mycode-go/internal/core/service.go`; runtime resolution stays in `mycode-go/internal/config`.
+Config resolution: `config.Load(cwd)` returns `Settings`.
+
+The web UI's settings panel edits only the global file. Project-level files continue to override it. Settings API validation lives in `mycode-go/internal/config`; runtime request handling lives in `mycode-go/internal/core/service.go`.
 
 ## Schema
 
@@ -52,132 +52,146 @@ The web settings panel edits only `~/.mycode/config.json`; project-level files m
 }
 ```
 
-## Fields
+### Fields
 
-- `default.provider` references a key in `providers`, or a raw built-in provider id.
-- `default.model` is used when no provider model is selected.
-- `default.reasoning_effort` accepts `auto`, `none`, `low`, `medium`, `high`, `xhigh`, plus `default`/empty as aliases for `auto`.
-- `default.compact_threshold` is a fraction in `[0, 1]`; `false` or `0` disables compaction.
-- `permission` controls automatic tool execution. String shorthand such as `"safe"` sets the level and keeps the current/default mode.
-- `permission.level` accepts `readonly`, `safe`, `standard`, or `yolo`; default `safe`.
-- `permission.mode` accepts `ask` or `deny`; default `ask`. Non-interactive `mycode-go run` treats `ask` as `deny`.
-- `providers.<name>.type` is required for custom aliases. Built-in providers can omit it when the provider key matches the adapter id.
-- `providers.<name>.models` controls UI model order and per-model capability overrides.
-- `providers.<name>.api_key` is either a literal key or `${ENV_NAME}`.
-- `providers.<name>.base_url` overrides the adapter default base URL.
-- `providers.<name>.reasoning_effort` overrides the global default for that provider.
+- `default.provider` — references a key in `providers`, or a raw adapter id
+- `default.model` — model name used when no per-provider model is selected
+- `default.reasoning_effort` — global default; `null`/`"auto"`/`"default"` all resolve to no override
+- `default.compact_threshold` — fraction of context window that triggers compaction; `false` or `0` disables; range `[0, 1]`; default `0.8`
+- `permission` — tool execution permissions. String shorthand (`"safe"`) sets the level and keeps the current/default mode; object form accepts `level` and `mode`
+- `permission.level` — how much the agent may run automatically: `readonly` · `safe` · `standard` · `yolo`; default `safe`
+- `permission.mode` — what to do outside the selected level: `ask` or `deny`; default `ask`. Non-interactive `mycode-go run` treats `ask` as `deny`
+- `providers.<name>.type` — internal adapter id. Required for custom aliases. Built-in providers can omit `type` when the key matches their adapter id.
+- `providers.<name>.models` — model map. Keys are model ids shown in UI. Values can override bundled model metadata for that exact model.
+- `providers.<name>.models.<model>.context_window` — override the model context window
+- `providers.<name>.models.<model>.max_output_tokens` — override the provider output limit
+- `providers.<name>.models.<model>.supports_reasoning` — override whether reasoning effort is available
+- `providers.<name>.models.<model>.supports_image_input` — override image input support
+- `providers.<name>.models.<model>.supports_pdf_input` — override PDF input support
+- `providers.<name>.api_key` — literal value or `${ENV_NAME}` reference
+- `providers.<name>.base_url` — override the adapter's default base URL
+- `providers.<name>.reasoning_effort` — per-provider override of the global default
 
-## API Key Resolution
+## API Key Resolution Order
 
-For one resolved provider:
+For a resolved provider (`resolveProviderRuntime` in `config.go`):
 
-1. Explicit `api_key` from CLI/API.
-2. Config `api_key`, including `${ENV_NAME}` indirection.
-3. Built-in provider env vars.
+1. Explicit `api_key` param from CLI/API.
+2. Config `api_key`.
+   - `${ENV_NAME}` — dereferenced from env at resolution time
+   - plain string — used as-is
+3. Provider adapter's built-in default env vars, such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
 
-Provider resolution fails when no usable key is found. The error lists the checked env vars.
+If no API key is found at any step, provider resolution returns an error listing which env vars were checked.
 
 ## Provider Resolution
 
-`config.ResolveProvider(settings, providerName, model, apiKey, apiBase, reasoningEffort)` returns a runnable `ResolvedProvider`.
+`config.ResolveProvider(settings, providerName, model, apiKey, apiBase)` returns a `ResolvedProvider`:
 
-Resolution order:
+1. If `providerName` is given: resolve it as a configured alias or raw provider id.
+2. If no provider is given: try the configured default.
+3. Fallback: iterate configured providers with valid credentials, then env-discoverable built-in providers.
+4. If nothing is found: return an error listing checked env vars.
 
-1. Requested provider alias or raw provider id.
-2. Configured default provider.
-3. Configured providers with usable credentials, in JSON order.
-4. Env-discoverable built-in providers with usable credentials, in registry order.
+Auto-discovery is limited to providers where `AutoDiscoverable` is true and the corresponding env var is set.
 
-Configured provider order and model order preserve JSON object order, matching Python.
+Configured provider order and model order preserve JSON object order.
 
 ## Reasoning Effort
 
-Options: `auto`, `none`, `low`, `medium`, `high`, `xhigh`.
+Controls how much thinking a model does.
 
-- `auto` means no explicit provider effort parameter.
-- `none` explicitly disables thinking when supported.
-- `off` and `disabled` normalize to `none`.
-- Config-derived effort is applied only when both the adapter and model support reasoning.
-- Invalid request values are rejected by `POST /api/chat` with `400`.
+Config resolution: `providers.<name>.reasoning_effort` -> `default.reasoning_effort`.
 
-Provider-specific mapping is documented in `docs/providers.md`.
+Request override: `POST /api/chat` normalizes `reasoning_effort` and passes it through directly when set.
+
+Options: `auto` (default) · `none` · `low` · `medium` · `high` · `xhigh`
+
+- `auto` — do not send any effort parameter; let the provider decide
+- `none` — explicitly disable thinking
+- `off` and `disabled` normalize to `none`
+- Config-derived effort is applied only when `Spec.SupportsReasoningEffort` and catalog `supports_reasoning` are both true
+- Invalid request values are rejected by `POST /api/chat` with `400`
+- See `docs/providers.md` for per-adapter mapping details
 
 ## Tool Permissions
 
-The Go branch implements the Python web/CLI permission behavior directly in Go. It does not expose a general hooks system.
+CLI and web server agents classify tool calls before execution. The web UI prompts for approval when `mode: "ask"` and the call falls outside the configured `level`. Non-interactive `mycode-go run` has no prompt, so it treats `ask` as `deny` and returns the denial to the model as the tool result.
 
 Levels:
 
-- `readonly` allows `project`-local `read`, discovered skill reads, and simple read-only shell commands such as `ls`, `rg`, `git status`, and `git diff`.
-- `safe` adds `project`-local `write` and `edit`.
-- `standard` adds ordinary single shell commands unless they are dangerous or compound.
-- `yolo` allows all tool calls.
+- `readonly` — automatically allow clear read-only actions under `project`, discovered skill reads, and simple read-only shell commands (`ls`, `rg`, `git status`, `git diff`, etc.)
+- `safe` — `readonly` plus `project`-local `write`/`edit`. Shell commands remain limited to clear read-only commands.
+- `standard` — `safe` plus ordinary single shell commands, unless they match dangerous or compound-command checks.
+- `yolo` — automatically allow all tool calls.
 
-Modes:
+Mode:
 
-- `ask` prompts in the web UI for calls outside the configured level. In non-interactive CLI runs, `ask` is handled as `deny`.
-- `deny` returns `error: permission denied` to the model without prompting.
+- `ask` — prompt for approval in the web UI.
+- `deny` — reject without prompting.
 
-When the web user explicitly denies a permission prompt, the active run is cancelled and finishes with status `cancelled`.
+Automatic denials do not stop the run; the model receives the denied tool result and can reply with next steps. An explicit web `deny` cancels the current run.
 
-The bash classifier is conservative. Compound commands, shell redirection, command substitution, destructive programs, `sed -i`, dangerous `find` flags, `git reset`, `git clean`, `git checkout`, `git restore`, and force pushes require `yolo` or web approval.
+The shell checks are intentionally simple and conservative. Project commands such as tests, builds, formatters, package scripts, and task runners are `standard` because they execute project-defined code. Compound commands (`&&`, `||`, `;`, pipes, redirection, command substitution) and obvious destructive commands (`rm`, `sudo`, `chmod`, `git reset`, `git clean`, `git push --force`, etc.) fall outside `readonly`/`safe`/`standard` and require `yolo` or `mode: "ask"` approval.
 
 ## Model Metadata
 
-`mycode-go/internal/models/models_catalog.json` is generated from `models.dev` by `scripts/update_models_catalog.py` and kept aligned with Python `main`'s `mycode/src/mycode/models_catalog.json`. Runtime lookup lives in `mycode-go/internal/models/catalog.go`.
+`mycode-go/internal/models/catalog.go` reads the bundled `mycode-go/internal/models/models_catalog.json` catalog to look up:
 
-Metadata fields:
+- `supports_reasoning` — whether the model supports extended thinking
+- `supports_image_input` — whether the model accepts image input
+- `supports_pdf_input` — whether the model accepts PDF input
+- `context_window` — used for compact threshold calculation; defaults to `128000` when not available
+- `max_output_tokens` — passed to the provider as the output limit; defaults to `16384` when not available
 
-- `supports_reasoning`
-- `supports_image_input`
-- `supports_pdf_input`
-- `context_window`
-- `max_output_tokens`
+When the catalog has no match and config does not override the capability, media and reasoning support stay disabled: image/PDF input is rejected, and `reasoning_effort` is only sent when `supports_reasoning` is explicitly `true` and the provider adapter supports it.
 
-Lookup strategy:
+Model lookup strategy:
 
-1. Exact provider + model.
-2. Fallback provider mapping for common model prefixes.
-3. Unique OpenRouter catalog suffix fallback (`provider/model` matched by `model`).
+1. Exact match on the given provider type + raw model id.
+2. Fallback provider mapping, such as `claude-*` -> `anthropic`, `deepseek-*` -> `deepseek`.
+3. OpenRouter catalog suffix fallback (`provider/model` matched by `model`) as last resort.
 
-Update the catalog with:
+The bundled catalog is updated by running:
 
 ```bash
 uv run --no-project python ./scripts/update_models_catalog.py
 ```
 
-## Prompt Context
+## Skills Discovery
 
-`mycode-go/internal/prompt/prompt.go` builds the runtime system prompt.
+`mycode-go/internal/prompt/prompt.go` scans for `SKILL.md` files and injects an `<available_skills>` block into the system prompt.
 
-It includes:
+Scan roots, lowest to highest priority:
 
-- base mycode instructions
-- `<project_instructions>` from AGENTS files
-- `<available_skills>` from discovered skills
-- current working directory
-- current date as `YYYY-MM`
+1. `~/.agents/skills/` — compatibility global root
+2. `~/.mycode/skills/` — global root
+3. `.agents/skills/` from `project` to `cwd` — compatibility project roots
+4. `.mycode/skills/` from `project` to `cwd` — project roots
 
-Instruction files checked:
+Each `SKILL.md` requires YAML frontmatter with `name` and `description`. Later roots override earlier ones by skill name. Max scan depth: 3 directory levels, max 200 directories per root.
 
-1. `~/.mycode/AGENTS.md`, falling back to `~/.agents/AGENTS.md`
+The model uses the `read` tool to load full skill content on demand from the skill `path`.
+
+## Instructions Discovery
+
+`mycode-go/internal/prompt/prompt.go` reads `AGENTS.md` files and injects them as `<project_instructions>` into the system prompt. Files checked:
+
+1. `~/.mycode/AGENTS.md` (fallback: `~/.agents/AGENTS.md`)
 2. all `AGENTS.md` files from `project` to `cwd`
 
-Skill roots, lowest to highest priority:
+Later files are more specific and take precedence.
 
-1. `~/.agents/skills/`
-2. `~/.mycode/skills/`
-3. `.agents/skills/` from `project` to `cwd`
-4. `.mycode/skills/` from `project` to `cwd`
+## Project Boundary
 
-Each `SKILL.md` requires YAML frontmatter with `name` and `description`. Later roots override earlier roots by skill name.
+`cwd` is the current working directory. `project` is the nearest parent directory containing `.git`; when no `.git` is found, `project` is `cwd`.
+
+Config, instructions, and skill discovery walk from `project` to `cwd`, so nearer files have higher priority. Tool permissions treat paths inside `project` as project-local and require approval for paths outside `project`.
 
 ## Sessions Directory
 
-`config.ResolveSessionsDir()` returns `$MYCODE_HOME/sessions`, defaulting to `~/.mycode/sessions`.
-
-Python's SDK layer makes persistence opt-in. This Go branch is the CLI/server backend, so it resolves the session directory by default.
+`config.ResolveSessionsDir()` returns `$MYCODE_HOME/sessions`, defaulting to `~/.mycode/sessions`. See `docs/sessions.md`.
 
 ## Port
 
-Server port: `PORT` env var → config default `8000`, overridden by `mycode-go web --port`.
+Server port: `PORT` env var -> config default `8000`, overridden by `mycode-go web --port`.

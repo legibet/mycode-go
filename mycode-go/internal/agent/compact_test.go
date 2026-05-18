@@ -119,7 +119,7 @@ func TestApplyCompactReplayUsesLatestMarker(t *testing.T) {
 	}
 }
 
-func TestBuildCompactEventOmitsZeroTotalTokens(t *testing.T) {
+func TestBuildCompactEventMetadata(t *testing.T) {
 	event := BuildCompactEvent("summary", "anthropic", "claude", 0)
 	if event.Role != "compact" {
 		t.Fatalf("expected compact role, got %s", event.Role)
@@ -130,11 +130,9 @@ func TestBuildCompactEventOmitsZeroTotalTokens(t *testing.T) {
 	if _, ok := event.Meta["compacted_count"]; ok {
 		t.Fatal("v7 compact events do not carry compacted_count")
 	}
-}
 
-func TestBuildCompactEventIncludesTotalTokens(t *testing.T) {
-	event := BuildCompactEvent("summary", "anthropic", "claude", 1234)
-	if event.Meta["total_tokens"] != 1234 {
-		t.Fatalf("expected total_tokens=1234, got %v", event.Meta["total_tokens"])
+	withUsage := BuildCompactEvent("summary", "anthropic", "claude", 1234)
+	if withUsage.Meta["total_tokens"] != 1234 {
+		t.Fatalf("expected total_tokens=1234, got %v", withUsage.Meta["total_tokens"])
 	}
 }

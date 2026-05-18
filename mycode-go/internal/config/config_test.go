@@ -277,7 +277,7 @@ func TestResolveProviderAutoDiscoveryOrder(t *testing.T) {
 	}
 }
 
-func TestResolveProviderAutoDiscoveryMatchesPythonRegistryOrder(t *testing.T) {
+func TestResolveProviderAutoDiscoveryMatchesRegistryOrder(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home", ".mycode")
 	workspace := filepath.Join(root, "workspace")

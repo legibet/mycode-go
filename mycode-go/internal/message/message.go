@@ -64,8 +64,8 @@ func DocumentBlock(data, mimeType, name string, meta map[string]any) Block {
 	return b
 }
 
-// ToolUseBlock forces Input to a non-nil map to match the Python
-// tool_use_block contract (`dict(input or {})`).
+// ToolUseBlock keeps empty input as {} so persisted tool_use blocks have a
+// stable shape across runtimes.
 func ToolUseBlock(id, name string, input map[string]any, meta map[string]any) Block {
 	inputCopy := maps.Clone(input)
 	if inputCopy == nil {

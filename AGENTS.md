@@ -4,17 +4,13 @@ Always-loaded context for agent runs on this branch. Detailed specs live in `doc
 
 ## Product
 
-`mycode-go` is the Go rewrite of `mycode`: a minimal coding agent with a small CLI, HTTP server, and shared React web UI. It keeps `.mycode` config, message, session, API, and SSE compatibility with the Python `main` branch.
-
-Branches:
+`mycode-go` is the Go rewrite of `mycode`: a minimal coding agent with a small CLI, HTTP server, and shared React web UI. It keeps `.mycode` config, message, session, API, SSE, provider id, and web UI compatibility with Python `main`.
 
 - `main` — Python implementation; source of truth for `web/`, message/session formats, HTTP API, and SSE contracts.
 - `mycode-go` — this Go rewrite; tracks `main`, keeps Go internals idiomatic, and stays free of Wails code.
-- `mycode-go-wails` — Wails desktop adapter on top of `mycode-go`; owns desktop entry points and build files.
+- `mycode-go-wails` — Wails desktop adapter on top of `mycode-go`.
 
-Sync direction: `main` → `mycode-go` → `mycode-go-wails`.
-
-Current sync: Python `main` through `d547f05`. Web commits through `d547f05 fix(web): window long chat histories` were cherry-picked directly and `web/` is byte-for-byte aligned with Python `main`. Backend commits through `ac05007` were reimplemented where they affect Go behavior: chat request shape errors return `422`, explicit permission denial cancels the active run, packaged serving has no CORS, dev API allows only the Vite localhost origins, interrupted provider streams persist partial assistant content, cancelled streaming bash tools preserve already emitted output, and run cancellation waits for final run state. Later Python-only dependency, release, pyright, and SDK comment-cleanup commits were reviewed and skipped for Go.
+Current sync: Python `main` through `d547f05`; `web/` is aligned through `d547f05`; Go backend behavior is aligned through `ac05007` where it affects external CLI/API/session/provider behavior.
 
 Priorities: small readable core · one message model · one agent loop · append-only sessions · provider adapters at the boundary · Python-compatible contracts.
 
@@ -52,7 +48,7 @@ mycode-go/
 
 web/src/                      # shared React + Vite UI from Python main
   hooks/useChat.ts            # chat state + SSE streaming
-  utils/messages.ts           # canonical blocks → UI messages
+  utils/messages.ts           # canonical blocks -> UI messages
 
 scripts/
   update_models_catalog.py    # regenerates mycode-go/internal/models/models_catalog.json
@@ -63,7 +59,9 @@ scripts/
 
 A single block-based JSON format is used at runtime, in persistence, and over the API. Block types: `text` · `image` · `document` · `thinking` · `tool_use` · `tool_result`.
 
-Tool results are stored as `user` messages whose `tool_result` blocks carry provider-facing `output` plus optional structured UI `metadata`. `thinking` blocks are first-class session data. Session `meta.json` stores only `cwd`, `title`, `created_at`, `updated_at`, and `message_format_version=7`; provider/model/api_base live on per-turn messages.
+`thinking` blocks are first-class session data. Tool results are stored as `user` messages whose `tool_result` blocks carry provider-facing `output` plus structured UI `metadata`. Session `meta.json` stores `cwd`, `title`, `created_at`, `updated_at`, and `message_format_version=7`; provider/model/api_base live on per-turn messages.
+
+Cancelled provider streams may persist partial assistant `thinking`/`text`. Cancelled streaming tools append `error: cancelled` to emitted output.
 
 Full schema, JSONL record types, replay rules, compact, and rewind behavior live in `docs/sessions.md`.
 
@@ -93,14 +91,14 @@ Event names and payload shapes are a cross-component contract. Changes need to l
 
 Read the relevant doc before related changes.
 
-| Area                                                                 | Doc                                                   |
-| -------------------------------------------------------------------- | ----------------------------------------------------- |
-| `internal/{agent,message,tools,session}`                             | `docs/sessions.md`                                    |
-| `internal/provider/*`                                                | `docs/providers.md`                                   |
-| `internal/core`, `internal/server`, SSE events, or routes            | `docs/api.md`                                         |
-| `internal/config`, `internal/prompt`, `internal/permissions`, models | `docs/config.md`                                      |
-| `web/src/**`                                                         | `docs/web.md`                                         |
-| Cross-cutting contract changes                                       | `docs/api.md` + `docs/sessions.md` + `docs/web.md`    |
+| Area                                                                 | Doc                                                |
+| -------------------------------------------------------------------- | -------------------------------------------------- |
+| `internal/{agent,message,tools,session}`                             | `docs/sessions.md`                                 |
+| `internal/provider/*`                                                | `docs/providers.md`                                |
+| `internal/core`, `internal/server`, SSE events, or routes            | `docs/api.md`                                      |
+| `internal/config`, `internal/prompt`, `internal/permissions`, models | `docs/config.md`                                   |
+| `web/src/**`                                                         | `docs/web.md`                                      |
+| Cross-cutting contract changes                                       | `docs/api.md` + `docs/sessions.md` + `docs/web.md` |
 
 For third-party SDKs and APIs touched by adapter or runtime code, prefer `context7` lookups over assumptions.
 
@@ -112,12 +110,14 @@ Server routes are mounted under `/api`: chat runs, run stream/cancel/decide, con
 
 ## Sync Rules
 
+Sync direction: `main` -> `mycode-go` -> `mycode-go-wails`.
+
 When syncing from Python `main`:
 
 - Fetch `main` into `refs/remotes/local-main/main`.
 - Directly cherry-pick `web/` commits.
 - Reimplement backend commits in Go only when they affect CLI behavior, API/SSE contracts, message/session formats, tools, providers, config, models, prompts, or web expectations.
-- Skip Python-only release/package/TUI work unless it changes shared behavior.
+- Skip Python-only release/package/TUI/SDK work unless it changes shared behavior.
 - Keep `web/` commits separate from Go backend, config, model, and docs commits.
 
 Useful checks:

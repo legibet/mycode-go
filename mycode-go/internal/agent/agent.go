@@ -71,8 +71,8 @@ func New(a Agent) (*Agent, error) {
 		a.CWD = absolute
 	}
 
-	// Without an explicit SessionDir, skip the "read the original log at:"
-	// hint in the compact projection (Python's transcript_path=None branch).
+	// Only persisted sessions have a stable transcript path to include in the
+	// compact continuation prompt.
 	explicitSessionDir := a.SessionDir
 	a.SessionDir = cmp.Or(a.SessionDir, a.CWD)
 	a.SessionID = cmp.Or(a.SessionID, filepath.Base(a.SessionDir))

@@ -2,7 +2,7 @@ package core
 
 import "testing"
 
-func TestBuildUserMessageEscapesAttachmentNameLikePython(t *testing.T) {
+func TestBuildUserMessageEscapesAttachmentName(t *testing.T) {
 	msg, err := buildUserMessage(ChatRequest{
 		Input: []ChatInputBlock{
 			{Type: "text", Text: "print(1)", Name: `report <"draft">.py`, IsAttachment: true},

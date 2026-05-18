@@ -2,8 +2,6 @@
 
 Source: `mycode-go/internal/session/store.go`
 
-The on-disk format matches Python `main` message format version 7.
-
 ## Storage Layout
 
 ```text
@@ -13,113 +11,131 @@ $MYCODE_HOME/sessions/<session_id>/
   tool-output/     # bash spill files, created lazily
 ```
 
-`$MYCODE_HOME` defaults to `~/.mycode`. `tool-output/` is created only when bash output is actually spilled.
+`$MYCODE_HOME` defaults to `~/.mycode`. `tool-output/` is the per-session directory passed into tool execution and is created only when bash output spills.
 
 ## meta.json
 
 ```json
 {
-  "cwd": "/path/to/current-dir",
-  "title": "New chat",
+  "cwd": "/path/to/workspace",
+  "title": "...",
   "created_at": "...",
   "updated_at": "...",
   "message_format_version": 7
 }
 ```
 
-- `id` is not persisted. API responses add it from the directory name.
-- `provider`, `model`, and `api_base` are not persisted in meta. Per-turn provider state lives on assistant message `meta`.
-- `title` starts as `"New chat"` and is promoted to the first readable user message, truncated to 48 chars.
-- `updated_at` is bumped on every appended message.
-- `message_format_version` is written as `7`.
+- `cwd` — workspace path recorded at session creation; used by `ListSessions(cwd)` for filtering
+- `title` — defaults to `"New chat"`; promoted to the first user message text, truncated to 48 chars
+- `updated_at` — bumped on every appended message
+- `message_format_version` — written as `7`
 
-## Message Blocks
+Per-turn state (`provider` / `model` / `api_base`) lives only on each assistant message `meta`; caching a current value at the session level would drift after model switches.
 
-Canonical messages are block-based:
+## messages.jsonl Record Types
+
+Each line is a JSON object. The `role` field acts as a discriminator.
+
+### Regular message
+
+Standard `user` or `assistant` message in the internal block format.
 
 ```json
-{"role": "user", "content": [{"type": "text", "text": "..."}]}
-{"role": "assistant", "content": [{"type": "thinking", "text": "...", "meta": {"duration_ms": 1200}}, {"type": "text", "text": "..."}, {"type": "tool_use", "id": "call_1", "name": "read", "input": {"path": "x.go"}}], "meta": {"provider": "...", "model": "...", "total_tokens": 1456, "context_window": 200000}}
-{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "output": "...", "metadata": {...}, "is_error": false}]}
+{"role": "user", "content": [{"type": "text", "text": "..."}], "meta": {...}}
+{"role": "assistant", "content": [{"type": "thinking", "text": "...", "meta": {"duration_ms": 1200}}, {"type": "text", "text": "..."}, {"type": "tool_use", "id": "...", "name": "...", "input": {...}}], "meta": {"provider": "...", "model": "...", "stop_reason": "...", "total_tokens": 1456, "context_window": 200000}}
 ```
+
+User messages may contain `text`, `image`, `document`, and `tool_result` blocks. Assistant messages may contain `thinking`, `text`, and `tool_use` blocks.
 
 `tool_result.output` is replayed to providers. `tool_result.metadata` is structured UI data. The `edit` tool stores a unified `patch` plus `added_lines` / `removed_lines`.
 
-`assistant.meta.total_tokens` is the canonical token count for a provider call: prompt plus generated text, tool calls, and reasoning. `assistant.meta.context_window` is stamped from the resolved model metadata so clients can render consumed-context percentage without resolving the model again.
+`assistant.meta.total_tokens` is the canonical token count for the provider call: prompt plus generated text, tool calls, and reasoning. `assistant.meta.context_window` is stamped from the resolved model metadata so clients can render consumed-context percentage without resolving the model again.
 
-Cancelled provider streams persist received `thinking` / `text` blocks as a partial assistant message before `error: cancelled`.
+Cancelled provider streams can append a partial assistant message before the final cancelled error. It contains streamed `thinking`/`text` blocks plus provider/model/context metadata.
 
-## Record Types
-
-### Regular Message
-
-`role` is `user` or `assistant`. User messages may contain `text`, `image`, `document`, and `tool_result`. Assistant messages may contain `thinking`, `text`, and `tool_use`.
-
-### Compact Event
+### Compact event
 
 ```json
-{"role": "compact", "content": [{"type": "text", "text": "<summary>"}], "meta": {"provider": "...", "model": "...", "total_tokens": 4321}}
+{"role": "compact", "content": [{"type": "text", "text": "<summary>"}], "meta": {"provider": "...", "model": "...", "total_tokens": 48000}}
 ```
 
-`compact` markers are persisted inline at the position they were emitted. They stay visible during replay; the agent substitutes the latest marker with a summary continuation only when projecting messages for the provider.
+Inline marker written when token usage >= `compact_threshold * context_window`. The summary text is persisted in the marker; UIs render it as a divider in the visible history.
 
-### Rewind Event
+### Rewind event
 
 ```json
 {"role": "rewind", "meta": {"rewind_to": 5, "created_at": "..."}}
 ```
 
+Marks an undo point. See "Rewind" below.
+
 ## Load Order
 
-`Store.LoadSession(sessionID)` is read-only and applies a single replay rule:
+When `Store.LoadSession(sessionID)` runs:
 
-1. Read raw JSONL records.
+1. Read all JSONL lines into a raw list.
 2. Apply rewind markers sequentially.
 
-`compact` markers stay inline in the visible history. The agent substitutes the latest marker with a summary continuation when calling the provider (`agent.ApplyCompactReplay`). Orphan `tool_use` blocks left open by a server crash are closed by the provider adapter at replay time (`provider.RepairMessagesForReplay`), not on disk.
+`LoadSession` returns the raw timeline minus rewound tails as the visible history. `compact` records stay in place as inline markers. The agent substitutes the latest compact marker into provider context lazily on each request via `ApplyCompactReplay`. Orphan `tool_use` blocks left by an interrupted run are closed by the provider adapter when messages are replayed, not by the loader.
 
 ## Context Compaction
 
-After every completed assistant turn, at an assistant/tool-result boundary, the agent checks the latest assistant token count. Compaction triggers when:
+Checked after every completed assistant turn, at a full assistant/tool-result boundary.
 
-```text
-total_tokens >= context_window * compact_threshold
-```
+1. `shouldCompact()` is true when the latest assistant message's `total_tokens` >= `context_window * compact_threshold`.
+2. Ask the same provider/model for a summary with the normal system prompt, the provider-projected messages, no tools, and no explicit reasoning effort.
+3. Build a compact event with the summary text and the summary call's `total_tokens` when available.
+4. Persist the compact event and append it to in-memory messages. Original messages stay in JSONL and in the visible list.
+5. Emit the `compact` stream event to the caller.
 
-The compact request uses the same provider/model, no tools, and no explicit reasoning effort. The summary is appended as a new `compact` record in the JSONL log; older messages are never rewritten.
+If the summary request fails or returns no text, no `compact` record is persisted and the next threshold check can try again. A user cancel during compaction ends the turn with `error: cancelled`.
 
-When the next provider call projects the history, the latest `compact` marker is replaced by:
+### Provider projection
 
-- A `user` message containing a continuation header, the summary, an optional transcript path hint, and (when no follow-up has streamed yet) a continuation footer instructing the model to resume directly.
-- An optional `assistant` "Acknowledged." turn, only when the marker is followed by a real user message and role alternation requires it.
+Visible state preserves pre-compact history and `compact` markers. Before each provider request, `ApplyCompactReplay` rebuilds a provider-facing view:
+
+- finds the last `compact` marker
+- replaces everything up to and including that marker with one synthetic `user` message that frames the continuation, embeds the summary text, and points at the original JSONL transcript when available
+- drops any earlier `compact` markers from the tail
+- inserts a short synthetic `assistant` ack only when the tail starts with a real user message and role alternation requires it
+
+The visible list seen by UIs and used by rewind never contains these synthetic substitutes.
 
 ## Rewind
 
-`POST /api/chat` with `rewind_to` validates that the target visible message is a real user prompt. The server appends a rewind marker before starting the replacement run. Loading the session later produces the same visible history in Python and Go.
+Triggered by `POST /api/chat` with `rewind_to`:
 
-## Bash Output Spill
+1. Server validates the target is a real user message.
+2. Server calls `AppendRewind(sessionID, rewindTo)` and appends a rewind marker to JSONL.
+3. The agent resumes from `ApplyRewind` visible history.
 
-Bash keeps up to 5 MB in memory. Larger output spills to:
+Rewind indices refer to the visible history, which includes pre-compact turns and inline `compact` markers. Rewinding to a real user message before a `compact` marker slices the marker away with the rest of the tail. A compact marker itself is never a valid rewind target.
+
+## tool-output/ Spill
+
+Bash output exceeding 5MB in memory is written to:
 
 ```text
 <session_dir>/tool-output/bash-<tool_call_id>.log
 ```
 
-The returned `output` contains the visible tail and a "Full output" path.
+The tool result keeps the visible tail in memory and cites the saved log path.
 
-Cancelled streaming bash results keep already emitted output and append `error: cancelled`.
+Cancelled streaming tools persist emitted output plus `error: cancelled`.
 
-## Store API
+## Session Store API
 
-Important methods:
+`Store` in `mycode-go/internal/session/store.go`:
 
-- `CreateSession(sessionID, cwd)` creates `meta.json` and `messages.jsonl`.
-- `DraftSession(cwd)` creates an in-memory summary with a fresh id.
-- `ListSessions(cwd)` filters by exact cwd and returns summaries sorted by `updated_at` descending.
-- `LoadSession(sessionID)` returns visible messages after replay.
-- `AppendMessage(sessionID, msg, cwd)` appends one message and refreshes meta.
-- `AppendRewind(sessionID, rewindTo)` appends a rewind marker if the session exists.
-- `ClearSession(sessionID)` truncates messages and resets title.
-- `DeleteSession(sessionID)` removes the session directory.
+- `NewStore(dataDir)` — `dataDir` optional; empty resolves to `$MYCODE_HOME/sessions`
+- `SessionExists(sessionID)` — check by `meta.json` presence
+- `CreateSession(sessionID, cwd)` — write `meta.json` and touch `messages.jsonl`
+- `DraftSession(cwd)` — create an in-memory session summary with a fresh id
+- `ListSessions(cwd)` — filter by workspace, sorted by `updated_at` descending
+- `LoadSession(sessionID)` — load with rewind replay; returns `nil` when absent
+- `DeleteSession(sessionID)` — recursive directory delete
+- `ClearSession(sessionID)` — truncate `messages.jsonl`, reset `title`, and bump `updated_at`
+- `AppendMessage(sessionID, msg, cwd)` — append one line, refresh meta, and promote title on the first readable user text
+- `AppendRewind(sessionID, rewindTo)` — append a rewind marker
 
 The store remains append-only for conversation history. Only `meta.json` and explicit clear/delete operations mutate existing files.

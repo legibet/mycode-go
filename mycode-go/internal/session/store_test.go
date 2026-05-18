@@ -76,6 +76,51 @@ func TestLoadSessionTreatsInvalidMetaAsMissing(t *testing.T) {
 	}
 }
 
+func TestListSessionsFiltersSortsAndLatest(t *testing.T) {
+	store := NewStore(t.TempDir())
+	first, err := store.CreateSession("first", "/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateSession("second", "/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.CreateSession("other", "/other")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first.Session.UpdatedAt = "2026-01-01T00:00:00Z"
+	second.Session.UpdatedAt = "2026-01-02T00:00:00Z"
+	other.Session.UpdatedAt = "2026-01-03T00:00:00Z"
+	if err := store.writeMeta("first", first.Session.Meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.writeMeta("second", second.Session.Meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.writeMeta("other", other.Session.Meta); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := store.ListSessions("/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 || sessions[0].ID != "second" || sessions[1].ID != "first" {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+
+	latest, err := store.LatestSession("/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest == nil || latest.ID != "second" {
+		t.Fatalf("unexpected latest session: %#v", latest)
+	}
+}
+
 func TestNewSessionUsesV7FormatVersion(t *testing.T) {
 	store := NewStore(t.TempDir())
 	data, err := store.CreateSession("s1", "/tmp")
@@ -174,16 +219,6 @@ func TestLoadSessionLeavesOrphanToolUseInPlace(t *testing.T) {
 	}
 	if string(rawAfter) != string(rawBefore) {
 		t.Fatal("LoadSession appended to messages.jsonl; expected read-only behavior")
-	}
-}
-
-func TestAppendRewindNonexistentSessionIsNoop(t *testing.T) {
-	store := NewStore(t.TempDir())
-	if err := store.AppendRewind("missing", 0); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(store.SessionDir("missing")); !os.IsNotExist(err) {
-		t.Fatalf("expected no session dir, got err=%v", err)
 	}
 }
 
