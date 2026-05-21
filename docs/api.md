@@ -146,11 +146,14 @@ Return provider, model, and capability metadata for the web UI.
   "cwd": "...",
   "cwd_exists": true,
   "project": "...",
-  "config_paths": ["..."]
+  "config_paths": ["..."],
+  "setup_error": null
 }
 ```
 
-`GET /api/config` returns `503` when no provider can be resolved. `cwd_exists` is `false` when the resolved working directory no longer exists; chat and session-create routes reject such requests with `400`.
+`reasoning_models` is returned only when `supports_reasoning_effort` is true. `image_input_models` lists models with `supports_image_input=true`. `pdf_input_models` lists models with `supports_pdf_input=true`. `setup_error` is `{ "message": "..." }` when no provider is usable (response stays `200`, `providers` is `{}`, `default` fields are empty strings); otherwise `null`.
+
+`cwd_exists` is `false` when the resolved working directory no longer exists; chat and session-create routes reject such requests with `400`.
 
 ## Settings
 

@@ -311,8 +311,9 @@ func (s *Service) Config(cwd string) (map[string]any, error) {
 		return nil, statusError(http.StatusInternalServerError, err.Error())
 	}
 	resolved, err := config.ResolveProvider(settings, "", "", "", "")
+	var setupError map[string]string
 	if err != nil {
-		return nil, statusError(http.StatusServiceUnavailable, err.Error())
+		setupError = map[string]string{"message": err.Error()}
 	}
 
 	providersInfo := map[string]any{}
@@ -370,15 +371,21 @@ func (s *Service) Config(cwd string) (map[string]any, error) {
 		providersInfo[choice.ProviderName] = info
 	}
 
+	defaultPayload := map[string]string{"provider": "", "model": ""}
+	if err == nil {
+		defaultPayload = map[string]string{"provider": resolved.ProviderName, "model": resolved.Model}
+	}
+
 	return map[string]any{
 		"providers":                providersInfo,
-		"default":                  map[string]any{"provider": resolved.ProviderName, "model": resolved.Model},
+		"default":                  defaultPayload,
 		"default_reasoning_effort": config.ResponseReasoningEffort(settings.DefaultReasoningEffort),
 		"reasoning_effort_options": config.ReasoningEffortOptions,
 		"cwd":                      cwd,
 		"cwd_exists":               isExistingDir(cwd),
 		"project":                  settings.Project,
 		"config_paths":             settings.ConfigPaths,
+		"setup_error":              setupError,
 	}, nil
 }
 

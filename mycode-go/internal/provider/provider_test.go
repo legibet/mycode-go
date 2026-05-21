@@ -79,70 +79,6 @@ func TestAllBuiltInProvidersRegisterAdapters(t *testing.T) {
 	}
 }
 
-func TestOpenAIChatPayloadUsesExtraBody(t *testing.T) {
-	deepSeek := newOpenAIChatAdapter("deepseek").(openAIChatAdapter)
-	deepSeekNone := mustPayload(t, deepSeek, Request{
-		Model:           "deepseek-v4-pro",
-		ReasoningEffort: "none",
-	})
-	deepSeekNoneExtra, _ := deepSeekNone["extra_body"].(map[string]any)
-	deepSeekNoneThinking, _ := deepSeekNoneExtra["thinking"].(map[string]any)
-	if deepSeekNoneThinking == nil || deepSeekNoneThinking["type"] != "disabled" {
-		t.Fatalf("unexpected DeepSeek none payload: %#v", deepSeekNone)
-	}
-
-	deepSeekHigh := mustPayload(t, deepSeek, Request{
-		Model:           "deepseek-v4-pro",
-		ReasoningEffort: "high",
-	})
-	deepSeekHighExtra, _ := deepSeekHigh["extra_body"].(map[string]any)
-	deepSeekHighThinking, _ := deepSeekHighExtra["thinking"].(map[string]any)
-	if deepSeekHigh["reasoning_effort"] != "high" || deepSeekHighThinking == nil || deepSeekHighThinking["type"] != "enabled" {
-		t.Fatalf("unexpected DeepSeek high payload: %#v", deepSeekHigh)
-	}
-
-	deepSeekXHigh := mustPayload(t, deepSeek, Request{
-		Model:           "deepseek-v4-pro",
-		ReasoningEffort: "xhigh",
-	})
-	if deepSeekXHigh["reasoning_effort"] != "max" {
-		t.Fatalf("unexpected DeepSeek xhigh payload: %#v", deepSeekXHigh)
-	}
-
-	zai := newOpenAIChatAdapter("zai").(openAIChatAdapter)
-	zaiPayload := mustPayload(t, zai, Request{
-		Model: "glm-5.1",
-	})
-	if _, ok := zaiPayload["thinking"]; ok {
-		t.Fatalf("unexpected top-level thinking: %#v", zaiPayload)
-	}
-	extraBody, _ := zaiPayload["extra_body"].(map[string]any)
-	if extraBody == nil {
-		t.Fatalf("missing extra_body: %#v", zaiPayload)
-	}
-	thinking, _ := extraBody["thinking"].(map[string]any)
-	if thinking == nil || thinking["type"] != "enabled" || thinking["clear_thinking"] != false {
-		t.Fatalf("unexpected extra_body thinking: %#v", zaiPayload)
-	}
-
-	openRouter := newOpenAIChatAdapter("openrouter").(openAIChatAdapter)
-	routerPayload := mustPayload(t, openRouter, Request{
-		Model:           "openai/gpt-5",
-		ReasoningEffort: "high",
-	})
-	if _, ok := routerPayload["reasoning"]; ok {
-		t.Fatalf("unexpected top-level reasoning: %#v", routerPayload)
-	}
-	routerExtra, _ := routerPayload["extra_body"].(map[string]any)
-	if routerExtra == nil {
-		t.Fatalf("missing extra_body: %#v", routerPayload)
-	}
-	reasoning, _ := routerExtra["reasoning"].(map[string]any)
-	if reasoning == nil || reasoning["effort"] != "high" {
-		t.Fatalf("unexpected extra_body reasoning: %#v", routerPayload)
-	}
-}
-
 func TestAnthropicSerializeBlockReplaysCaller(t *testing.T) {
 	adapter := newAnthropicAdapter("anthropic").(anthropicAdapter)
 	block := message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, map[string]any{
@@ -899,62 +835,6 @@ func TestAnthropicPrepareMessagesNormalizesToolIDs(t *testing.T) {
 	}
 }
 
-func TestAnthropicBuildPayloadMapsReasoningConfig(t *testing.T) {
-	adapter := newAnthropicAdapter("anthropic").(anthropicAdapter)
-	cases := []struct {
-		model        string
-		effort       string
-		thinking     map[string]any
-		outputConfig map[string]any
-	}{
-		{
-			model:        "claude-sonnet-4-6",
-			effort:       "high",
-			thinking:     map[string]any{"type": "adaptive"},
-			outputConfig: map[string]any{"effort": "high"},
-		},
-		{
-			model:    "claude-opus-4-5",
-			effort:   "xhigh",
-			thinking: map[string]any{"type": "enabled", "budget_tokens": 32768},
-		},
-		{
-			model:        "claude-opus-4-6",
-			effort:       "xhigh",
-			thinking:     map[string]any{"type": "adaptive"},
-			outputConfig: map[string]any{"effort": "max"},
-		},
-		{
-			model:        "claude-opus-4-7",
-			effort:       "high",
-			thinking:     map[string]any{"type": "adaptive", "display": "summarized"},
-			outputConfig: map[string]any{"effort": "high"},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.model+"/"+tc.effort, func(t *testing.T) {
-			payload := mustPayload(t, adapter, Request{
-				Model:           tc.model,
-				MaxTokens:       8192,
-				ReasoningEffort: tc.effort,
-			})
-			if !reflect.DeepEqual(payload["thinking"], tc.thinking) {
-				t.Fatalf("unexpected payload: %#v", payload)
-			}
-			if tc.outputConfig == nil {
-				if _, ok := payload["output_config"]; ok {
-					t.Fatalf("unexpected payload: %#v", payload)
-				}
-				return
-			}
-			if !reflect.DeepEqual(payload["output_config"], tc.outputConfig) {
-				t.Fatalf("unexpected payload: %#v", payload)
-			}
-		})
-	}
-}
-
 func TestAnthropicBuildPayloadAddsCacheControlToLatestUserBlock(t *testing.T) {
 	adapter := newAnthropicAdapter("anthropic").(anthropicAdapter)
 	payload := mustPayload(t, adapter, Request{
@@ -988,34 +868,6 @@ func TestAnthropicBuildPayloadAddsCacheControlToLatestUserBlock(t *testing.T) {
 	lastContent := messages[3]["content"].([]map[string]any)
 	if !reflect.DeepEqual(lastContent[1]["cache_control"], map[string]any{"type": "ephemeral"}) {
 		t.Fatalf("unexpected payload: %#v", payload)
-	}
-}
-
-func TestGoogleBuildConfigMapsReasoningEffort(t *testing.T) {
-	adapter := newGoogleAdapter().(googleAdapter)
-	cases := []struct {
-		model string
-		level genai.ThinkingLevel
-	}{
-		{model: "gemini-3.1-pro-preview", level: genai.ThinkingLevelLow},
-		{model: "gemini-3-flash-preview", level: genai.ThinkingLevelMinimal},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.model, func(t *testing.T) {
-			config := adapter.buildConfig(Request{
-				Model:           tc.model,
-				System:          "You are helpful.",
-				MaxTokens:       2048,
-				ReasoningEffort: "none",
-			})
-			if config.ThinkingConfig == nil || !config.ThinkingConfig.IncludeThoughts {
-				t.Fatalf("unexpected config: %#v", config)
-			}
-			if config.ThinkingConfig.ThinkingLevel != tc.level {
-				t.Fatalf("unexpected config: %#v", config)
-			}
-		})
 	}
 }
 

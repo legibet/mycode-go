@@ -446,18 +446,27 @@ func ValidateGlobalConfig(data any) (map[string]any, error) {
 
 // ResolveProvider resolves one provider alias or built-in provider id.
 func ResolveProvider(settings Settings, providerName, model, apiKey, apiBase string) (ResolvedProvider, error) {
-	selected := strings.TrimSpace(providerName)
-	if selected == "" {
-		selected = strings.TrimSpace(settings.DefaultProvider)
+	explicitName := strings.TrimSpace(providerName)
+	if explicitName != "" {
+		return resolveProviderRuntime(settings, explicitName, model, apiKey, apiBase)
 	}
-	if selected == "" {
-		available := availableProviderReferences(settings)
-		if len(available) > 0 {
-			selected = available[0]
+
+	defaultName := strings.TrimSpace(settings.DefaultProvider)
+	if defaultName != "" {
+		resolved, err := resolveProviderRuntime(settings, defaultName, model, apiKey, apiBase)
+		if err == nil {
+			return resolved, nil
 		}
 	}
-	if selected != "" {
-		return resolveProviderRuntime(settings, selected, model, apiKey, apiBase)
+
+	for _, name := range availableProviderReferences(settings) {
+		if name == defaultName {
+			continue
+		}
+		resolved, err := resolveProviderRuntime(settings, name, model, apiKey, apiBase)
+		if err == nil {
+			return resolved, nil
+		}
 	}
 
 	envNames := []string{}

@@ -362,11 +362,13 @@ func googleThinkingLevel(model, effort string) genai.ThinkingLevel {
 		return genai.ThinkingLevelUnspecified
 	}
 	switch effort {
-	case "none", "low":
+	case "none":
 		if strings.HasPrefix(model, "gemini-3.1-pro") {
 			return genai.ThinkingLevelLow
 		}
 		return genai.ThinkingLevelMinimal
+	case "low":
+		return genai.ThinkingLevelLow
 	case "medium":
 		return genai.ThinkingLevelMedium
 	default:

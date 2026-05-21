@@ -88,9 +88,9 @@ If no API key is found at any step, provider resolution returns an error listing
 
 `config.ResolveProvider(settings, providerName, model, apiKey, apiBase)` returns a `ResolvedProvider`:
 
-1. If `providerName` is given: resolve it as a configured alias or raw provider id.
-2. If no provider is given: try the configured default.
-3. Fallback: iterate configured providers with valid credentials, then env-discoverable built-in providers.
+1. If `providerName` is given: resolve it as a configured alias or raw provider id; failures raise.
+2. If no `providerName`: try the configured default; failures fall through to step 3.
+3. Iterate configured providers with valid credentials, then env-discoverable built-in providers.
 4. If nothing is found: return an error listing checked env vars.
 
 Auto-discovery is limited to providers where `AutoDiscoverable` is true and the corresponding env var is set.

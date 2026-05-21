@@ -35,7 +35,7 @@ var specs = []Spec{
 		Label:                   "Google Gemini",
 		DefaultBaseURL:          "https://generativelanguage.googleapis.com",
 		EnvAPIKeyNames:          []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"},
-		DefaultModels:           []string{"gemini-3.1-pro-preview", "gemini-3-flash-preview"},
+		DefaultModels:           []string{"gemini-3.5-flash", "gemini-3.1-pro-preview"},
 		SupportsReasoningEffort: true,
 		AutoDiscoverable:        true,
 	},

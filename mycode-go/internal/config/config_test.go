@@ -469,7 +469,7 @@ func TestResolveProviderOpenAIChatIgnoresReasoningEffort(t *testing.T) {
 	}
 }
 
-func TestResolveProviderDefaultProviderDoesNotFallback(t *testing.T) {
+func TestResolveProviderFallsBackWhenDefaultProviderFails(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home", ".mycode")
 	workspace := filepath.Join(root, "workspace")
@@ -492,7 +492,39 @@ func TestResolveProviderDefaultProviderDoesNotFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ResolveProvider(settings, "", "", "", ""); err == nil || !contains(err.Error(), `provider "claude" is selected`) {
+	resolved, err := ResolveProvider(settings, "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ProviderName != "openai" || resolved.APIKey != "openai-env-key" {
+		t.Fatalf("unexpected provider: %#v", resolved)
+	}
+}
+
+func TestResolveProviderExplicitProviderNameDoesNotFallback(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home", ".mycode")
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	isolateConfigTest(t, home)
+	t.Setenv("OPENAI_API_KEY", "openai-env-key")
+	writeJSON(t, filepath.Join(home, "config.json"), `{
+		"providers": {
+			"claude": {
+				"type": "anthropic",
+				"models": {"claude-sonnet-4-6": {}}
+			}
+		},
+		"default": {"provider": "openai"}
+	}`)
+
+	settings, err := Load(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveProvider(settings, "claude", "", "", ""); err == nil || !contains(err.Error(), `provider "claude" is selected`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -518,7 +550,7 @@ func TestLoadRejectsCustomProviderWithoutType(t *testing.T) {
 	}
 }
 
-func TestResolveProviderMissingConfiguredAPIKeyEnvVar(t *testing.T) {
+func TestResolveProviderFallsBackWhenDefaultProviderAPIKeyEnvVarIsMissing(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home", ".mycode")
 	workspace := filepath.Join(root, "workspace")
@@ -544,8 +576,12 @@ func TestResolveProviderMissingConfiguredAPIKeyEnvVar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ResolveProvider(settings, "", "", "", ""); err == nil || !contains(err.Error(), "OPENROUTER_API_KEY") {
-		t.Fatalf("unexpected error: %v", err)
+	resolved, err := ResolveProvider(settings, "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ProviderName != "openai" || resolved.APIKey != "default-env-key" {
+		t.Fatalf("unexpected provider: %#v", resolved)
 	}
 }
 
