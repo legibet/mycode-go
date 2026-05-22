@@ -1,22 +1,19 @@
 package provider
 
 import (
-	"bufio"
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"maps"
-	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 
 	"github.com/legibet/mycode-go/internal/message"
 	"github.com/legibet/mycode-go/internal/tools"
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	oparam "github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -34,61 +31,45 @@ func (a openAIResponsesAdapter) StreamTurn(ctx context.Context, req Request) <-c
 	go func() {
 		defer close(out)
 
-		requestCtx, cancel := context.WithTimeout(ctx, defaultRequestTimeout)
-		defer cancel()
-		resp, err := a.openStream(requestCtx, req)
+		payload, err := a.buildPayload(req)
 		if err != nil {
 			out <- StreamEvent{Type: "provider_error", Err: err}
 			return
 		}
-		defer func() { _ = resp.Body.Close() }()
+		bodyBytes, err := json.Marshal(payload)
+		if err != nil {
+			out <- StreamEvent{Type: "provider_error", Err: err}
+			return
+		}
+
+		opts := []option.RequestOption{
+			option.WithAPIKey(req.APIKey),
+			option.WithRequestTimeout(defaultRequestTimeout),
+		}
+		if baseURL := strings.TrimSpace(req.APIBase); baseURL != "" {
+			opts = append(opts, option.WithBaseURL(strings.TrimRight(baseURL, "/")))
+		}
+		client := openai.NewClient(opts...)
+		stream := client.Responses.NewStreaming(ctx, oparam.Override[responses.ResponseNewParams](json.RawMessage(bodyBytes)))
+		defer func() { _ = stream.Close() }()
 
 		var final *responses.Response
 		doneItems := map[int]responses.ResponseOutputItemUnion{}
 
-		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 0, 64*1024), bufio.MaxScanTokenSize<<9)
-		data := bytes.NewBuffer(nil)
-
-		flush := func() error {
-			raw := bytes.TrimSpace(bytes.Clone(data.Bytes()))
-			data.Reset()
-			if len(raw) == 0 || bytes.Equal(raw, []byte("[DONE]")) {
-				return nil
+		for stream.Next() {
+			if err := a.applyStreamEvent(stream.Current(), doneItems, &final, out); err != nil {
+				out <- StreamEvent{Type: "provider_error", Err: err}
+				return
 			}
-			return a.applyStreamEvent(raw, doneItems, &final, out)
+		}
+		if err := stream.Err(); err != nil {
+			// The SDK decodes a blank trailing SSE dispatch as empty JSON.
+			if final == nil || !isBlankSSEDispatchError(err) {
+				out <- StreamEvent{Type: "provider_error", Err: err}
+				return
+			}
 		}
 
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			if len(line) == 0 {
-				if err := flush(); err != nil {
-					out <- StreamEvent{Type: "provider_error", Err: err}
-					return
-				}
-				continue
-			}
-
-			name, value, ok := bytes.Cut(line, []byte(":"))
-			if !ok || !bytes.Equal(name, []byte("data")) {
-				continue
-			}
-			if len(value) > 0 && value[0] == ' ' {
-				value = value[1:]
-			}
-			if data.Len() > 0 {
-				data.WriteByte('\n')
-			}
-			data.Write(value)
-		}
-		if err := scanner.Err(); err != nil {
-			out <- StreamEvent{Type: "provider_error", Err: err}
-			return
-		}
-		if err := flush(); err != nil {
-			out <- StreamEvent{Type: "provider_error", Err: err}
-			return
-		}
 		if final == nil {
 			out <- StreamEvent{Type: "provider_error", Err: errors.New("openai responses stream ended before response.completed")}
 			return
@@ -104,94 +85,29 @@ func (a openAIResponsesAdapter) StreamTurn(ctx context.Context, req Request) <-c
 	return out
 }
 
-func (a openAIResponsesAdapter) openStream(ctx context.Context, req Request) (*http.Response, error) {
-	payload, err := a.buildPayload(req)
-	if err != nil {
-		return nil, err
-	}
-	payload["stream"] = true
-	bodyBytes, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-
-	endpoint, err := url.JoinPath(cmp.Or(strings.TrimSpace(req.APIBase), a.Spec().DefaultBaseURL), "responses")
-	if err != nil {
-		return nil, err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+req.APIKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json")
-
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return resp, nil
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if readErr != nil {
-		return nil, fmt.Errorf("openai responses request failed with status %s", resp.Status)
-	}
-	return nil, openAIResponsesHTTPError(resp.Status, raw)
+func isBlankSSEDispatchError(err error) bool {
+	var syntaxErr *json.SyntaxError
+	return errors.As(err, &syntaxErr) && syntaxErr.Offset == 0
 }
 
-func (a openAIResponsesAdapter) applyStreamEvent(raw []byte, doneItems map[int]responses.ResponseOutputItemUnion, final **responses.Response, out chan<- StreamEvent) error {
-	var envelope struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return err
-	}
-
-	switch envelope.Type {
+func (a openAIResponsesAdapter) applyStreamEvent(event responses.ResponseStreamEventUnion, doneItems map[int]responses.ResponseOutputItemUnion, final **responses.Response, out chan<- StreamEvent) error {
+	switch event.Type {
 	case "response.reasoning_text.delta":
-		var event responses.ResponseReasoningTextDeltaEvent
-		if err := json.Unmarshal(raw, &event); err != nil {
-			return err
-		}
 		if event.Delta != "" {
 			out <- StreamEvent{Type: "thinking_delta", Text: event.Delta}
 		}
 	case "response.output_text.delta":
-		var event responses.ResponseTextDeltaEvent
-		if err := json.Unmarshal(raw, &event); err != nil {
-			return err
-		}
 		if event.Delta != "" {
 			out <- StreamEvent{Type: "text_delta", Text: event.Delta}
 		}
 	case "response.output_item.done":
-		var event responses.ResponseOutputItemDoneEvent
-		if err := json.Unmarshal(raw, &event); err != nil {
-			return err
-		}
 		doneItems[int(event.OutputIndex)] = event.Item
 	case "response.completed":
-		var event responses.ResponseCompletedEvent
-		if err := json.Unmarshal(raw, &event); err != nil {
-			return err
-		}
 		response := event.Response
 		*final = &response
 	case "error":
-		var event responses.ResponseErrorEvent
-		if err := json.Unmarshal(raw, &event); err != nil {
-			return err
-		}
 		return errors.New(strings.TrimSpace(event.Message))
 	case "response.failed":
-		var event responses.ResponseFailedEvent
-		if err := json.Unmarshal(raw, &event); err != nil {
-			return err
-		}
 		msg := "response failed"
 		if event.Response.Error.Message != "" {
 			msg = event.Response.Error.Message
@@ -199,27 +115,6 @@ func (a openAIResponsesAdapter) applyStreamEvent(raw []byte, doneItems map[int]r
 		return errors.New(msg)
 	}
 	return nil
-}
-
-func openAIResponsesHTTPError(status string, raw []byte) error {
-	var body struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(raw, &body); err == nil {
-		if msg := strings.TrimSpace(body.Error.Message); msg != "" {
-			return fmt.Errorf("openai responses request failed with status %s: %s", status, msg)
-		}
-		if msg := strings.TrimSpace(body.Message); msg != "" {
-			return fmt.Errorf("openai responses request failed with status %s: %s", status, msg)
-		}
-	}
-	if text := strings.TrimSpace(string(raw)); text != "" {
-		return fmt.Errorf("openai responses request failed with status %s: %s", status, text)
-	}
-	return fmt.Errorf("openai responses request failed with status %s", status)
 }
 
 func (a openAIResponsesAdapter) buildPayload(req Request) (map[string]any, error) {
