@@ -83,7 +83,7 @@ func ToolResultBlock(toolUseID, output string, metadata map[string]any, isError 
 		Type:      "tool_result",
 		ToolUseID: toolUseID,
 		Output:    output,
-		IsError:   new(isError),
+		IsError:   &isError,
 	}
 	if len(metadata) > 0 {
 		block.Metadata = maps.Clone(metadata)
@@ -178,6 +178,17 @@ func FlattenText(msg Message, includeThinking bool) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+var xmlAttrEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	`"`, "&quot;",
+	"<", "&lt;",
+	">", "&gt;",
+)
+
+func EscapeXMLAttr(value string) string {
+	return xmlAttrEscaper.Replace(value)
 }
 
 // Clone, CloneBlock, CloneMessages, CloneBlocks return deep copies of the

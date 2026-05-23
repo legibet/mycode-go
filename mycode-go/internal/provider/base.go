@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/legibet/mycode-go/internal/message"
-	"github.com/legibet/mycode-go/internal/util"
 )
 
 const defaultRequestTimeout = 300 * time.Second
@@ -167,8 +166,8 @@ func RepairMessagesForReplay(source []message.Message, supportsImageInput, suppo
 					}
 					attachment := fmt.Sprintf(
 						"<file name=\"%s\" media_type=\"%s\" kind=\"%s\">Current model does not support %s.</file>",
-						util.EscapeXMLAttr(cmp.Or(block.Name, "attached-"+block.Type)),
-						util.EscapeXMLAttr(cmp.Or(block.MIMEType, defaultMIME)),
+						message.EscapeXMLAttr(cmp.Or(block.Name, "attached-"+block.Type)),
+						message.EscapeXMLAttr(cmp.Or(block.MIMEType, defaultMIME)),
 						block.Type,
 						label,
 					)

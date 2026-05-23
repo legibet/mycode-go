@@ -14,7 +14,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/legibet/mycode-go/internal/config"
-	"github.com/legibet/mycode-go/internal/util"
 )
 
 const (
@@ -58,8 +57,8 @@ type Skill struct {
 
 // Build returns the runtime system prompt.
 func Build(cwd, project, home string) string {
-	resolvedCWD := util.ResolveSymlinks(cwd)
-	resolvedProject := util.ResolveSymlinks(project)
+	resolvedCWD := config.ResolveSymlinks(cwd)
+	resolvedProject := config.ResolveSymlinks(project)
 	parts := []string{basePrompt}
 	if section := loadInstructions(resolvedCWD, resolvedProject, home); section != "" {
 		parts = append(parts, section)
@@ -94,17 +93,19 @@ func loadInstructions(cwd, project, home string) string {
 }
 
 func discoverInstructionFiles(cwd, project, home string) []string {
-	resolvedCWD := util.ResolveSymlinks(cwd)
-	resolvedProject := util.ResolveSymlinks(project)
-	resolvedHome := util.ResolveSymlinks(home)
+	resolvedCWD := config.ResolveSymlinks(cwd)
+	resolvedProject := config.ResolveSymlinks(project)
+	resolvedHome := config.ResolveSymlinks(home)
 	files := []string{}
 
 	globalCandidate := filepath.Join(resolvedHome, "AGENTS.md")
-	compatCandidate := filepath.Join(util.ResolveSymlinks(userHomeDir()), ".agents", "AGENTS.md")
 	if isFile(globalCandidate) {
 		files = append(files, globalCandidate)
-	} else if isFile(compatCandidate) {
-		files = append(files, compatCandidate)
+	} else if compatHome := config.ResolveSymlinks(userHomeDir()); compatHome != "" {
+		compatCandidate := filepath.Join(compatHome, ".agents", "AGENTS.md")
+		if isFile(compatCandidate) {
+			files = append(files, compatCandidate)
+		}
 	}
 
 	for _, dir := range config.ProjectDirs(resolvedCWD, resolvedProject) {
@@ -140,19 +141,20 @@ func loadSkills(cwd, project, home string) string {
 // DiscoverSkills merges skills across global home, ~/.agents (compat),
 // project AGENTS, and project .mycode/skills.
 func DiscoverSkills(cwd, project, home string) []Skill {
-	cwdPath := util.ResolveSymlinks(cwd)
-	projectPath := util.ResolveSymlinks(project)
-	homePath := util.ResolveSymlinks(home)
-	compatHome := util.ResolveSymlinks(userHomeDir())
+	cwdPath := config.ResolveSymlinks(cwd)
+	projectPath := config.ResolveSymlinks(project)
+	homePath := config.ResolveSymlinks(home)
+	compatHome := config.ResolveSymlinks(userHomeDir())
 
 	type skillRoot struct {
 		path   string
 		source string
 	}
-	roots := []skillRoot{
-		{filepath.Join(compatHome, ".agents", "skills"), "global"},
-		{filepath.Join(homePath, "skills"), "global"},
+	roots := []skillRoot{}
+	if compatHome != "" {
+		roots = append(roots, skillRoot{filepath.Join(compatHome, ".agents", "skills"), "global"})
 	}
+	roots = append(roots, skillRoot{filepath.Join(homePath, "skills"), "global"})
 	for _, dir := range config.ProjectDirs(cwdPath, projectPath) {
 		roots = append(roots,
 			skillRoot{filepath.Join(dir, ".agents", "skills"), "project"},
@@ -311,7 +313,7 @@ func parseSkill(path, source, fallbackName string) (Skill, bool) {
 	return Skill{
 		Name:        name,
 		Description: description,
-		Path:        util.ExpandAbs(path),
+		Path:        config.ExpandAbs(path),
 		Source:      source,
 	}, true
 }

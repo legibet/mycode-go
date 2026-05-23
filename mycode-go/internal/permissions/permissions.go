@@ -9,7 +9,6 @@ import (
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/prompt"
 	"github.com/legibet/mycode-go/internal/tools"
-	"github.com/legibet/mycode-go/internal/util"
 )
 
 const (
@@ -124,7 +123,7 @@ func ClassifyTool(toolName string, input map[string]any, cwd, project string, sk
 		return Check{Tier: classifyBash(command), Preview: command}
 	case "read", "write", "edit":
 		raw := asString(input["path"])
-		path := util.ResolveSymlinks(tools.ResolvePath(raw, cwd))
+		path := config.ResolveSymlinks(tools.ResolvePath(raw, cwd))
 		preview := raw
 		if strings.TrimSpace(preview) == "" {
 			preview = path
@@ -149,7 +148,7 @@ func SkillRoots(cwd, project, home string) []string {
 	roots := make([]string, 0, len(skills))
 	seen := map[string]struct{}{}
 	for _, skill := range skills {
-		root := util.ResolveSymlinks(filepath.Dir(skill.Path))
+		root := config.ResolveSymlinks(filepath.Dir(skill.Path))
 		if _, ok := seen[root]; ok {
 			continue
 		}
@@ -233,9 +232,7 @@ func shellTokens(command string) ([]string, error) {
 		}
 		if isShellPunctuation(ch) {
 			flush()
-			var token strings.Builder
-			token.WriteRune(ch)
-			tokens = append(tokens, token.String())
+			tokens = append(tokens, string(ch))
 			continue
 		}
 		current.WriteRune(ch)
@@ -392,8 +389,8 @@ func isUnder(path, root string) bool {
 	if strings.TrimSpace(root) == "" {
 		return false
 	}
-	absPath := util.ResolveSymlinks(path)
-	absRoot := util.ResolveSymlinks(root)
+	absPath := config.ResolveSymlinks(path)
+	absRoot := config.ResolveSymlinks(root)
 	rel, err := filepath.Rel(absRoot, absPath)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

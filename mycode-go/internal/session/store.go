@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"cmp"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,7 +19,6 @@ import (
 
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/message"
-	"github.com/legibet/mycode-go/internal/util"
 )
 
 const (
@@ -98,14 +100,14 @@ func ApplyRewind(messages []message.Message) []message.Message {
 func (s *Store) DraftSession(cwd string) Data {
 	nowValue := now()
 	meta := Meta{
-		CWD:                  util.ExpandAbs(cwd),
+		CWD:                  config.ExpandAbs(cwd),
 		Title:                DefaultSessionTitle,
 		CreatedAt:            nowValue,
 		UpdatedAt:            nowValue,
 		MessageFormatVersion: MessageFormatVersion,
 	}
 	return Data{
-		Session:  Summary{ID: util.RandomHex16(), Meta: meta},
+		Session:  Summary{ID: randomHex16(), Meta: meta},
 		Messages: []message.Message{},
 	}
 }
@@ -130,7 +132,9 @@ func (s *Store) CreateSession(sessionID, cwd string) (Data, error) {
 	if err != nil {
 		return Data{}, err
 	}
-	_ = file.Close()
+	if err := file.Close(); err != nil {
+		return Data{}, err
+	}
 	return data, nil
 }
 
@@ -140,7 +144,7 @@ func (s *Store) ListSessions(cwd string) ([]Summary, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	filterCWD := util.ExpandAbs(cwd)
+	filterCWD := config.ExpandAbs(cwd)
 	out := make([]Summary, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -150,7 +154,7 @@ func (s *Store) ListSessions(cwd string) ([]Summary, error) {
 		if err != nil {
 			continue
 		}
-		if filterCWD != "" && util.ExpandAbs(meta.CWD) != filterCWD {
+		if filterCWD != "" && config.ExpandAbs(meta.CWD) != filterCWD {
 			continue
 		}
 		out = append(out, Summary{ID: entry.Name(), Meta: meta})
@@ -260,7 +264,7 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string)
 		}
 		nowValue := now()
 		meta = Meta{
-			CWD:                  util.ExpandAbs(cwd),
+			CWD:                  config.ExpandAbs(cwd),
 			Title:                DefaultSessionTitle,
 			CreatedAt:            nowValue,
 			UpdatedAt:            nowValue,
@@ -382,12 +386,23 @@ func appendJSONL(path string, msg message.Message) error {
 	if err != nil {
 		return err
 	}
-	_, err = file.Write(append(data, '\n'))
-	return err
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func now() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
+}
+
+func randomHex16() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buf)
 }
 
 func asInt(value any) int {

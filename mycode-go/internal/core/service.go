@@ -19,8 +19,6 @@ import (
 	"github.com/legibet/mycode-go/internal/provider"
 	"github.com/legibet/mycode-go/internal/session"
 	"github.com/legibet/mycode-go/internal/tools"
-	"github.com/legibet/mycode-go/internal/util"
-	"github.com/legibet/mycode-go/internal/workspace"
 )
 
 type Service struct {
@@ -505,15 +503,15 @@ func (s *Service) ClearSession(sessionID string) error {
 }
 
 func (s *Service) WorkspaceRoots() map[string]any {
-	return map[string]any{"roots": workspace.Roots()}
+	return map[string]any{"roots": workspaceRoots()}
 }
 
-func (s *Service) WorkspaceBrowse(root, path string) (workspace.BrowseResult, error) {
+func (s *Service) WorkspaceBrowse(root, path string) (BrowseResult, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
-		return workspace.BrowseResult{}, statusError(http.StatusBadRequest, "root is required")
+		return BrowseResult{}, statusError(http.StatusBadRequest, "root is required")
 	}
-	return workspace.Browse(root, path), nil
+	return browseWorkspace(root, path), nil
 }
 
 func RequestCWD(value string) string {
@@ -589,7 +587,7 @@ func buildUserMessage(req ChatRequest, cwd string) (message.Message, error) {
 					name = "attached-file"
 				}
 				block = message.TextBlock(
-					fmt.Sprintf("<file name=\"%s\">\n%s\n</file>", util.EscapeXMLAttr(name), input.Text),
+					fmt.Sprintf("<file name=\"%s\">\n%s\n</file>", message.EscapeXMLAttr(name), input.Text),
 					map[string]any{"attachment": true, "path": name},
 				)
 			} else if input.Text == "" {

@@ -114,3 +114,21 @@ func LookupSpec(id string) (Spec, bool) {
 	spec, ok := specByID[id]
 	return spec, ok
 }
+
+var adapters = map[string]Adapter{
+	"anthropic":   newAnthropicAdapter("anthropic"),
+	"moonshotai":  newAnthropicAdapter("moonshotai"),
+	"minimax":     newAnthropicAdapter("minimax"),
+	"openai":      newOpenAIResponsesAdapter(),
+	"openai_chat": newOpenAIChatAdapter("openai_chat"),
+	"deepseek":    newOpenAIChatAdapter("deepseek"),
+	"zai":         newOpenAIChatAdapter("zai"),
+	"openrouter":  newOpenAIChatAdapter("openrouter"),
+	"google":      newGoogleAdapter(),
+}
+
+// LookupAdapter returns one registered provider adapter.
+func LookupAdapter(id string) (Adapter, bool) {
+	adapter, ok := adapters[id]
+	return adapter, ok
+}

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/legibet/mycode-go/internal/util"
+	"github.com/legibet/mycode-go/internal/config"
 )
 
 func TestInstructions(t *testing.T) {
@@ -36,8 +36,8 @@ func TestInstructions(t *testing.T) {
 		if len(files) != 2 {
 			t.Fatalf("unexpected files: %#v", files)
 		}
-		if files[0] != util.ResolveSymlinks(filepath.Join(home, "AGENTS.md")) ||
-			files[1] != util.ResolveSymlinks(filepath.Join(cwd, "AGENTS.md")) {
+		if files[0] != config.ResolveSymlinks(filepath.Join(home, "AGENTS.md")) ||
+			files[1] != config.ResolveSymlinks(filepath.Join(cwd, "AGENTS.md")) {
 			t.Fatalf("unexpected files: %#v", files)
 		}
 

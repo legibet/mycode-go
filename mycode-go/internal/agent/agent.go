@@ -17,7 +17,6 @@ import (
 	"github.com/legibet/mycode-go/internal/prompt"
 	"github.com/legibet/mycode-go/internal/provider"
 	"github.com/legibet/mycode-go/internal/tools"
-	"github.com/legibet/mycode-go/internal/util"
 )
 
 // Event is one normalized streaming event sent to the API and CLI.
@@ -68,7 +67,7 @@ func New(a Agent) (*Agent, error) {
 			a.CWD = "."
 		}
 	}
-	a.CWD = util.ResolveSymlinks(a.CWD)
+	a.CWD = config.ResolveSymlinks(a.CWD)
 
 	// Only persisted sessions have a stable transcript path to include in the
 	// compact continuation prompt.

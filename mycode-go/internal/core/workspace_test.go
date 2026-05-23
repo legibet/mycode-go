@@ -1,4 +1,4 @@
-package workspace
+package core
 
 import (
 	"os"
@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestBrowseRejectsPrefixEscape(t *testing.T) {
+func TestBrowseWorkspaceRejectsPrefixEscape(t *testing.T) {
 	root := t.TempDir()
 	allowed := filepath.Join(root, "a")
 	sibling := filepath.Join(root, "ab")
@@ -19,7 +19,7 @@ func TestBrowseRejectsPrefixEscape(t *testing.T) {
 
 	t.Setenv("MYCODE_WORKSPACE_ROOTS", allowed)
 
-	result := Browse(allowed, "../ab")
+	result := browseWorkspace(allowed, "../ab")
 	if result.Error != "Path outside root" {
 		t.Fatalf("unexpected result: %#v", result)
 	}

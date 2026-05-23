@@ -6,6 +6,9 @@ package core
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"maps"
 	"slices"
 	"sync"
@@ -14,7 +17,6 @@ import (
 	agentpkg "github.com/legibet/mycode-go/internal/agent"
 	"github.com/legibet/mycode-go/internal/message"
 	"github.com/legibet/mycode-go/internal/permissions"
-	"github.com/legibet/mycode-go/internal/util"
 )
 
 type runStatus string
@@ -129,8 +131,8 @@ func (r *runState) appendEvent(event agentpkg.Event) map[string]any {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	payload := maps.Clone(event.Data)
+	stored := runEvent{seq: r.nextSeq, typ: event.Type, data: payload}
 	r.nextSeq++
-	stored := runEvent{seq: r.nextSeq - 1, typ: event.Type, data: payload}
 	r.events = append(r.events, stored)
 	return stored.payload()
 }
@@ -251,7 +253,7 @@ func (m *RunManager) startRun(sessionID string, userMessage message.Message, bas
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	state := newRunState(util.RandomHex16(), sessionID, userMessage, baseMessages, agent, cancel)
+	state := newRunState(randomHex16(), sessionID, userMessage, baseMessages, agent, cancel)
 	m.activeBySession[sessionID] = state
 	m.runsByID[state.id] = state
 
@@ -298,7 +300,7 @@ func (m *RunManager) requestDecision(ctx context.Context, sessionID string, requ
 		return permissions.ReviewDeny
 	}
 
-	requestID := util.RandomHex16()
+	requestID := randomHex16()
 	ch := make(chan permissions.ReviewDecision, 1)
 	state.addDecision(requestID, ch)
 
@@ -414,4 +416,12 @@ func (m *RunManager) pruneFinishedRuns() {
 			delete(m.runsByID, runID)
 		}
 	}
+}
+
+func randomHex16() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buf)
 }

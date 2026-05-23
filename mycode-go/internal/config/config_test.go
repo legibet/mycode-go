@@ -9,7 +9,6 @@ import (
 
 	"github.com/legibet/mycode-go/internal/models"
 	"github.com/legibet/mycode-go/internal/provider"
-	"github.com/legibet/mycode-go/internal/util"
 )
 
 func TestLoadMergesGlobalAndCurrentDirectoryConfigs(t *testing.T) {
@@ -51,7 +50,7 @@ func TestLoadMergesGlobalAndCurrentDirectoryConfigs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.CWD != util.ResolveSymlinks(cwd) {
+	if settings.CWD != ResolveSymlinks(cwd) {
 		t.Fatalf("unexpected settings: %#v", settings)
 	}
 	if settings.DefaultProvider != "shared" || settings.DefaultModel != "gpt-5.4" {
@@ -126,11 +125,11 @@ func TestLoadMergesGlobalAndProjectConfigsFromProjectToCwd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.CWD != util.ResolveSymlinks(cwd) {
-		t.Fatalf("expected cwd %q, got %q", util.ResolveSymlinks(cwd), settings.CWD)
+	if settings.CWD != ResolveSymlinks(cwd) {
+		t.Fatalf("expected cwd %q, got %q", ResolveSymlinks(cwd), settings.CWD)
 	}
-	if settings.Project != util.ResolveSymlinks(project) {
-		t.Fatalf("expected project %q, got %q", util.ResolveSymlinks(project), settings.Project)
+	if settings.Project != ResolveSymlinks(project) {
+		t.Fatalf("expected project %q, got %q", ResolveSymlinks(project), settings.Project)
 	}
 	if settings.DefaultProvider != "openai" || settings.DefaultModel != "gpt-4.1" {
 		t.Fatalf("unexpected default: provider=%q model=%q", settings.DefaultProvider, settings.DefaultModel)
@@ -139,9 +138,9 @@ func TestLoadMergesGlobalAndProjectConfigsFromProjectToCwd(t *testing.T) {
 		t.Fatalf("unexpected provider: %#v", p)
 	}
 	expectedPaths := []string{
-		util.ResolveSymlinks(filepath.Join(home, "config.json")),
-		util.ResolveSymlinks(filepath.Join(project, ".mycode", "config.json")),
-		util.ResolveSymlinks(filepath.Join(cwd, ".mycode", "config.json")),
+		ResolveSymlinks(filepath.Join(home, "config.json")),
+		ResolveSymlinks(filepath.Join(project, ".mycode", "config.json")),
+		ResolveSymlinks(filepath.Join(cwd, ".mycode", "config.json")),
 	}
 	if !slices.Equal(settings.ConfigPaths, expectedPaths) {
 		t.Fatalf("unexpected config paths: %#v, want %#v", settings.ConfigPaths, expectedPaths)
@@ -168,15 +167,15 @@ func TestLoadTreatsGitFileAsProjectRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Project != util.ResolveSymlinks(project) {
-		t.Fatalf("expected project %q, got %q", util.ResolveSymlinks(project), settings.Project)
+	if settings.Project != ResolveSymlinks(project) {
+		t.Fatalf("expected project %q, got %q", ResolveSymlinks(project), settings.Project)
 	}
 	if settings.DefaultProvider != "local" {
 		t.Fatalf("expected local to win, got %q", settings.DefaultProvider)
 	}
 	expectedPaths := []string{
-		util.ResolveSymlinks(filepath.Join(project, ".mycode", "config.json")),
-		util.ResolveSymlinks(filepath.Join(cwd, ".mycode", "config.json")),
+		ResolveSymlinks(filepath.Join(project, ".mycode", "config.json")),
+		ResolveSymlinks(filepath.Join(cwd, ".mycode", "config.json")),
 	}
 	if !slices.Equal(settings.ConfigPaths, expectedPaths) {
 		t.Fatalf("unexpected config paths: %#v, want %#v", settings.ConfigPaths, expectedPaths)
@@ -197,7 +196,7 @@ func TestLoadUsesCwdAsProjectWhenNoGit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Project != util.ResolveSymlinks(cwd) {
+	if settings.Project != ResolveSymlinks(cwd) {
 		t.Fatalf("expected project==cwd when no .git, got %q vs %q", settings.Project, settings.CWD)
 	}
 	if settings.DefaultProvider != "local" {

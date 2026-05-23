@@ -1,7 +1,4 @@
-// Package workspace exposes the workspace browser used by the web UI.
-// Roots are restricted by env vars (or default to home + /) so the API
-// never lets the browser walk arbitrary host paths.
-package workspace
+package core
 
 import (
 	"cmp"
@@ -10,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/legibet/mycode-go/internal/util"
+	"github.com/legibet/mycode-go/internal/config"
 )
 
 type BrowseEntry struct {
@@ -26,9 +23,7 @@ type BrowseResult struct {
 	Error   string        `json:"error"`
 }
 
-// Roots returns the directories the UI is allowed to browse. Falls back to
-// home + / when MYCODE_WORKSPACE_ROOTS / WORKSPACE_ROOTS are unset.
-func Roots() []string {
+func workspaceRoots() []string {
 	raw := cmp.Or(
 		strings.TrimSpace(os.Getenv("MYCODE_WORKSPACE_ROOTS")),
 		strings.TrimSpace(os.Getenv("WORKSPACE_ROOTS")),
@@ -48,7 +43,7 @@ func Roots() []string {
 		if value == "" {
 			continue
 		}
-		resolved := util.ResolveSymlinks(value)
+		resolved := config.ResolveSymlinks(value)
 		if _, err := os.Stat(resolved); err != nil {
 			continue
 		}
@@ -65,16 +60,14 @@ func Roots() []string {
 	return out
 }
 
-// Browse returns child directories of root/relativePath. The root must be in
-// Roots() and the resolved target must stay inside root.
-func Browse(root, relativePath string) BrowseResult {
-	requestedRoot := util.ResolveSymlinks(root)
-	if !slices.Contains(Roots(), requestedRoot) {
+func browseWorkspace(root, relativePath string) BrowseResult {
+	requestedRoot := config.ResolveSymlinks(root)
+	if !slices.Contains(workspaceRoots(), requestedRoot) {
 		return BrowseResult{Root: root, Error: "Invalid root"}
 	}
 
-	target := util.ResolveSymlinks(filepath.Join(requestedRoot, relativePath))
-	if !withinRoot(requestedRoot, target) {
+	target := config.ResolveSymlinks(filepath.Join(requestedRoot, relativePath))
+	if !withinWorkspaceRoot(requestedRoot, target) {
 		return BrowseResult{Root: requestedRoot, Current: requestedRoot, Error: "Path outside root"}
 	}
 
@@ -114,7 +107,7 @@ func Browse(root, relativePath string) BrowseResult {
 	}
 }
 
-func withinRoot(root, target string) bool {
+func withinWorkspaceRoot(root, target string) bool {
 	rel, err := filepath.Rel(root, target)
 	if err != nil {
 		return false

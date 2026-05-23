@@ -258,7 +258,7 @@ Truncate `messages.jsonl`, reset the title, and keep `meta.json`. Returns `409` 
 
 ## Workspaces
 
-Workspace routes are wired in `mycode-go/internal/server/app.go` and implemented through `mycode-go/internal/core/service.go` plus `mycode-go/internal/workspace`.
+Workspace routes are wired in `mycode-go/internal/server/app.go` and implemented through `mycode-go/internal/core/service.go` plus `mycode-go/internal/core/workspace.go`.
 
 ### `GET /api/workspaces/roots`
 

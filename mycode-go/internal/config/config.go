@@ -15,7 +15,6 @@ import (
 
 	"github.com/legibet/mycode-go/internal/models"
 	"github.com/legibet/mycode-go/internal/provider"
-	"github.com/legibet/mycode-go/internal/util"
 )
 
 const (
@@ -117,7 +116,7 @@ func ResolveHome() string {
 	if raw == "" {
 		raw = defaultHome
 	}
-	return util.ExpandAbs(raw)
+	return ExpandAbs(raw)
 }
 
 // ResolveSessionsDir returns the persisted sessions directory.
@@ -125,9 +124,66 @@ func ResolveSessionsDir() string {
 	return filepath.Join(ResolveHome(), "sessions")
 }
 
+// ExpandAbs resolves "~" to the user's home directory and returns the
+// cleaned absolute path. Empty input stays empty.
+func ExpandAbs(path string) string {
+	if path == "" {
+		return ""
+	}
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = home
+		}
+	} else if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, rest)
+		}
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(absolute)
+}
+
+// ResolveSymlinks returns an absolute path with symlinks resolved for existing
+// path components. Missing trailing components are kept as written.
+func ResolveSymlinks(path string) string {
+	path = ExpandAbs(path)
+	if path == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+
+	sep := string(filepath.Separator)
+	volume := filepath.VolumeName(path)
+	rest := strings.TrimPrefix(path, volume)
+	current := volume
+	if strings.HasPrefix(rest, sep) {
+		current += sep
+		rest = strings.TrimLeft(rest, sep)
+	}
+
+	parts := strings.Split(rest, sep)
+	for i, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		next := filepath.Join(current, part)
+		resolved, err := filepath.EvalSymlinks(next)
+		if err != nil {
+			return filepath.Clean(filepath.Join(append([]string{current}, parts[i:]...)...))
+		}
+		current = resolved
+	}
+	return filepath.Clean(current)
+}
+
 // ResolveProject returns the nearest Git project root, or cwd when no .git is found.
 func ResolveProject(cwd string) string {
-	cwdPath := util.ResolveSymlinks(cwd)
+	cwdPath := ResolveSymlinks(cwd)
 	for path := cwdPath; path != "" && path != "."; {
 		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 			return path
@@ -143,8 +199,8 @@ func ResolveProject(cwd string) string {
 
 // ProjectDirs returns directories from project to cwd, inclusive.
 func ProjectDirs(cwd, project string) []string {
-	cwdPath := util.ResolveSymlinks(cwd)
-	projectPath := util.ResolveSymlinks(project)
+	cwdPath := ResolveSymlinks(cwd)
+	projectPath := ResolveSymlinks(project)
 	if projectPath == "" {
 		projectPath = ResolveProject(cwdPath)
 	}
@@ -159,11 +215,8 @@ func ProjectDirs(cwd, project string) []string {
 	}
 
 	// Reverse so project is first, cwd is last.
-	reversed := make([]string, len(dirs))
-	for i, d := range dirs {
-		reversed[len(dirs)-1-i] = d
-	}
-	return reversed
+	slices.Reverse(dirs)
+	return dirs
 }
 
 // Load returns merged config for one cwd.
@@ -175,7 +228,7 @@ func Load(cwd string) (Settings, error) {
 		}
 		cwd = wd
 	}
-	resolvedCWD := util.ResolveSymlinks(cwd)
+	resolvedCWD := ResolveSymlinks(cwd)
 	resolvedProject := ResolveProject(resolvedCWD)
 
 	settings := Settings{
@@ -192,9 +245,9 @@ func Load(cwd string) (Settings, error) {
 	providerOrder := []string{}
 	seenProviders := map[string]struct{}{}
 
-	configPaths := []string{util.ResolveSymlinks(filepath.Join(ResolveHome(), "config.json"))}
+	configPaths := []string{ResolveSymlinks(filepath.Join(ResolveHome(), "config.json"))}
 	for _, dir := range ProjectDirs(resolvedCWD, resolvedProject) {
-		configPaths = append(configPaths, util.ResolveSymlinks(filepath.Join(dir, ".mycode", "config.json")))
+		configPaths = append(configPaths, ResolveSymlinks(filepath.Join(dir, ".mycode", "config.json")))
 	}
 	for _, path := range configPaths {
 		loaded, ok := loadConfig(path)

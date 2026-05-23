@@ -3,9 +3,17 @@
 package tools
 
 import (
+	"bufio"
+	"bytes"
+	"cmp"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"maps"
+	"mime"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -13,6 +21,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
+
+	"github.com/pmezard/go-difflib/difflib"
 
 	"github.com/legibet/mycode-go/internal/message"
 )
@@ -165,6 +176,72 @@ func NewExecutor(cwd, sessionDir string, supportsImageInput bool) *Executor {
 	}
 }
 
+// ResolvePath resolves path relative to cwd, expanding "~" and resolving
+// symlinks in existing path components.
+func ResolvePath(path, cwd string) string {
+	expanded := path
+	if expanded == "~" || strings.HasPrefix(expanded, "~/") {
+		expanded = expandAbs(expanded)
+	}
+	if filepath.IsAbs(expanded) {
+		return resolveSymlinks(expanded)
+	}
+	return resolveSymlinks(filepath.Join(cwd, expanded))
+}
+
+func expandAbs(path string) string {
+	if path == "" {
+		return ""
+	}
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = home
+		}
+	} else if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, rest)
+		}
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(absolute)
+}
+
+func resolveSymlinks(path string) string {
+	path = expandAbs(path)
+	if path == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+
+	sep := string(filepath.Separator)
+	volume := filepath.VolumeName(path)
+	rest := strings.TrimPrefix(path, volume)
+	current := volume
+	if strings.HasPrefix(rest, sep) {
+		current += sep
+		rest = strings.TrimLeft(rest, sep)
+	}
+
+	parts := strings.Split(rest, sep)
+	for i, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		next := filepath.Join(current, part)
+		resolved, err := filepath.EvalSymlinks(next)
+		if err != nil {
+			return filepath.Clean(filepath.Join(append([]string{current}, parts[i:]...)...))
+		}
+		current = resolved
+	}
+	return filepath.Clean(current)
+}
+
 // CancelActive kills all bash commands started by this executor.
 func (e *Executor) CancelActive() {
 	e.mu.Lock()
@@ -220,4 +297,762 @@ func ParseToolArguments(raw string) (map[string]any, error) {
 
 func errorResult(output string) Result {
 	return Result{Output: output, IsError: true}
+}
+
+// TruncateText truncates text by line and byte budget.
+func TruncateText(text string, maxLines, maxBytes int, tail bool) (string, Truncation) {
+	if maxLines <= 0 {
+		maxLines = DefaultMaxLines
+	}
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxBytes
+	}
+
+	lines := strings.Split(text, "\n")
+	totalBytes := len(text)
+	source := lines
+	if tail {
+		source = slices.Clone(lines)
+		slices.Reverse(source)
+	}
+
+	out := make([]string, 0, min(maxLines, len(lines)))
+	outputBytes := 0
+	for _, line := range source {
+		if len(out) >= maxLines {
+			break
+		}
+		lineBytes := len(line) + 1
+		if outputBytes+lineBytes > maxBytes {
+			break
+		}
+		out = append(out, line)
+		outputBytes += lineBytes
+	}
+
+	if tail {
+		slices.Reverse(out)
+	}
+
+	if len(out) == 0 && len(lines) > 0 {
+		target := lines[0]
+		if tail {
+			target = lines[len(lines)-1]
+		}
+		encoded := []byte(target)
+		if len(encoded) > maxBytes {
+			if tail {
+				encoded = encoded[len(encoded)-maxBytes:]
+			} else {
+				encoded = encoded[:maxBytes]
+			}
+		}
+		content := string(bytes.ToValidUTF8(encoded, nil))
+		return content, Truncation{
+			Truncated:   true,
+			TruncatedBy: "bytes",
+			OutputLines: 1,
+			OutputBytes: len(encoded),
+		}
+	}
+
+	content := strings.Join(out, "\n")
+	truncated := len(out) < len(lines) || outputBytes < totalBytes
+	truncatedBy := ""
+	if truncated {
+		if len(out) < len(lines) {
+			if len(out) == maxLines {
+				truncatedBy = "lines"
+			} else {
+				truncatedBy = "bytes"
+			}
+		} else {
+			truncatedBy = "bytes"
+		}
+	}
+
+	return content, Truncation{
+		Truncated:   truncated,
+		TruncatedBy: truncatedBy,
+		OutputLines: len(out),
+		OutputBytes: outputBytes,
+	}
+}
+
+// Read reads a text file or image.
+func (e *Executor) Read(path string, offset, limit int) Result {
+	filePath := ResolvePath(path, e.cwd)
+
+	info, err := os.Stat(filePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return errorResult("error: file not found: " + path)
+		}
+		return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
+	}
+	if info.IsDir() {
+		return errorResult("error: not a file: " + path)
+	}
+
+	if imageType := detectImageMIMEType(filePath, readFileHeader(filePath, 16)); imageType != "" {
+		if !e.supportsImageInput {
+			return errorResult("error: image input is not supported by the current model")
+		}
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
+		}
+		summary := "Read image file [" + imageType + "]"
+		return Result{
+			Output: summary,
+			Content: []message.Block{
+				message.TextBlock(summary, nil),
+				message.ImageBlock(base64.StdEncoding.EncodeToString(data), imageType, filepath.Base(filePath), nil),
+			},
+		}
+	}
+
+	startLine := 1
+	if offset > 0 {
+		startLine = offset
+	}
+	lineLimit := DefaultMaxLines
+	if limit > 0 {
+		lineLimit = limit
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
+	}
+	defer func() { _ = file.Close() }()
+
+	reader := bufio.NewReader(file)
+	lines := []string{}
+	totalLines := 0
+	nextOffset := 0
+	firstShortened := 0
+	shortenedLines := 0
+
+	for {
+		rawLine, err := reader.ReadBytes('\n')
+		if len(rawLine) > 0 {
+			if !utf8.Valid(rawLine) {
+				return errorResult("error: file is not valid utf-8 text: " + path)
+			}
+			totalLines++
+			if totalLines >= startLine {
+				if len(lines) >= lineLimit {
+					nextOffset = totalLines
+					break
+				}
+				line := strings.TrimRight(string(rawLine), "\r\n")
+				if len(line) > ReadMaxLineChars {
+					runes := []rune(line)
+					if len(runes) <= ReadMaxLineChars {
+						lines = append(lines, line)
+						continue
+					}
+					if firstShortened == 0 {
+						firstShortened = totalLines
+					}
+					shortenedLines++
+					line = string(runes[:ReadMaxLineChars]) + " ... [line truncated]"
+				}
+				lines = append(lines, line)
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
+		}
+	}
+	if totalLines < startLine && (totalLines != 0 || startLine != 1) {
+		return errorResult(fmt.Sprintf("error: offset %d beyond end of file (%d lines)", offset, totalLines))
+	}
+
+	parts := []string{}
+	content := strings.Join(lines, "\n")
+	if content != "" {
+		parts = append(parts, content)
+	}
+	if nextOffset > 0 {
+		parts = append(parts, fmt.Sprintf("[Showing lines %d-%d. Use offset=%d to continue.]", startLine, nextOffset-1, nextOffset))
+	}
+	if firstShortened > 0 {
+		prefix := fmt.Sprintf("[Line %d was shortened to %d chars.", firstShortened, ReadMaxLineChars)
+		if shortenedLines > 1 {
+			prefix = fmt.Sprintf("[%d lines were shortened to %d chars. First shortened line: %d.", shortenedLines, ReadMaxLineChars, firstShortened)
+		}
+		parts = append(parts, prefix+
+			"\nUse bash to inspect it in bytes:\n"+
+			fmt.Sprintf("sed -n '%dp' %s | head -c 2000\n", firstShortened, shellQuote(filePath))+
+			fmt.Sprintf("sed -n '%dp' %s | tail -c +2001 | head -c 2000]", firstShortened, shellQuote(filePath)))
+	}
+
+	content = strings.Join(parts, "\n\n")
+	return Result{Output: content}
+}
+
+// Write writes a file atomically.
+func (e *Executor) Write(path, content string) Result {
+	filePath := ResolvePath(path, e.cwd)
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		return errorResult(fmt.Sprintf("error: failed to write file: %v", err))
+	}
+	if err := atomicWriteText(filePath, content, ""); err != nil {
+		return errorResult(fmt.Sprintf("error: failed to write file: %v", err))
+	}
+	return Result{Output: "Wrote " + path}
+}
+
+type editSpec struct {
+	oldText string
+	newText string
+	prefix  string
+	index   int
+}
+
+type editMatch struct {
+	start   int
+	end     int
+	newText string
+	index   int
+}
+
+// Edit applies one or more replacements against the original file content.
+func (e *Executor) Edit(path string, edits []map[string]string) Result {
+	if len(edits) == 0 {
+		return errorResult("error: edits must not be empty")
+	}
+
+	filePath := ResolvePath(path, e.cwd)
+	info, err := os.Stat(filePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return errorResult("error: file not found: " + path)
+		}
+		return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
+	}
+	if info.IsDir() {
+		return errorResult("error: not a file: " + path)
+	}
+
+	multi := len(edits) > 1
+	items := make([]editSpec, 0, len(edits))
+	for i, edit := range edits {
+		oldText := edit["oldText"]
+		newText := edit["newText"]
+		prefix := ""
+		if multi {
+			prefix = fmt.Sprintf("edits[%d]: ", i)
+		}
+		if oldText == "" {
+			return errorResult("error: " + prefix + "oldText must not be empty")
+		}
+		if oldText == newText {
+			return errorResult("error: " + prefix + "oldText and newText are identical")
+		}
+		items = append(items, editSpec{oldText: oldText, newText: newText, prefix: prefix, index: i})
+	}
+
+	readMTime := info.ModTime().UnixNano()
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return errorResult(fmt.Sprintf("error: failed to read file: %v", err))
+	}
+	text := string(data)
+	newline := ""
+	if strings.Contains(text, "\r\n") {
+		newline = "\r\n"
+	}
+
+	matches := make([]editMatch, 0, len(items))
+	var normalizedText string
+	var indexMap []int
+	normalizedLoaded := false
+
+	for _, edit := range items {
+		exactCount := strings.Count(text, edit.oldText)
+		if exactCount > 1 {
+			return errorResult(fmt.Sprintf("error: %soldText occurs %d times; provide a more specific oldText", edit.prefix, exactCount))
+		}
+		if exactCount == 1 {
+			start := strings.Index(text, edit.oldText)
+			matches = append(matches, editMatch{
+				start:   start,
+				end:     start + len(edit.oldText),
+				newText: edit.newText,
+				index:   edit.index,
+			})
+			continue
+		}
+
+		if !normalizedLoaded {
+			normalizedText, indexMap = normalizeText(text)
+			normalizedLoaded = true
+		}
+		normalizedOld, _ := normalizeText(edit.oldText)
+		normalizedCount := strings.Count(normalizedText, normalizedOld)
+		if normalizedCount > 1 {
+			return errorResult(fmt.Sprintf("error: %soldText occurs %d times after normalization; provide a more specific oldText", edit.prefix, normalizedCount))
+		}
+		if normalizedCount == 0 {
+			modelText := "error: " + edit.prefix + "oldText not found"
+			if hint := closestLineHint(text, edit.oldText); hint != "" {
+				modelText += ". closest line: " + hint
+			}
+			return errorResult(modelText)
+		}
+
+		start := strings.Index(normalizedText, normalizedOld)
+		end := start + len(normalizedOld)
+		origStart := indexMap[start]
+		origEnd := len(text)
+		if end < len(indexMap) {
+			origEnd = indexMap[end]
+		}
+		matches = append(matches, editMatch{
+			start:   origStart,
+			end:     origEnd,
+			newText: edit.newText,
+			index:   edit.index,
+		})
+	}
+
+	slices.SortFunc(matches, func(a, b editMatch) int {
+		return cmp.Compare(a.start, b.start)
+	})
+	for i := 1; i < len(matches); i++ {
+		if matches[i-1].end > matches[i].start {
+			return errorResult(fmt.Sprintf("error: edits[%d] and edits[%d] overlap", matches[i-1].index, matches[i].index))
+		}
+	}
+
+	updated := text
+	for _, match := range slices.Backward(matches) {
+		updated = updated[:match.start] + match.newText + updated[match.end:]
+	}
+	if updated == text {
+		return errorResult("error: edits produced no changes")
+	}
+
+	patch, addedLines, removedLines, err := buildEditPatch(path, text, updated)
+	if err != nil {
+		return errorResult(fmt.Sprintf("error: failed to build edit patch: %v", err))
+	}
+
+	summary := "Updated " + path
+	if len(items) > 1 {
+		summary = fmt.Sprintf("Updated %s (%d edits)", path, len(items))
+	}
+
+	infoAfterRead, err := os.Stat(filePath)
+	if err == nil && infoAfterRead.ModTime().UnixNano() != readMTime {
+		return errorResult("error: file changed while editing; read it again and retry")
+	}
+	if err := atomicWriteText(filePath, updated, newline); err != nil {
+		return errorResult(fmt.Sprintf("error: failed to write file: %v", err))
+	}
+
+	return Result{
+		Output: summary,
+		Metadata: map[string]any{
+			"patch":         patch,
+			"added_lines":   addedLines,
+			"removed_lines": removedLines,
+		},
+	}
+}
+
+// Bash runs a shell command and streams output.
+func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput OutputCallback) Result {
+	timeout := int(BashTimeout / time.Second)
+	if timeoutSeconds > 0 {
+		timeout = timeoutSeconds
+	}
+
+	cmd := exec.Command("/bin/sh", "-c", command)
+	cmd.Dir = e.cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	reader, writer := io.Pipe()
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+
+	if err := cmd.Start(); err != nil {
+		_ = reader.Close()
+		_ = writer.Close()
+		return errorResult("error: " + err.Error())
+	}
+	waited := false
+	killed := false
+	e.trackCmd(cmd)
+	defer func() {
+		_ = reader.Close()
+		_ = writer.Close()
+		e.untrackCmd(cmd)
+		if !waited && !killed {
+			killCmdTree(cmd)
+		}
+	}()
+
+	lines := make(chan string, 256)
+	readerErrors := make(chan error, 1)
+	go func() {
+		defer close(lines)
+		buffered := bufio.NewReader(reader)
+		for {
+			line, err := buffered.ReadString('\n')
+			if len(line) > 0 {
+				lines <- strings.TrimRight(line, "\n")
+			}
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			if err != nil {
+				readerErrors <- err
+				return
+			}
+		}
+	}()
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- cmd.Wait()
+		_ = writer.Close()
+	}()
+
+	logPath := filepath.Join(e.toolOutputDir, "bash-"+toolCallID+".log")
+	keptLines := []string{}
+	keptBytes := 0
+	totalLineCount := 0
+	tailLines := []string{}
+	var logFile *os.File
+	var savedOutputPath string
+	doneReading := false
+	timer := time.NewTimer(time.Duration(timeout) * time.Second)
+	defer timer.Stop()
+
+	for !doneReading {
+		select {
+		case <-timer.C:
+			killCmdTree(cmd)
+			killed = true
+			if logFile != nil {
+				_ = logFile.Close()
+			}
+			return Result{Output: fmt.Sprintf("error: timeout after %ds", timeout), IsError: true}
+		case err := <-readerErrors:
+			if logFile != nil {
+				_ = logFile.Close()
+			}
+			return errorResult("error: " + err.Error())
+		case line, ok := <-lines:
+			if !ok {
+				doneReading = true
+				continue
+			}
+			totalLineCount++
+			keptBytes += len(line) + 1
+
+			if logFile == nil {
+				keptLines = append(keptLines, line)
+				if keptBytes > BashMaxInMemoryBytes {
+					if err := os.MkdirAll(e.toolOutputDir, 0o755); err == nil {
+						file, fileErr := os.Create(logPath)
+						if fileErr == nil {
+							logFile = file
+							savedOutputPath = logPath
+							if len(keptLines) > 0 {
+								_, _ = io.WriteString(logFile, strings.Join(keptLines, "\n"))
+								_, _ = io.WriteString(logFile, "\n")
+								tailLines = append(tailLines, keptLines...)
+								if len(tailLines) > DefaultMaxLines {
+									tailLines = append([]string(nil), tailLines[len(tailLines)-DefaultMaxLines:]...)
+								}
+							}
+							keptLines = nil
+						}
+					}
+				}
+			} else {
+				tailLines = append(tailLines, line)
+				if len(tailLines) > DefaultMaxLines {
+					tailLines = append([]string(nil), tailLines[len(tailLines)-DefaultMaxLines:]...)
+				}
+				_, _ = io.WriteString(logFile, line)
+				_, _ = io.WriteString(logFile, "\n")
+			}
+
+			if onOutput != nil {
+				onOutput(line)
+			}
+		}
+	}
+
+	waitErr := <-waitDone
+	waited = true
+	if logFile != nil {
+		_ = logFile.Close()
+	}
+	if waitErr != nil {
+		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
+			return Result{Output: "error: cancelled", IsError: true}
+		}
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) && exitErr.ExitCode() < 0 {
+			return Result{Output: "error: cancelled", IsError: true}
+		}
+	}
+
+	rawOutput := strings.Join(keptLines, "\n")
+	if logFile != nil || len(tailLines) > 0 {
+		rawOutput = strings.Join(tailLines, "\n")
+	}
+	output := strings.TrimSpace(rawOutput)
+	if output == "" {
+		output = "(empty)"
+	}
+	content, trunc := TruncateText(output, DefaultMaxLines, DefaultMaxBytes, true)
+	if savedOutputPath == "" && trunc.Truncated {
+		if err := os.MkdirAll(e.toolOutputDir, 0o755); err == nil {
+			if err := os.WriteFile(logPath, []byte(rawOutput), 0o644); err == nil {
+				savedOutputPath = logPath
+			}
+		}
+	}
+
+	result := content
+	wasTruncated := savedOutputPath != "" || trunc.Truncated
+	if wasTruncated {
+		notice := ""
+		if trunc.TruncatedBy == "bytes" {
+			if totalLineCount <= 1 {
+				notice = fmt.Sprintf("[Truncated: showing last %dKB of output (%dKB limit).", DefaultMaxBytes/1024, DefaultMaxBytes/1024)
+			} else {
+				notice = fmt.Sprintf("[Truncated: showing tail output (%dKB limit).", DefaultMaxBytes/1024)
+			}
+		} else {
+			notice = fmt.Sprintf("[Truncated: last %d of %d lines.", trunc.OutputLines, totalLineCount)
+		}
+		if savedOutputPath != "" {
+			notice += " Full output: " + savedOutputPath + "]"
+		} else {
+			notice += "]"
+		}
+		result += "\n\n" + notice
+	}
+
+	if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() != 0 {
+		result += fmt.Sprintf("\n\n[exit code: %d]", cmd.ProcessState.ExitCode())
+	}
+	return Result{Output: result}
+}
+
+// DetectImageMIMEType returns a supported image type.
+func DetectImageMIMEType(path string) string {
+	return detectImageMIMEType(path, readFileHeader(path, 16))
+}
+
+func detectImageMIMEType(path string, header []byte) string {
+	switch {
+	case bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")):
+		return "image/png"
+	case bytes.HasPrefix(header, []byte("\xff\xd8\xff")):
+		return "image/jpeg"
+	case bytes.HasPrefix(header, []byte("GIF87a")), bytes.HasPrefix(header, []byte("GIF89a")):
+		return "image/gif"
+	case len(header) >= 12 && bytes.HasPrefix(header, []byte("RIFF")) && bytes.Equal(header[8:12], []byte("WEBP")):
+		return "image/webp"
+	}
+
+	switch mt := mime.TypeByExtension(filepath.Ext(path)); mt {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return mt
+	default:
+		return ""
+	}
+}
+
+// DetectDocumentMIMEType returns a supported document type.
+func DetectDocumentMIMEType(path string) string {
+	return detectDocumentMIMEType(path, readFileHeader(path, 5))
+}
+
+func detectDocumentMIMEType(path string, header []byte) string {
+	if bytes.HasPrefix(header, []byte("%PDF-")) {
+		return "application/pdf"
+	}
+	if mime.TypeByExtension(filepath.Ext(path)) == "application/pdf" {
+		return "application/pdf"
+	}
+	return ""
+}
+
+func readFileHeader(path string, size int) []byte {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+
+	header := make([]byte, size)
+	n, err := file.Read(header)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil
+	}
+	return header[:n]
+}
+
+func atomicWriteText(path, content, newline string) error {
+	tmp := path + ".tmp"
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	if newline == "\r\n" {
+		normalized = strings.ReplaceAll(normalized, "\n", "\r\n")
+	}
+	if err := os.WriteFile(tmp, []byte(normalized), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func shellQuote(text string) string {
+	return "'" + strings.ReplaceAll(text, "'", "'\"'\"'") + "'"
+}
+
+func buildEditPatch(path, original, updated string) (string, int, int, error) {
+	patch, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
+		A:        difflib.SplitLines(original),
+		B:        difflib.SplitLines(updated),
+		FromFile: "a/" + path,
+		ToFile:   "b/" + path,
+		Context:  3,
+		Eol:      "\n",
+	})
+	if err != nil {
+		return "", 0, 0, err
+	}
+
+	addedLines := 0
+	removedLines := 0
+	for i, line := range strings.Split(patch, "\n") {
+		if i < 2 {
+			continue
+		}
+		if strings.HasPrefix(line, "+") {
+			addedLines++
+		} else if strings.HasPrefix(line, "-") {
+			removedLines++
+		}
+	}
+	return patch, addedLines, removedLines, nil
+}
+
+func closestLineHint(text, needle string) string {
+	needle = strings.TrimSpace(needle)
+	if needle == "" {
+		return ""
+	}
+
+	bestRatio := 0.0
+	bestLine := ""
+	for line := range strings.SplitSeq(text, "\n") {
+		candidate := strings.TrimSpace(strings.TrimRight(line, "\r"))
+		if candidate == "" {
+			continue
+		}
+		ratio := similarityRatio(needle, candidate)
+		if ratio > bestRatio {
+			bestRatio = ratio
+			bestLine = candidate
+			if ratio >= 1 {
+				break
+			}
+		}
+	}
+	if bestRatio < 0.6 || bestLine == "" {
+		return ""
+	}
+	if len(bestLine) > 120 {
+		return bestLine[:117] + "..."
+	}
+	return bestLine
+}
+
+func similarityRatio(a, b string) float64 {
+	ar := []rune(a)
+	br := []rune(b)
+	if len(ar) == 0 && len(br) == 0 {
+		return 1
+	}
+	if len(ar) == 0 || len(br) == 0 {
+		return 0
+	}
+
+	prev := make([]int, len(br)+1)
+	curr := make([]int, len(br)+1)
+	for i := 1; i <= len(ar); i++ {
+		curr[0] = i
+		for j := 1; j <= len(br); j++ {
+			cost := 0
+			if ar[i-1] != br[j-1] {
+				cost = 1
+			}
+			curr[j] = min(prev[j]+1, min(curr[j-1]+1, prev[j-1]+cost))
+		}
+		copy(prev, curr)
+	}
+	maxLen := max(len(ar), len(br))
+	return 1 - float64(prev[len(br)])/float64(maxLen)
+}
+
+func normalizeText(text string) (string, []int) {
+	var builder strings.Builder
+	indexMap := make([]int, 0, len(text))
+	pos := 0
+	for _, line := range splitLinesKeepEnds(text) {
+		content := strings.TrimRight(line, "\r\n")
+		trimmed := strings.TrimRight(content, " \t")
+		builder.WriteString(trimmed)
+		for i := range len(trimmed) {
+			indexMap = append(indexMap, pos+i)
+		}
+		if len(content) != len(line) {
+			builder.WriteByte('\n')
+			indexMap = append(indexMap, pos+len(content))
+		}
+		pos += len(line)
+	}
+	return builder.String(), indexMap
+}
+
+func splitLinesKeepEnds(text string) []string {
+	if text == "" {
+		return nil
+	}
+	lines := []string{}
+	start := 0
+	for start < len(text) {
+		end := start
+		for end < len(text) && text[end] != '\n' && text[end] != '\r' {
+			end++
+		}
+		if end == len(text) {
+			lines = append(lines, text[start:end])
+			break
+		}
+		if text[end] == '\r' && end+1 < len(text) && text[end+1] == '\n' {
+			end += 2
+		} else {
+			end++
+		}
+		lines = append(lines, text[start:end])
+		start = end
+	}
+	return lines
 }

@@ -18,9 +18,9 @@ Current sync: Python `main` reviewed through `b7b4c46`; `web/` is aligned throug
 mycode-go/
   cmd/mycode-go/              # CLI: run, web, session list, --version
   internal/agent/             # agent loop and compact replay
-  internal/core/              # transport-agnostic service layer and RunManager
+  internal/core/              # transport-agnostic service layer, RunManager, workspace browser
   internal/message/           # canonical block-based message model
-  internal/tools/             # the 4 built-in tools and execution
+  internal/tools/             # the 4 built-in tools and execution; keep implementation in tools.go
   internal/permissions/       # CLI/web tool permission policy
   internal/session/           # append-only JSONL store, compact, rewind, repair
   internal/config/            # layered config loading and provider resolution
@@ -32,7 +32,6 @@ mycode-go/
     openai_responses.go       # openai
     openai_chat.go            # openai_chat, deepseek, zai, openrouter
   internal/server/            # HTTP adapter and SSE framing
-  internal/workspace/         # workspace browser
 
 web/src/                      # shared React + Vite UI from Python main
   hooks/useChat.ts            # chat state + SSE streaming
