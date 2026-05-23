@@ -26,9 +26,11 @@ const (
 	defaultCompactThreshold = 0.8
 )
 
-var validReasoningEfforts = []string{"none", "low", "medium", "high", "xhigh"}
-var validPermissionLevels = []string{"readonly", "safe", "standard", "yolo"}
-var validPermissionModes = []string{"ask", "deny"}
+var (
+	validReasoningEfforts = []string{"none", "low", "medium", "high", "xhigh"}
+	validPermissionLevels = []string{"readonly", "safe", "standard", "yolo"}
+	validPermissionModes  = []string{"ask", "deny"}
+)
 
 var lookupModelMetadata = models.Lookup
 
@@ -1092,7 +1094,7 @@ func normalizePermissionMode(value any) (string, error) {
 	return "", fmt.Errorf("unsupported permission mode %q; supported: %s", asString(value), strings.Join(validPermissionModes, ", "))
 }
 
-func parseConfigAPIKey(value any) (literal string, envVar string) {
+func parseConfigAPIKey(value any) (literal, envVar string) {
 	text := strings.TrimSpace(asString(value))
 	if text == "" {
 		return "", ""

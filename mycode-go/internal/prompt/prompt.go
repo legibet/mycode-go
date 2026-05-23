@@ -11,9 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/util"
-	"gopkg.in/yaml.v3"
 )
 
 const (

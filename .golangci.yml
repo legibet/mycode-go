@@ -2,22 +2,73 @@ version: "2"
 
 run:
   timeout: 5m
+  tests: true
+  go: "1.26"
 
 linters:
   default: none
   enable:
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - containedctx
     - errcheck
-    - govet
     - copyloopvar
-    - intrange
-    - modernize
+    - dupword
+    - durationcheck
+    - errorlint
+    - fatcontext
+    - gocheckcompilerdirectives
+    - govet
     - ineffassign
+    - intrange
+    - makezero
     - misspell
+    - modernize
+    - nolintlint
+    - nosprintfhostport
+    - predeclared
     - staticcheck
     - unconvert
     - unused
+    - usestdlibvars
+    - usetesting
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    generated: strict
+    presets:
+      - comments
+      - common-false-positives
 
 formatters:
   enable:
+    - gci
     - gofmt
+    - gofumpt
     - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/legibet/mycode-go)
+        - blank
+        - dot
+      custom-order: true
+    gofmt:
+      simplify: true
+    gofumpt:
+      module-path: github.com/legibet/mycode-go
+      extra-rules: true
+    goimports:
+      local-prefixes:
+        - github.com/legibet/mycode-go
+
+output:
+  sort-order:
+    - file
+    - linter

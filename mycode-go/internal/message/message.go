@@ -66,7 +66,7 @@ func DocumentBlock(data, mimeType, name string, meta map[string]any) Block {
 
 // ToolUseBlock keeps empty input as {} so persisted tool_use blocks have a
 // stable shape across runtimes.
-func ToolUseBlock(id, name string, input map[string]any, meta map[string]any) Block {
+func ToolUseBlock(id, name string, input, meta map[string]any) Block {
 	inputCopy := maps.Clone(input)
 	if inputCopy == nil {
 		inputCopy = map[string]any{}

@@ -14,8 +14,10 @@ import (
 	"github.com/legibet/mycode-go/internal/message"
 )
 
-const googleDummyThoughtSignature = "skip_thought_signature_validator"
-const googleRequestTimeout = 300 * time.Second
+const (
+	googleDummyThoughtSignature = "skip_thought_signature_validator"
+	googleRequestTimeout        = 300 * time.Second
+)
 
 type googleAdapter struct {
 	baseAdapter

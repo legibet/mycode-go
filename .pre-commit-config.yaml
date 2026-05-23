@@ -17,18 +17,16 @@ repos:
       - id: markdownlint
         args: ["--dot", "--fix", "--disable", "MD013", "MD040", "--"]
 
-  - repo: local
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.12.2
     hooks:
-      - id: gofmt
-        name: gofmt
-        entry: make fmt-go
-        language: system
-        pass_filenames: false
-      - id: golangci-lint
-        name: golangci-lint
-        entry: make lint-go
-        language: system
-        pass_filenames: false
+      - id: golangci-lint-fmt
+        args: ["./mycode-go/..."]
+        files: ^mycode-go/.*\.go$
+      - id: golangci-lint-full
+        args: ["./mycode-go/..."]
+        files: ^mycode-go/.*\.go$
+      - id: golangci-lint-config-verify
 
   - repo: https://github.com/biomejs/pre-commit
     rev: v2.4.15

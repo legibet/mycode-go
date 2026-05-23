@@ -8,11 +8,12 @@ import (
 	"maps"
 	"strings"
 
-	"github.com/legibet/mycode-go/internal/message"
-	"github.com/legibet/mycode-go/internal/tools"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	oparam "github.com/openai/openai-go/v3/packages/param"
+
+	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/internal/tools"
 )
 
 type chatToolCallState struct {

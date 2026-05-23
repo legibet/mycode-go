@@ -276,7 +276,7 @@ func messageNativeMeta(msg message.Message) map[string]any {
 	return raw
 }
 
-func loadImageBlockPayload(block message.Block) (mimeType string, data string, err error) {
+func loadImageBlockPayload(block message.Block) (mimeType, data string, err error) {
 	if block.MIMEType == "" {
 		return "", "", fmt.Errorf("image block is missing mime_type")
 	}
@@ -286,7 +286,7 @@ func loadImageBlockPayload(block message.Block) (mimeType string, data string, e
 	return block.MIMEType, block.Data, nil
 }
 
-func loadDocumentBlockPayload(block message.Block) (mimeType string, data string, name string, err error) {
+func loadDocumentBlockPayload(block message.Block) (mimeType, data, name string, err error) {
 	if block.MIMEType == "" {
 		return "", "", "", fmt.Errorf("document block is missing mime_type")
 	}

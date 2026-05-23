@@ -11,14 +11,17 @@ import (
 	"testing"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
-	"github.com/legibet/mycode-go/internal/message"
-	"github.com/legibet/mycode-go/internal/tools"
 	"github.com/openai/openai-go/v3/responses"
 	"google.golang.org/genai"
+
+	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/internal/tools"
 )
 
-var pdfBytes = []byte("%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
-var pngBytes = mustBase64Decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1X8AAAAASUVORK5CYII=")
+var (
+	pdfBytes = []byte("%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
+	pngBytes = mustBase64Decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1X8AAAAASUVORK5CYII=")
+)
 
 type payloadBuilder interface {
 	buildPayload(Request) (map[string]any, error)

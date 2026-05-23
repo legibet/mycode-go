@@ -4,10 +4,11 @@
 package models
 
 import (
-	_ "embed"
 	"encoding/json"
 	"strings"
 	"sync"
+
+	_ "embed"
 )
 
 //go:embed models_catalog.json
