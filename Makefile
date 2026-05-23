@@ -10,6 +10,7 @@ help:
 	@printf '%s\n' \
 		'Targets:' \
 		'  make dev          Start backend and frontend dev servers.' \
+		'  make run-web      Run the Go web command with go run.' \
 		'  make web-install  Install web dependencies.' \
 		'  make web-dev      Start only the frontend dev server.' \
 		'  make web-check    Run web lint, typecheck, and tests.' \
@@ -27,6 +28,10 @@ dev:
 	go -C $(GO_DIR) run ./cmd/mycode-go web --dev & \
 	pnpm --dir $(WEB_DIR) dev & \
 	wait
+
+.PHONY: run-web
+run-web:
+	go -C $(GO_DIR) run ./cmd/mycode-go web
 
 .PHONY: web-dev
 web-dev:

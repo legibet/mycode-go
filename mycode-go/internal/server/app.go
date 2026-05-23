@@ -10,7 +10,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -312,7 +311,7 @@ func (a *app) handleWorkspaceCWD(w http.ResponseWriter, _ *http.Request) {
 
 func (a *app) serveStatic(w http.ResponseWriter, r *http.Request) {
 	if a.webFS == nil {
-		http.NotFound(w, r)
+		http.Error(w, "web UI assets are not available; run with --dev, set MYCODE_WEB_DIST, or build with -tags embedweb", http.StatusServiceUnavailable)
 		return
 	}
 	requested := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
@@ -338,32 +337,14 @@ func (a *app) serveStaticFile(w http.ResponseWriter, r *http.Request, name strin
 	return true
 }
 
-// defaultWebRoot picks the first existing webdist directory: explicit arg,
-// $MYCODE_WEB_DIST, or well-known relative paths. Returns "" so callers fall
-// back to the embedded FS.
+// defaultWebRoot resolves only explicit static asset directories. Empty means
+// callers should use the embedded FS.
 func defaultWebRoot(webRoot string) string {
 	if resolved := resolveWebRoot(webRoot); resolved != "" {
 		return resolved
 	}
 	if raw := strings.TrimSpace(os.Getenv("MYCODE_WEB_DIST")); raw != "" {
 		if resolved := resolveWebRoot(raw); resolved != "" {
-			return resolved
-		}
-	}
-
-	var candidates []string
-	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, filepath.Join(cwd, "web", "dist"))
-		candidates = append(candidates, filepath.Join(cwd, "..", "web", "dist"))
-	}
-	if _, filename, _, ok := runtime.Caller(0); ok {
-		moduleRoot := filepath.Dir(filepath.Dir(filepath.Dir(filename)))
-		repoRoot := filepath.Dir(moduleRoot)
-		candidates = append(candidates, filepath.Join(moduleRoot, "web", "dist"))
-		candidates = append(candidates, filepath.Join(repoRoot, "web", "dist"))
-	}
-	for _, candidate := range candidates {
-		if resolved := resolveWebRoot(candidate); resolved != "" {
 			return resolved
 		}
 	}
