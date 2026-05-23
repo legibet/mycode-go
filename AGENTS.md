@@ -12,18 +12,6 @@ Always-loaded context for agent runs on this branch. Detailed specs live in `doc
 
 Current sync: Python `main` through `65bedf9`; `web/` is aligned through `65bedf9`; Go backend behavior is aligned through `65bedf9` where it affects external CLI/API/session/provider behavior.
 
-Priorities: small readable core · one message model · one agent loop · append-only sessions · provider adapters at the boundary · Python-compatible contracts.
-
-## Guardrails
-
-- 4 built-in tools only: `read`, `write`, `edit`, `bash`.
-- Provider-specific behavior stays inside adapters, never in the agent loop.
-- Sessions stay append-only and human-inspectable.
-- CLI and server stay thin wrappers over `mycode-go/internal/agent` and `internal/core`.
-- Keep `web/` byte-for-byte aligned with Python `main` unless a Go-branch-only web patch is explicitly documented.
-
-When in doubt, prefer the simpler and more explicit design.
-
 ## Project Layout
 
 ```text
@@ -142,10 +130,22 @@ When a sync needs both web and backend/docs/model changes, make separate commits
 
 ## Dev Workflow
 
+Make targets agents may use:
+
+- `make dev` — full-stack dev server.
+- `make web-check` — web checks.
+- `make web-build` — web build and sync.
+- `make check` — full verification.
+- `make build` — embedded binary.
+
+Raw commands:
+
 ```bash
 go -C mycode-go test ./...
 go -C mycode-go vet ./...
-cd mycode-go && golangci-lint run ./...
+go -C mycode-go test -race ./...
+golangci-lint fmt ./mycode-go/...
+golangci-lint run ./mycode-go/...
 go -C mycode-go run ./cmd/mycode-go web --dev
 
 pnpm --dir web install
@@ -160,12 +160,4 @@ Update bundled model metadata with:
 
 ```bash
 uv run --no-project python ./scripts/update_models_catalog.py
-```
-
-Compatibility smoke:
-
-```text
-Python writes a v7 session and Go must read it.
-Go writes a v7 session and Python must read it.
-Check tool_result.output and edit metadata patch/stats both ways.
 ```
