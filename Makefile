@@ -2,52 +2,76 @@ GO_DIR := mycode-go
 WEB_DIR := web
 DIST_DIR := $(CURDIR)/dist
 BIN := $(DIST_DIR)/mycode-go
-WEB_EMBED_TAG := embedweb
 
-.PHONY: fmt-go vet-go test-go test-go-race lint-go update-models-catalog web-install web-build web-check check build run web-dev clean
+.DEFAULT_GOAL := help
 
-fmt-go:
-	golangci-lint fmt ./$(GO_DIR)/...
+.PHONY: help
+help:
+	@printf '%s\n' \
+		'Targets:' \
+		'  make dev          Start backend and frontend dev servers.' \
+		'  make web-install  Install web dependencies.' \
+		'  make web-dev      Start only the frontend dev server.' \
+		'  make web-check    Run web lint, typecheck, and tests.' \
+		'  make web-build    Build web assets and sync them for embedding.' \
+		'  make fmt          Format Go code.' \
+		'  make lint         Lint Go code.' \
+		'  make test         Run Go tests.' \
+		'  make check        Run all Go and web checks.' \
+		'  make build        Build the embedded binary.' \
+		'  make clean        Remove build outputs.'
 
-vet-go:
-	go -C $(GO_DIR) vet ./...
+.PHONY: dev
+dev:
+	@trap 'kill 0' INT TERM EXIT; \
+	go -C $(GO_DIR) run ./cmd/mycode-go web --dev & \
+	pnpm --dir $(WEB_DIR) dev & \
+	wait
 
-test-go:
-	go -C $(GO_DIR) test ./...
+.PHONY: web-dev
+web-dev:
+	pnpm --dir $(WEB_DIR) dev
 
-test-go-race:
-	go -C $(GO_DIR) test -race ./...
-
-lint-go:
-	golangci-lint run ./$(GO_DIR)/...
-
-update-models-catalog:
-	uv run --no-project python ./scripts/update_models_catalog.py
-
+.PHONY: web-install
 web-install:
 	pnpm --dir $(WEB_DIR) install --frozen-lockfile
 
-web-build: web-install
-	pnpm --dir $(WEB_DIR) build
-	./scripts/sync_web_dist.sh
-
+.PHONY: web-check
 web-check:
 	pnpm --dir $(WEB_DIR) check
 	pnpm --dir $(WEB_DIR) typecheck
 	pnpm --dir $(WEB_DIR) test:run
 
-check: vet-go test-go-race lint-go web-check
+.PHONY: web-build
+web-build: web-install
+	pnpm --dir $(WEB_DIR) build
+	./scripts/sync_web_dist.sh
 
+.PHONY: fmt
+fmt:
+	golangci-lint fmt ./$(GO_DIR)/...
+
+.PHONY: lint
+lint:
+	golangci-lint run ./$(GO_DIR)/...
+
+.PHONY: test
+test:
+	go -C $(GO_DIR) test ./...
+
+.PHONY: check
+check:
+	go -C $(GO_DIR) vet ./...
+	go -C $(GO_DIR) test -race ./...
+	golangci-lint run ./$(GO_DIR)/...
+	$(MAKE) web-check
+
+.PHONY: build
 build: web-build
 	mkdir -p $(DIST_DIR)
-	go -C $(GO_DIR) build -tags $(WEB_EMBED_TAG) -o $(BIN) ./cmd/mycode-go
+	go -C $(GO_DIR) build -tags embedweb -o $(BIN) ./cmd/mycode-go
 
-run:
-	go -C $(GO_DIR) run ./cmd/mycode-go
-
-web-dev:
-	go -C $(GO_DIR) run ./cmd/mycode-go web --dev
-
+.PHONY: clean
 clean:
 	rm -rf $(DIST_DIR)
 	rm -rf $(GO_DIR)/internal/server/webdist

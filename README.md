@@ -132,7 +132,7 @@ mycode-go session list --all         list saved sessions for all cwd values
 
 ```bash
 git clone <repo> && cd mycode-go
-make test-go
+make test
 go -C mycode-go run ./cmd/mycode-go "hello"
 ```
 
@@ -140,16 +140,15 @@ Web development (backend + Vite dev server):
 
 ```bash
 make web-install
-make web-dev
-pnpm --dir web dev
+make dev
 ```
 
-Other useful shortcuts: `make web-check` · `make lint-go` · `make build`
+Other useful shortcuts: `make fmt` · `make lint` · `make check` · `make build`
 
 Refresh the bundled model catalog:
 
 ```bash
-make update-models-catalog
+uv run --no-project python ./scripts/update_models_catalog.py
 ```
 
 ## License

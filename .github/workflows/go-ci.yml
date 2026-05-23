@@ -32,10 +32,10 @@ jobs:
           go-version-file: mycode-go/go.mod
 
       - name: Vet Go
-        run: make vet-go
+        run: go -C mycode-go vet ./...
 
       - name: Test Go
-        run: make test-go-race
+        run: go -C mycode-go test -race ./...
 
       - name: Lint Go
         uses: golangci/golangci-lint-action@v9
