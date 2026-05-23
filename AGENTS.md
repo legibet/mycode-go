@@ -10,7 +10,7 @@ Always-loaded context for agent runs on this branch. Detailed specs live in `doc
 - `mycode-go` — this Go rewrite; tracks `main`, keeps Go internals idiomatic, and stays free of Wails code.
 - `mycode-go-wails` — Wails desktop adapter on top of `mycode-go`.
 
-Current sync: Python `main` through `65bedf9`; `web/` is aligned through `65bedf9`; Go backend behavior is aligned through `65bedf9` where it affects external CLI/API/session/provider behavior.
+Current sync: Python `main` reviewed through `b7b4c46`; `web/` is aligned through `b7b4c46`; Go backend behavior is aligned through `65bedf9` where it affects external CLI/API/session/provider behavior.
 
 ## Project Layout
 
