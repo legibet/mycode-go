@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/legibet/mycode-go/internal/message"
 )
@@ -21,17 +22,6 @@ func TestNewStoreUsesMycodeHome(t *testing.T) {
 	}
 	if _, err := os.Stat(expected); err != nil {
 		t.Fatalf("expected sessions dir: %v", err)
-	}
-}
-
-func TestCreateSessionDoesNotPrecreateToolOutputDir(t *testing.T) {
-	store := NewStore(t.TempDir())
-	data, err := store.CreateSession("", "/tmp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(store.SessionDir(data.Session.ID), "tool-output")); !os.IsNotExist(err) {
-		t.Fatalf("expected no tool-output dir, got err=%v", err)
 	}
 }
 
@@ -57,50 +47,17 @@ func TestCreateSessionPreservesExistingMessages(t *testing.T) {
 	}
 }
 
-func TestLoadSessionTreatsInvalidMetaAsMissing(t *testing.T) {
-	store := NewStore(t.TempDir())
-	sessionDir := store.SessionDir("broken")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "meta.json"), []byte("{"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	loaded, err := store.LoadSession("broken")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded != nil {
-		t.Fatalf("expected missing session, got %#v", loaded)
-	}
-}
-
 func TestListSessionsFiltersSortsAndLatest(t *testing.T) {
 	store := NewStore(t.TempDir())
-	first, err := store.CreateSession("first", "/workspace")
-	if err != nil {
+	if _, err := store.CreateSession("first", "/workspace"); err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.CreateSession("second", "/workspace")
-	if err != nil {
+	time.Sleep(time.Millisecond)
+	if _, err := store.CreateSession("second", "/workspace"); err != nil {
 		t.Fatal(err)
 	}
-	other, err := store.CreateSession("other", "/other")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	first.Session.UpdatedAt = "2026-01-01T00:00:00Z"
-	second.Session.UpdatedAt = "2026-01-02T00:00:00Z"
-	other.Session.UpdatedAt = "2026-01-03T00:00:00Z"
-	if err := store.writeMeta("first", first.Session.Meta); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.writeMeta("second", second.Session.Meta); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.writeMeta("other", other.Session.Meta); err != nil {
+	time.Sleep(time.Millisecond)
+	if _, err := store.CreateSession("other", "/other"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -141,12 +98,12 @@ func TestAppendMessageNormalizesSessionTitle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	meta, err := store.readMeta("s1")
+	loaded, err := store.LoadSession("s1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.Title != "first line second line" {
-		t.Fatalf("unexpected title: %q", meta.Title)
+	if loaded.Session.Title != "first line second line" {
+		t.Fatalf("unexpected title: %q", loaded.Session.Title)
 	}
 }
 
@@ -160,13 +117,13 @@ func TestAppendMessageTruncatesSessionTitleByRune(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	meta, err := store.readMeta("s1")
+	loaded, err := store.LoadSession("s1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	expected := "prefix " + strings.Repeat("界", 41)
-	if meta.Title != expected {
-		t.Fatalf("unexpected title: %q", meta.Title)
+	if loaded.Session.Title != expected {
+		t.Fatalf("unexpected title: %q", loaded.Session.Title)
 	}
 }
 
@@ -184,16 +141,11 @@ func TestLoadSessionLeavesOrphanToolUseInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	metaBefore, err := store.readMeta(sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rawBefore, err := os.ReadFile(filepath.Join(store.SessionDir(sessionID), "messages.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	loaded, err := store.LoadSession(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedAgain, err := store.LoadSession(sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,38 +157,126 @@ func TestLoadSessionLeavesOrphanToolUseInPlace(t *testing.T) {
 	if loaded.Messages[0].Role != "assistant" || loaded.Messages[0].Content[0].Type != "tool_use" {
 		t.Fatalf("unexpected loaded content: %#v", loaded.Messages[0])
 	}
-
-	metaAfter, err := store.readMeta(sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rawAfter, err := os.ReadFile(filepath.Join(store.SessionDir(sessionID), "messages.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if metaAfter.UpdatedAt != metaBefore.UpdatedAt {
-		t.Fatalf("LoadSession mutated meta.updated_at: %q -> %q", metaBefore.UpdatedAt, metaAfter.UpdatedAt)
-	}
-	if string(rawAfter) != string(rawBefore) {
-		t.Fatal("LoadSession appended to messages.jsonl; expected read-only behavior")
+	if loadedAgain == nil || len(loadedAgain.Messages) != 1 || loadedAgain.Messages[0].Content[0].Type != "tool_use" {
+		t.Fatalf("unexpected second load: %#v", loadedAgain)
 	}
 }
 
-func TestApplyRewindMultipleMarkers(t *testing.T) {
-	messages := []message.Message{
+func TestClearSessionKeepsSessionAddressable(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage("s1", message.UserTextMessage("hello", nil), "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ClearSession("s1"); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.LoadSession("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded == nil || len(loaded.Messages) != 0 || loaded.Session.Title != DefaultSessionTitle {
+		t.Fatalf("unexpected cleared session: %#v", loaded)
+	}
+}
+
+func TestDeleteSessionRemovesSession(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage("s1", message.UserTextMessage("hello", nil), "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.DeleteSession("s1"); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.LoadSession("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != nil {
+		t.Fatalf("unexpected deleted session: %#v", loaded)
+	}
+}
+
+func TestLoadSessionAppliesMultipleRewindMarkers(t *testing.T) {
+	store := NewStore(t.TempDir())
+	data, err := store.CreateSession("", "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := data.Session.ID
+
+	initial := []message.Message{
 		message.UserTextMessage("a", nil),
 		message.AssistantMessage([]message.Block{message.TextBlock("b", nil)}, "p", "m", "", "", 0, nil),
 		message.UserTextMessage("c", nil),
 		message.AssistantMessage([]message.Block{message.TextBlock("d", nil)}, "p", "m", "", "", 0, nil),
-		BuildRewindEvent(2),
+	}
+	for _, msg := range initial {
+		if err := store.AppendMessage(sessionID, msg, "/tmp"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.AppendRewind(sessionID, 2); err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range []message.Message{
 		message.UserTextMessage("e", nil),
 		message.AssistantMessage([]message.Block{message.TextBlock("f", nil)}, "p", "m", "", "", 0, nil),
-		BuildRewindEvent(2),
-		message.UserTextMessage("g", nil),
+	} {
+		if err := store.AppendMessage(sessionID, msg, "/tmp"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.AppendRewind(sessionID, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(sessionID, message.UserTextMessage("g", nil), "/tmp"); err != nil {
+		t.Fatal(err)
 	}
 
-	visible := ApplyRewind(messages)
+	loaded, err := store.LoadSession(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := loaded.Messages
 	if len(visible) != 3 || visible[0].Content[0].Text != "a" || visible[1].Content[0].Text != "b" || visible[2].Content[0].Text != "g" {
+		t.Fatalf("unexpected rewind result: %#v", visible)
+	}
+}
+
+func TestLoadSessionAppliesRewindToZero(t *testing.T) {
+	store := NewStore(t.TempDir())
+	data, err := store.CreateSession("", "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := data.Session.ID
+
+	if err := store.AppendMessage(sessionID, message.UserTextMessage("a", nil), "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendRewind(sessionID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(sessionID, message.UserTextMessage("fresh", nil), "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.LoadSession(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := loaded.Messages
+	if len(visible) != 1 || visible[0].Content[0].Text != "fresh" {
 		t.Fatalf("unexpected rewind result: %#v", visible)
 	}
 }

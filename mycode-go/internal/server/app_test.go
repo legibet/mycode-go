@@ -3,10 +3,12 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/legibet/mycode-go/internal/core"
@@ -168,6 +170,144 @@ func TestChatRejectsUnsupportedReasoningEffortAsBadRequest(t *testing.T) {
 	)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestChatCapabilityFailureDoesNotCreateSession(t *testing.T) {
+	isolateServerConfigTest(t)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	home := filepath.Join(t.TempDir(), "home", ".mycode")
+	t.Setenv("MYCODE_HOME", home)
+	writeServerJSON(t, filepath.Join(home, "config.json"), map[string]any{
+		"default": map[string]any{"provider": "openai", "model": "gpt-5.4"},
+		"providers": map[string]any{
+			"openai": map[string]any{
+				"models": map[string]any{
+					"gpt-5.4": map[string]any{"supports_image_input": false},
+				},
+			},
+		},
+	})
+
+	store := session.NewStore(t.TempDir())
+	handler := newApp(false, "", store, core.NewRunManager(nil))
+
+	recorder := performJSON(
+		t,
+		handler,
+		http.MethodPost,
+		"/api/chat",
+		map[string]any{
+			"session_id": "new-session",
+			"cwd":        t.TempDir(),
+			"provider":   "openai",
+			"model":      "gpt-5.4",
+			"input": []map[string]any{{
+				"type":      "image",
+				"data":      "abc",
+				"mime_type": "image/png",
+			}},
+		},
+	)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		Detail string `json:"detail"`
+	}
+	decodeBody(t, recorder, &payload)
+	if payload.Detail != "current model does not support image input" {
+		t.Fatalf("unexpected detail: %s", payload.Detail)
+	}
+	if loaded, err := store.LoadSession("new-session"); err != nil || loaded != nil {
+		t.Fatalf("unexpected session after rejected chat: %#v err=%v", loaded, err)
+	}
+}
+
+func TestChatTextAttachmentIsPersistedAsFileBlock(t *testing.T) {
+	isolateServerConfigTest(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		defer func() { _ = r.Body.Close() }()
+		_, _ = io.ReadAll(r.Body)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w,
+			"event: response.output_text.delta\n"+
+				"data: {\"type\":\"response.output_text.delta\",\"content_index\":0,\"delta\":\"ok\",\"item_id\":\"msg_1\",\"logprobs\":[],\"output_index\":0,\"sequence_number\":1}\n\n"+
+				"event: response.output_item.done\n"+
+				"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"logprobs\":[],\"text\":\"ok\"}],\"role\":\"assistant\"},\"output_index\":0,\"sequence_number\":2}\n\n"+
+				"event: response.completed\n"+
+				"data: {\"type\":\"response.completed\",\"sequence_number\":3,\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5.4\",\"object\":\"response\",\"output\":[],\"status\":\"completed\"}}\n\n",
+		)
+	}))
+	defer upstream.Close()
+
+	home := filepath.Join(t.TempDir(), "home", ".mycode")
+	t.Setenv("MYCODE_HOME", home)
+	writeServerJSON(t, filepath.Join(home, "config.json"), map[string]any{
+		"default": map[string]any{"provider": "openai", "model": "gpt-5.4"},
+		"providers": map[string]any{
+			"openai": map[string]any{
+				"api_key":  "sk-test",
+				"api_base": upstream.URL,
+			},
+		},
+	})
+
+	store := session.NewStore(t.TempDir())
+	handler := newApp(false, "", store, core.NewRunManager(nil))
+	recorder := performJSON(
+		t,
+		handler,
+		http.MethodPost,
+		"/api/chat",
+		map[string]any{
+			"session_id": "attachments",
+			"cwd":        t.TempDir(),
+			"input": []map[string]any{{
+				"type":          "text",
+				"text":          "print(1)",
+				"name":          `report <"draft">.py`,
+				"is_attachment": true,
+			}},
+		},
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var response struct {
+		Run map[string]any `json:"run"`
+	}
+	decodeBody(t, recorder, &response)
+	runID, _ := response.Run["id"].(string)
+	if runID == "" {
+		t.Fatalf("missing run id: %#v", response)
+	}
+
+	stream := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/runs/"+runID+"/stream", nil)
+	handler.ServeHTTP(stream, request)
+	if stream.Code != http.StatusOK {
+		t.Fatalf("expected stream 200, got %d: %s", stream.Code, stream.Body.String())
+	}
+
+	loaded, err := store.LoadSession("attachments")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded == nil || len(loaded.Messages) < 1 || len(loaded.Messages[0].Content) != 1 {
+		t.Fatalf("unexpected loaded session: %#v", loaded)
+	}
+	got := loaded.Messages[0].Content[0].Text
+	want := "<file name=\"report &lt;&quot;draft&quot;&gt;.py\">\nprint(1)\n</file>"
+	if got != want {
+		t.Fatalf("unexpected attachment block: %q", got)
 	}
 }
 
@@ -377,6 +517,74 @@ func TestSettingsPutWritesModelsAsDict(t *testing.T) {
 	override, ok := models["claude-sonnet-4-6"].(map[string]any)
 	if !ok || len(override) != 0 {
 		t.Fatalf("unexpected model override: %#v", models["claude-sonnet-4-6"])
+	}
+}
+
+func TestSettingsPutDropsEmptyFields(t *testing.T) {
+	isolateServerConfigTest(t)
+	home := filepath.Join(t.TempDir(), "home", ".mycode")
+	t.Setenv("MYCODE_HOME", home)
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "config.json")
+	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+
+	recorder := performJSON(t, handler, http.MethodPut, "/api/settings", map[string]any{
+		"config": map[string]any{
+			"default":    map[string]any{"provider": "", "model": nil},
+			"permission": nil,
+			"providers": map[string]any{
+				"anthropic": map[string]any{"api_key": "", "base_url": nil, "models": []any{}},
+			},
+		},
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	onDisk := map[string]any{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &onDisk); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(onDisk, map[string]any{"providers": map[string]any{"anthropic": map[string]any{}}}) {
+		t.Fatalf("unexpected on-disk config: %#v", onDisk)
+	}
+}
+
+func TestSettingsPutPersistsCompactThresholdFalse(t *testing.T) {
+	isolateServerConfigTest(t)
+	home := filepath.Join(t.TempDir(), "home", ".mycode")
+	t.Setenv("MYCODE_HOME", home)
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "config.json")
+	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+
+	recorder := performJSON(t, handler, http.MethodPut, "/api/settings", map[string]any{
+		"config": map[string]any{
+			"default": map[string]any{"compact_threshold": false},
+		},
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	onDisk := map[string]any{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &onDisk); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(onDisk, map[string]any{"default": map[string]any{"compact_threshold": false}}) {
+		t.Fatalf("unexpected on-disk config: %#v", onDisk)
 	}
 }
 

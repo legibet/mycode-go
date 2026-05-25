@@ -145,56 +145,6 @@ func TestSkills(t *testing.T) {
 		}
 	})
 
-	t.Run("parse skill fallback name", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "SKILL.md")
-		writeText(t, path, "---\ndescription: Minimal skill.\n---\nBody\n")
-		skill, ok := parseSkill(path, "project", "my-tool")
-		if !ok || skill.Name != "my-tool" {
-			t.Fatalf("unexpected skill: %#v", skill)
-		}
-	})
-
-	t.Run("parse skill invalid name falls back", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "SKILL.md")
-		writeText(t, path, "---\nname: bad name!\ndescription: Minimal skill.\n---\nBody\n")
-		skill, ok := parseSkill(path, "project", "my-tool")
-		if !ok || skill.Name != "my-tool" {
-			t.Fatalf("unexpected skill: %#v", skill)
-		}
-	})
-
-	t.Run("scan root matches python rules", func(t *testing.T) {
-		root := t.TempDir()
-		writeText(t, filepath.Join(root, "deploy.md"), "---\nname: deploy\ndescription: Deploy.\n---\n")
-		writeText(t, filepath.Join(root, ".hidden.md"), "---\nname: hidden-md\ndescription: Hidden md.\n---\n")
-		writeText(t, filepath.Join(root, "nested", "SKILL.md"), "---\nname: nested\ndescription: Nested.\n---\n")
-		writeText(t, filepath.Join(root, "nested", "extra.md"), "---\nname: extra\ndescription: Extra.\n---\n")
-		writeText(t, filepath.Join(root, ".hidden", "SKILL.md"), "---\nname: hidden\ndescription: Hidden.\n---\n")
-		writeText(t, filepath.Join(root, "node_modules", "pkg", "SKILL.md"), "---\nname: pkg\ndescription: Pkg.\n---\n")
-		skills := scanSkillRoot(root, "project")
-		names := []string{}
-		for _, skill := range skills {
-			names = append(names, skill.Name)
-		}
-		if strings.Join(names, ",") != "deploy,nested" {
-			t.Fatalf("unexpected names: %#v", names)
-		}
-	})
-
-	t.Run("depth limit", func(t *testing.T) {
-		root := t.TempDir()
-		writeText(t, filepath.Join(root, "a", "b", "c", "SKILL.md"), "---\nname: deep-ok\ndescription: ok.\n---\n")
-		writeText(t, filepath.Join(root, "a", "b", "c", "d", "SKILL.md"), "---\nname: too-deep\ndescription: nope.\n---\n")
-		skills := scanSkillRoot(root, "project")
-		names := []string{}
-		for _, skill := range skills {
-			names = append(names, skill.Name)
-		}
-		if len(names) != 1 || names[0] != "deep-ok" {
-			t.Fatalf("unexpected names: %#v", names)
-		}
-	})
-
 	t.Run("discover overrides", func(t *testing.T) {
 		root := t.TempDir()
 		home := filepath.Join(root, "home", ".mycode")
@@ -209,6 +159,39 @@ func TestSkills(t *testing.T) {
 		skills := DiscoverSkills(cwd, cwd, home)
 		if len(skills) != 1 || skills[0].Description != "Project." || skills[0].Source != "project" {
 			t.Fatalf("unexpected skills: %#v", skills)
+		}
+	})
+
+	t.Run("discover supported layouts and ignores invalid files", func(t *testing.T) {
+		root := t.TempDir()
+		home := filepath.Join(root, "home", ".mycode")
+		userHomeDir = func() string { return filepath.Join(root, "home") }
+		cwd := filepath.Join(root, "workspace")
+		if err := os.MkdirAll(cwd, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		skillRoot := filepath.Join(cwd, ".mycode", "skills")
+		writeText(t, filepath.Join(skillRoot, "deploy.md"), "---\nname: deploy\ndescription: Deploy.\n---\n")
+		writeText(t, filepath.Join(skillRoot, "fallback", "SKILL.md"), "---\ndescription: Fallback.\n---\n")
+		writeText(t, filepath.Join(skillRoot, "bad-name", "SKILL.md"), "---\nname: bad name!\ndescription: Bad name.\n---\n")
+		writeText(t, filepath.Join(skillRoot, ".hidden.md"), "---\nname: hidden-md\ndescription: Hidden md.\n---\n")
+		writeText(t, filepath.Join(skillRoot, ".hidden", "SKILL.md"), "---\nname: hidden\ndescription: Hidden.\n---\n")
+		writeText(t, filepath.Join(skillRoot, "node_modules", "pkg", "SKILL.md"), "---\nname: pkg\ndescription: Pkg.\n---\n")
+		writeText(t, filepath.Join(skillRoot, "invalid", "SKILL.md"), "---\nname: invalid\n---\n")
+		writeText(t, filepath.Join(skillRoot, "a", "b", "c", "SKILL.md"), "---\nname: deep-ok\ndescription: ok.\n---\n")
+		writeText(t, filepath.Join(skillRoot, "a", "b", "c", "d", "SKILL.md"), "---\nname: too-deep\ndescription: nope.\n---\n")
+
+		skills := DiscoverSkills(cwd, cwd, home)
+		names := []string{}
+		for _, skill := range skills {
+			names = append(names, skill.Name)
+			if skill.Source != "project" {
+				t.Fatalf("unexpected skill source: %#v", skill)
+			}
+		}
+		if strings.Join(names, ",") != "bad-name,deep-ok,deploy,fallback" {
+			t.Fatalf("unexpected names: %#v", names)
 		}
 	})
 

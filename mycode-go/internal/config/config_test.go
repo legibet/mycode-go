@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/legibet/mycode-go/internal/models"
 	"github.com/legibet/mycode-go/internal/provider"
 )
 
@@ -594,21 +593,6 @@ func TestResolveProviderUsesMetadataOverrides(t *testing.T) {
 	isolateConfigTest(t, home)
 	t.Setenv("OPENAI_API_KEY", "env-key")
 
-	oldLookup := lookupModelMetadata
-	lookupModelMetadata = func(providerType, model string) *models.Metadata {
-		return &models.Metadata{
-			Provider:           providerType,
-			Model:              model,
-			ContextWindow:      400000,
-			MaxOutputTokens:    128000,
-			SupportsReasoning:  new(true),
-			SupportsImageInput: new(false),
-		}
-	}
-	t.Cleanup(func() {
-		lookupModelMetadata = oldLookup
-	})
-
 	writeJSON(t, filepath.Join(home, "config.json"), `{
 		"providers": {
 			"openai": {
@@ -648,24 +632,19 @@ func TestResolveProviderUsesGlobalDefaultReasoningEffort(t *testing.T) {
 	isolateConfigTest(t, home)
 	t.Setenv("OPENAI_API_KEY", "env-key")
 
-	oldLookup := lookupModelMetadata
-	lookupModelMetadata = func(providerType, model string) *models.Metadata {
-		return &models.Metadata{
-			Provider:          providerType,
-			Model:             model,
-			ContextWindow:     400000,
-			MaxOutputTokens:   128000,
-			SupportsReasoning: new(true),
-		}
-	}
-	t.Cleanup(func() {
-		lookupModelMetadata = oldLookup
-	})
-
 	writeJSON(t, filepath.Join(home, "config.json"), `{
 		"default": {
 			"provider": "openai",
 			"reasoning_effort": "high"
+		},
+		"providers": {
+			"openai": {
+				"models": {
+					"gpt-5.4": {
+						"supports_reasoning": true
+					}
+				}
+			}
 		}
 	}`)
 

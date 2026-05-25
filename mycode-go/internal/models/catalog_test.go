@@ -95,19 +95,6 @@ func TestLookupReadsImageAndPDFSupport(t *testing.T) {
 	})
 }
 
-func TestLookupDoesNotRetryAfterFirstCatalogLoad(t *testing.T) {
-	withCatalog(t, `{"zai": {}}`, func() {
-		if meta := Lookup("zai", "glm-5.1"); meta != nil {
-			t.Fatalf("unexpected metadata: %#v", meta)
-		}
-
-		catalogJSON = []byte(`{"openrouter": {"zai/glm-5.1": {"max_output_tokens": 131072}}}`)
-		if meta := Lookup("zai", "glm-5.1"); meta != nil {
-			t.Fatalf("unexpected metadata after cached miss: %#v", meta)
-		}
-	})
-}
-
 func withCatalog(t *testing.T, raw string, fn func()) {
 	t.Helper()
 

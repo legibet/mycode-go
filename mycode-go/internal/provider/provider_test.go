@@ -267,6 +267,56 @@ func TestOpenAIResponsesToolCallStreamIgnoresTrailingEmptyEvent(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesPreservesInvalidToolArguments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		_, _ = io.ReadAll(r.Body)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w,
+			"event: response.output_item.done\n"+
+				"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"read\",\"arguments\":\"{not json\",\"status\":\"completed\"},\"output_index\":0,\"sequence_number\":1}\n\n"+
+				"event: response.completed\n"+
+				"data: {\"type\":\"response.completed\",\"sequence_number\":2,\"response\":{\"id\":\"resp_2\",\"model\":\"gpt-5.4-mini\",\"object\":\"response\",\"output\":[],\"status\":\"completed\"}}\n\n",
+		)
+	}))
+	defer server.Close()
+
+	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
+	stream := adapter.StreamTurn(t.Context(), Request{
+		Model:     "gpt-5.4-mini",
+		APIKey:    "sk-test",
+		APIBase:   server.URL,
+		MaxTokens: 64,
+		Messages:  []message.Message{message.UserTextMessage("use a tool", nil)},
+	})
+
+	var final *message.Message
+	for event := range stream {
+		if event.Type == "provider_error" {
+			t.Fatalf("unexpected provider error: %v", event.Err)
+		}
+		if event.Type == "message_done" {
+			final = event.Msg
+		}
+	}
+
+	if final == nil || len(final.Content) != 1 {
+		t.Fatalf("unexpected final message: %#v", final)
+	}
+	block := final.Content[0]
+	if block.Type != "tool_use" || block.ID != "call_1" || block.Name != "read" {
+		t.Fatalf("unexpected tool block: %#v", block)
+	}
+	if len(block.Input) != 0 {
+		t.Fatalf("expected empty tool input for invalid arguments, got %#v", block.Input)
+	}
+	native, _ := block.Meta["native"].(map[string]any)
+	if native["raw_arguments"] != "{not json" {
+		t.Fatalf("unexpected native metadata: %#v", block.Meta)
+	}
+}
+
 func TestOpenAIResponsesReplaysNativeOutputItemsForToolResults(t *testing.T) {
 	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
 	payload := mustPayload(t, adapter, Request{

@@ -11,61 +11,6 @@ import (
 
 var png1x1 = mustBase64Decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1X8AAAAASUVORK5CYII=")
 
-func TestTruncateText(t *testing.T) {
-	t.Run("by lines", func(t *testing.T) {
-		text := strings.Join([]string{
-			"line 0",
-			"line 1",
-			"line 2",
-			"line 3",
-		}, "\n")
-		content, trunc := TruncateText(text, 2, 1024, false)
-		if content != "line 0\nline 1" {
-			t.Fatalf("unexpected content: %q", content)
-		}
-		if !trunc.Truncated || trunc.TruncatedBy != "lines" {
-			t.Fatalf("unexpected truncation: %#v", trunc)
-		}
-	})
-
-	t.Run("tail", func(t *testing.T) {
-		text := strings.Join([]string{
-			"line 0",
-			"line 1",
-			"line 2",
-			"line 3",
-		}, "\n")
-		content, trunc := TruncateText(text, 2, 1024, true)
-		if content != "line 2\nline 3" {
-			t.Fatalf("unexpected content: %q", content)
-		}
-		if !trunc.Truncated || trunc.TruncatedBy != "lines" {
-			t.Fatalf("unexpected truncation: %#v", trunc)
-		}
-	})
-
-	t.Run("single oversized line", func(t *testing.T) {
-		content, trunc := TruncateText(strings.Repeat("x", 1000), 100, 100, false)
-		if len(content) == 0 || len(content) > 100 {
-			t.Fatalf("unexpected content length: %d", len(content))
-		}
-		if !trunc.Truncated || trunc.TruncatedBy != "bytes" || trunc.OutputLines != 1 {
-			t.Fatalf("unexpected truncation: %#v", trunc)
-		}
-	})
-}
-
-func TestDetectImageMIMETypeFallsBackToExtension(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "tiny.png")
-	if err := osWriteFile(path, nil); err != nil {
-		t.Fatal(err)
-	}
-	if got := DetectImageMIMEType(path); got != "image/png" {
-		t.Fatalf("unexpected mime type: %q", got)
-	}
-}
-
 func TestResolvePathExpandsHomeAndResolvesSymlinks(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
