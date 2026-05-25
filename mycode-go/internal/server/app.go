@@ -118,11 +118,13 @@ func (a *app) handleRunStream(w http.ResponseWriter, r *http.Request) {
 		}
 		after = value
 	}
-	pending, finished, err := a.svc.RunEventsAfter(runID, after)
+	batch, err := a.svc.RunEventsAfter(runID, after)
 	if err != nil {
 		writeCoreError(w, err)
 		return
 	}
+	pending := batch.Events
+	finished := batch.Finished
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -144,16 +146,18 @@ func (a *app) handleRunStream(w http.ResponseWriter, r *http.Request) {
 	lastSeq := after
 	for {
 		if pending == nil {
-			pending, finished, err = a.svc.RunEventsAfter(runID, lastSeq)
+			batch, err = a.svc.RunEventsAfter(runID, lastSeq)
 			if err != nil {
 				return
 			}
+			pending = batch.Events
+			finished = batch.Finished
 		}
 		for _, event := range pending {
-			if err := writeSSE(w, event); err != nil {
+			if err := writeSSE(w, event.Payload()); err != nil {
 				return
 			}
-			lastSeq = eventSeq(event, lastSeq)
+			lastSeq = event.Seq
 			flusher.Flush()
 		}
 
@@ -427,18 +431,4 @@ func setDevCORSHeaders(w http.ResponseWriter, r *http.Request) bool {
 	h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 	h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 	return true
-}
-
-// eventSeq falls back to the previous value so SSE replay sequence stays monotonic.
-func eventSeq(event map[string]any, fallback int) int {
-	switch v := event["seq"].(type) {
-	case int:
-		return v
-	case int64:
-		return int(v)
-	case float64:
-		return int(v)
-	default:
-		return fallback
-	}
 }

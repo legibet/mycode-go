@@ -263,12 +263,12 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 	return ChatResponse{Run: run, Session: sessionMeta}, nil
 }
 
-func (s *Service) RunEventsAfter(runID string, after int) ([]map[string]any, bool, error) {
-	pending, finished, ok := s.runs.pendingAfter(runID, after)
+func (s *Service) RunEventsAfter(runID string, after int) (RunEventBatch, error) {
+	batch, ok := s.runs.pendingAfter(runID, after)
 	if !ok {
-		return nil, false, statusError(http.StatusNotFound, "run not found")
+		return RunEventBatch{}, statusError(http.StatusNotFound, "run not found")
 	}
-	return pending, finished, nil
+	return batch, nil
 }
 
 func (s *Service) CancelRun(runID string) (CancelRunResponse, error) {

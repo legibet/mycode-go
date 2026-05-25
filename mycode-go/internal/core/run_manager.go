@@ -41,6 +41,30 @@ type EventPayload struct {
 
 type EventSink func(EventPayload)
 
+// RunEvent is one stored run event with the sequence owned by core.
+type RunEvent struct {
+	Seq  int
+	Type string
+	Data map[string]any
+}
+
+// Payload returns the SSE-compatible event payload shape.
+func (e RunEvent) Payload() map[string]any {
+	payload := maps.Clone(e.Data)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["seq"] = e.Seq
+	payload["type"] = e.Type
+	return payload
+}
+
+// RunEventBatch is the replay result for one after cursor.
+type RunEventBatch struct {
+	Events   []RunEvent
+	Finished bool
+}
+
 // ActiveRunError signals the session already has a run in flight.
 type ActiveRunError struct {
 	RunID string
@@ -56,22 +80,6 @@ type runSnapshot struct {
 	PendingEvents []map[string]any
 }
 
-type runEvent struct {
-	seq  int
-	typ  string
-	data map[string]any
-}
-
-func (e runEvent) payload() map[string]any {
-	payload := maps.Clone(e.data)
-	if payload == nil {
-		payload = map[string]any{}
-	}
-	payload["seq"] = e.seq
-	payload["type"] = e.typ
-	return payload
-}
-
 type runState struct {
 	id           string
 	sessionID    string
@@ -82,7 +90,7 @@ type runState struct {
 	mu         sync.RWMutex
 	status     runStatus
 	errorText  string
-	events     []runEvent
+	events     []RunEvent
 	nextSeq    int
 	finishedAt time.Time
 	cancelReq  bool
@@ -131,10 +139,10 @@ func (r *runState) appendEvent(event agentpkg.Event) map[string]any {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	payload := maps.Clone(event.Data)
-	stored := runEvent{seq: r.nextSeq, typ: event.Type, data: payload}
+	stored := RunEvent{Seq: r.nextSeq, Type: event.Type, Data: payload}
 	r.nextSeq++
 	r.events = append(r.events, stored)
-	return stored.payload()
+	return stored.Payload()
 }
 
 func (r *runState) addDecision(requestID string, ch chan permissions.ReviewDecision) {
@@ -198,16 +206,20 @@ func (r *runState) finish(status runStatus, errText string) {
 	r.finishedAt = time.Now()
 }
 
-func (r *runState) pendingAfter(after int) ([]map[string]any, bool) {
+func (r *runState) pendingAfter(after int) RunEventBatch {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	var pending []map[string]any
+	var pending []RunEvent
 	for _, event := range r.events {
-		if event.seq > after {
-			pending = append(pending, event.payload())
+		if event.Seq > after {
+			pending = append(pending, RunEvent{
+				Seq:  event.Seq,
+				Type: event.Type,
+				Data: maps.Clone(event.Data),
+			})
 		}
 	}
-	return pending, r.status != runStatusRunning
+	return RunEventBatch{Events: pending, Finished: r.status != runStatusRunning}
 }
 
 func (r *runState) snapshot() runSnapshot {
@@ -217,7 +229,7 @@ func (r *runState) snapshot() runSnapshot {
 	messages := append(message.CloneMessages(r.baseMessages), message.Clone(r.userMessage))
 	events := make([]map[string]any, 0, len(r.events))
 	for _, event := range r.events {
-		events = append(events, event.payload())
+		events = append(events, event.Payload())
 	}
 
 	return runSnapshot{
@@ -349,15 +361,13 @@ func (m *RunManager) hasActiveRun(sessionID string) bool {
 	return m.activeBySession[sessionID] != nil
 }
 
-// pendingAfter returns (events, finished, found); the third bool
-// distinguishes "run not found" from "no new events yet".
-func (m *RunManager) pendingAfter(runID string, after int) ([]map[string]any, bool, bool) {
+// pendingAfter returns a batch plus whether the run was found.
+func (m *RunManager) pendingAfter(runID string, after int) (RunEventBatch, bool) {
 	state := m.getRun(runID)
 	if state == nil {
-		return nil, false, false
+		return RunEventBatch{}, false
 	}
-	pending, finished := state.pendingAfter(after)
-	return pending, finished, true
+	return state.pendingAfter(after), true
 }
 
 func (m *RunManager) emit(state *runState, event map[string]any) {

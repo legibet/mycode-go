@@ -249,10 +249,10 @@ func TestRunManagerPermissionDecision(t *testing.T) {
 		if state == nil {
 			return false
 		}
-		pending, _ := state.pendingAfter(0)
-		for _, event := range pending {
-			if event["type"] == "permission_request" {
-				requestID, _ = event["request_id"].(string)
+		batch := state.pendingAfter(0)
+		for _, event := range batch.Events {
+			if event.Type == "permission_request" {
+				requestID, _ = event.Data["request_id"].(string)
 				return requestID != ""
 			}
 		}
@@ -283,9 +283,9 @@ func TestRunManagerPermissionDecision(t *testing.T) {
 		if state == nil {
 			return false
 		}
-		pending, _ := state.pendingAfter(0)
-		for _, event := range pending {
-			if event["type"] == "permission_resolved" && event["request_id"] == requestID && event["decision"] == "allow" {
+		batch := state.pendingAfter(0)
+		for _, event := range batch.Events {
+			if event.Type == "permission_resolved" && event.Data["request_id"] == requestID && event.Data["decision"] == "allow" {
 				return true
 			}
 		}
@@ -322,10 +322,10 @@ func TestRunManagerCancelUnblocksPendingDecisionAsDeny(t *testing.T) {
 		if state == nil {
 			return false
 		}
-		pending, _ := state.pendingAfter(0)
-		for _, event := range pending {
-			if event["type"] == "permission_request" {
-				requestID, _ = event["request_id"].(string)
+		batch := state.pendingAfter(0)
+		for _, event := range batch.Events {
+			if event.Type == "permission_request" {
+				requestID, _ = event.Data["request_id"].(string)
 				return requestID != ""
 			}
 		}
@@ -351,9 +351,9 @@ func TestRunManagerCancelUnblocksPendingDecisionAsDeny(t *testing.T) {
 		if state == nil {
 			return false
 		}
-		pending, _ := state.pendingAfter(0)
-		for _, event := range pending {
-			if event["type"] == "permission_resolved" && event["request_id"] == requestID && event["decision"] == "deny" {
+		batch := state.pendingAfter(0)
+		for _, event := range batch.Events {
+			if event.Type == "permission_resolved" && event.Data["request_id"] == requestID && event.Data["decision"] == "deny" {
 				return true
 			}
 		}
@@ -388,10 +388,10 @@ func TestRunManagerPermissionDenyCancelsRun(t *testing.T) {
 		if state == nil {
 			return false
 		}
-		pending, _ := state.pendingAfter(0)
-		for _, event := range pending {
-			if event["type"] == "permission_request" {
-				requestID, _ = event["request_id"].(string)
+		batch := state.pendingAfter(0)
+		for _, event := range batch.Events {
+			if event.Type == "permission_request" {
+				requestID, _ = event.Data["request_id"].(string)
 				return requestID != ""
 			}
 		}
