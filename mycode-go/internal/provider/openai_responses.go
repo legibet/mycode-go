@@ -87,8 +87,8 @@ func (a openAIResponsesAdapter) StreamTurn(ctx context.Context, req Request) <-c
 }
 
 func isBlankSSEDispatchError(err error) bool {
-	var syntaxErr *json.SyntaxError
-	return errors.As(err, &syntaxErr) && syntaxErr.Offset == 0
+	syntaxErr, ok := errors.AsType[*json.SyntaxError](err)
+	return ok && syntaxErr.Offset == 0
 }
 
 func (a openAIResponsesAdapter) applyStreamEvent(event responses.ResponseStreamEventUnion, doneItems map[int]responses.ResponseOutputItemUnion, final **responses.Response, out chan<- StreamEvent) error {

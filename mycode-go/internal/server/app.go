@@ -390,8 +390,7 @@ func writeDetailError(w http.ResponseWriter, status int, detail any) {
 
 // writeCoreError maps a core.StatusError to its HTTP status; falls back to 500.
 func writeCoreError(w http.ResponseWriter, err error) {
-	var statusErr *core.StatusError
-	if errors.As(err, &statusErr) {
+	if statusErr, ok := errors.AsType[*core.StatusError](err); ok {
 		writeDetailError(w, statusErr.Status, statusErr.Detail)
 		return
 	}

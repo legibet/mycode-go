@@ -802,8 +802,7 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
 			return Result{Output: "error: cancelled", IsError: true}
 		}
-		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) && exitErr.ExitCode() < 0 {
+		if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok && exitErr.ExitCode() < 0 {
 			return Result{Output: "error: cancelled", IsError: true}
 		}
 	}

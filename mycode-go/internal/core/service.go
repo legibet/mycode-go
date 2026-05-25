@@ -250,8 +250,7 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		return s.store.AppendMessage(sessionID, msg, cwd)
 	})
 	if err != nil {
-		var activeErr ActiveRunError
-		if errors.As(err, &activeErr) {
+		if activeErr, ok := errors.AsType[ActiveRunError](err); ok {
 			detail := map[string]any{"message": "session already has a running task"}
 			if existing := s.runs.getRun(activeErr.RunID); existing != nil {
 				detail["run"] = existing.info()
