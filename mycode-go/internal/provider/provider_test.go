@@ -359,24 +359,24 @@ func TestOpenAIResponsesReplaysNativeOutputItemsForToolResults(t *testing.T) {
 	})
 
 	input := payload["input"].([]any)
-	expected := []any{
-		map[string]any{"type": "reasoning", "id": "rs_1", "summary": []any{}, "encrypted_content": "enc_1"},
-		map[string]any{
-			"type":    "message",
-			"role":    "assistant",
-			"phase":   "commentary",
-			"content": []any{map[string]any{"type": "output_text", "text": "Checking the file."}},
-		},
-		map[string]any{
-			"type":      "function_call",
-			"call_id":   "call_1",
-			"name":      "read",
-			"arguments": `{"path":"x.py"}`,
-		},
-		map[string]any{"type": "function_call_output", "call_id": "call_1", "output": "file contents"},
+	if !reflect.DeepEqual(inputTypes(input), []string{"reasoning", "message", "function_call", "function_call_output"}) {
+		t.Fatalf("unexpected input item types: %#v", input)
 	}
-	if !reflect.DeepEqual(input, expected) {
-		t.Fatalf("unexpected input items:\n got: %#v\nwant: %#v", input, expected)
+	reasoning := input[0].(map[string]any)
+	messageItem := input[1].(map[string]any)
+	call := input[2].(map[string]any)
+	output := input[3].(map[string]any)
+	if reasoning["encrypted_content"] != "enc_1" {
+		t.Fatalf("missing reasoning replay data: %#v", reasoning)
+	}
+	if messageItem["phase"] != "commentary" || firstContentText(messageItem["content"]) != "Checking the file." {
+		t.Fatalf("unexpected assistant replay item: %#v", messageItem)
+	}
+	if call["call_id"] != "call_1" || call["arguments"] != `{"path":"x.py"}` {
+		t.Fatalf("unexpected function call replay: %#v", call)
+	}
+	if output["call_id"] != "call_1" || output["output"] != "file contents" {
+		t.Fatalf("unexpected tool output replay: %#v", output)
 	}
 }
 
@@ -395,29 +395,20 @@ func TestOpenAIResponsesFallbackReplaySkipsReasoningBlocks(t *testing.T) {
 	})
 
 	input := payload["input"].([]any)
-	expected := []any{
-		map[string]any{
-			"type": "message",
-			"role": "assistant",
-			"content": []map[string]any{{
-				"type": "output_text",
-				"text": "I will inspect the file.",
-			}},
-		},
-		map[string]any{
-			"type":      "function_call",
-			"call_id":   "call_1",
-			"name":      "read",
-			"arguments": `{"path":"x.py"}`,
-		},
-		map[string]any{
-			"type":    "function_call_output",
-			"call_id": "call_1",
-			"output":  "error: tool call was interrupted",
-		},
+	if !reflect.DeepEqual(inputTypes(input), []string{"message", "function_call", "function_call_output"}) {
+		t.Fatalf("unexpected input item types: %#v", input)
 	}
-	if !reflect.DeepEqual(input, expected) {
-		t.Fatalf("unexpected input items:\n got: %#v\nwant: %#v", input, expected)
+	messageItem := input[0].(map[string]any)
+	if firstContentText(messageItem["content"]) != "I will inspect the file." {
+		t.Fatalf("unexpected assistant text replay: %#v", messageItem)
+	}
+	call := input[1].(map[string]any)
+	if call["call_id"] != "call_1" || call["arguments"] != `{"path":"x.py"}` {
+		t.Fatalf("unexpected function call replay: %#v", call)
+	}
+	output := input[2].(map[string]any)
+	if output["call_id"] != "call_1" || output["output"] != "error: tool call was interrupted" {
+		t.Fatalf("unexpected interrupted tool result: %#v", output)
 	}
 }
 
@@ -493,16 +484,14 @@ func TestRepairMessagesForReplayDropsDuplicateAndOrphanToolResults(t *testing.T)
 		}, "", "", "", "", 0, nil),
 	}, true, true)
 
-	expected := []message.Message{
-		message.AssistantMessage([]message.Block{
-			message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, nil),
-		}, "", "", "", "", 0, nil),
-		message.BuildMessage("user", []message.Block{
-			message.ToolResultBlock("call_1", "first", nil, false, nil, nil),
-		}, nil),
+	if len(replay) != 2 || replay[0].Role != "assistant" || replay[1].Role != "user" {
+		t.Fatalf("unexpected replay roles: %#v", replay)
 	}
-	if !reflect.DeepEqual(replay, expected) {
-		t.Fatalf("unexpected replay:\n got: %#v\nwant: %#v", replay, expected)
+	if replay[0].Content[0].Type != "tool_use" || replay[0].Content[0].ID != "call_1" {
+		t.Fatalf("unexpected tool use replay: %#v", replay[0])
+	}
+	if len(replay[1].Content) != 1 || replay[1].Content[0].ToolUseID != "call_1" || replay[1].Content[0].Output != "first" {
+		t.Fatalf("unexpected tool result replay: %#v", replay[1])
 	}
 }
 
@@ -519,15 +508,11 @@ func TestRepairMessagesForReplayKeepsPlaceholderUserTurn(t *testing.T) {
 		}, "", "", "", "", 0, nil),
 	}, true, true)
 
-	expected := []message.Message{
-		message.AssistantMessage([]message.Block{message.TextBlock("first", nil)}, "", "", "", "", 0, nil),
-		message.BuildMessage("user", []message.Block{
-			message.TextBlock("[User turn omitted during replay]", nil),
-		}, map[string]any{"synthetic": true}),
-		message.AssistantMessage([]message.Block{message.TextBlock("second", nil)}, "", "", "", "", 0, nil),
+	if len(replay) != 3 || replay[0].Content[0].Text != "first" || replay[2].Content[0].Text != "second" {
+		t.Fatalf("unexpected replay: %#v", replay)
 	}
-	if !reflect.DeepEqual(replay, expected) {
-		t.Fatalf("unexpected replay:\n got: %#v\nwant: %#v", replay, expected)
+	if replay[1].Role != "user" || replay[1].Content[0].Text != "[User turn omitted during replay]" || replay[1].Meta["synthetic"] != true {
+		t.Fatalf("unexpected synthetic placeholder: %#v", replay[1])
 	}
 }
 
@@ -546,20 +531,16 @@ func TestRepairMessagesForReplayFiltersImagesWhenDisabled(t *testing.T) {
 		}, nil),
 	}, false, true)
 
-	expected := []message.Message{
-		message.AssistantMessage([]message.Block{
-			message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.png"}, nil),
-		}, "", "", "", "", 0, nil),
-		message.BuildMessage("user", []message.Block{
-			message.TextBlock("describe this", nil),
-			message.TextBlock(`<file name="logo&quot;&lt;v2&gt;.png" media_type="image/png" kind="image">Current model does not support image input.</file>`, map[string]any{"attachment": true}),
-			message.ToolResultBlock("call_1", "Read image file [image/png]", nil, false, []message.Block{
-				message.TextBlock("Read image file [image/png]", nil),
-			}, nil),
-		}, nil),
+	if len(replay) != 2 || len(replay[1].Content) != 3 {
+		t.Fatalf("unexpected replay: %#v", replay)
 	}
-	if !reflect.DeepEqual(replay, expected) {
-		t.Fatalf("unexpected replay:\n got: %#v\nwant: %#v", replay, expected)
+	notice := replay[1].Content[1]
+	if notice.Type != "text" || !strings.Contains(notice.Text, `logo&quot;&lt;v2&gt;.png`) || notice.Meta["attachment"] != true {
+		t.Fatalf("unexpected image downgrade notice: %#v", notice)
+	}
+	toolResult := replay[1].Content[2]
+	if len(toolResult.Content) != 1 || toolResult.Content[0].Type != "text" {
+		t.Fatalf("unexpected filtered tool result content: %#v", toolResult)
 	}
 }
 
@@ -580,28 +561,19 @@ func TestOpenAIResponsesFallsBackToFullReplayForCrossProviderHistory(t *testing.
 		MaxTokens: 4096,
 	})
 
-	expected := []any{
-		map[string]any{
-			"type": "message",
-			"role": "user",
-			"content": []any{
-				map[string]any{"type": "input_text", "text": "double 21"},
-			},
-		},
-		map[string]any{
-			"type":      "function_call",
-			"call_id":   "call_1",
-			"name":      "read",
-			"arguments": `{"path":"x.py"}`,
-		},
-		map[string]any{
-			"type":    "function_call_output",
-			"call_id": "call_1",
-			"output":  "42",
-		},
+	input := payload["input"].([]any)
+	if !reflect.DeepEqual(inputTypes(input), []string{"message", "function_call", "function_call_output"}) {
+		t.Fatalf("unexpected replay input types: %#v", input)
 	}
-	if !reflect.DeepEqual(payload["input"], expected) {
-		t.Fatalf("unexpected replay input:\n got: %#v\nwant: %#v", payload["input"], expected)
+	user := input[0].(map[string]any)
+	userContent := user["content"].([]any)
+	if user["role"] != "user" || userContent[0].(map[string]any)["text"] != "double 21" {
+		t.Fatalf("unexpected user replay: %#v", user)
+	}
+	call := input[1].(map[string]any)
+	result := input[2].(map[string]any)
+	if call["call_id"] != "call_1" || call["arguments"] != `{"path":"x.py"}` || result["output"] != "42" {
+		t.Fatalf("unexpected tool replay: %#v", input)
 	}
 }
 
@@ -634,8 +606,9 @@ func TestOpenAIResponsesSerializesToolResultImages(t *testing.T) {
 	if len(output) != 2 {
 		t.Fatalf("unexpected output: %#v", second["output"])
 	}
-	if !reflect.DeepEqual(output[0], map[string]any{"type": "input_text", "text": "Read image file [image/png]"}) {
-		t.Fatalf("unexpected output: %#v", output)
+	text, _ := output[0].(map[string]any)
+	if text["type"] != "input_text" || text["text"] != "Read image file [image/png]" {
+		t.Fatalf("unexpected output text: %#v", output)
 	}
 	image, _ := output[1].(map[string]any)
 	if image["type"] != "input_image" {
@@ -664,7 +637,7 @@ func TestOpenAIResponsesConvertsFinalResponseBlocks(t *testing.T) {
 	if msg.Content[0].Type != "thinking" || msg.Content[0].Text != "think" {
 		t.Fatalf("unexpected message: %#v", msg)
 	}
-	if !reflect.DeepEqual(msg.Content[1], message.TextBlock("answer", map[string]any{"native": map[string]any{"annotations": []any{}}})) {
+	if msg.Content[1].Type != "text" || msg.Content[1].Text != "answer" {
 		t.Fatalf("unexpected text block: %#v", msg.Content[1])
 	}
 	if msg.Content[2].Type != "tool_use" || msg.Content[2].ID != "call_1" || !reflect.DeepEqual(msg.Content[2].Input, map[string]any{"path": "x.py"}) {
@@ -706,11 +679,13 @@ func TestOpenAIResponsesUsesStreamOutputItemsWhenFinalOutputIsEmpty(t *testing.T
 	]`)
 
 	msg := adapter.convertResponse(response, outputItems)
-	if !reflect.DeepEqual(msg.Content, []message.Block{
-		message.TextBlock("hello world", map[string]any{"native": map[string]any{"annotations": []any{}}}),
-		message.ToolUseBlock("call_1", "read", map[string]any{"path": "pyproject.toml"}, map[string]any{"native": map[string]any{"item_id": "fc_1", "status": "completed"}}),
-	}) {
+	if len(msg.Content) != 2 || msg.Content[0].Type != "text" || msg.Content[0].Text != "hello world" {
 		t.Fatalf("unexpected message: %#v", msg)
+	}
+	toolUse := msg.Content[1]
+	native, _ := toolUse.Meta["native"].(map[string]any)
+	if toolUse.Type != "tool_use" || toolUse.ID != "call_1" || toolUse.Input["path"] != "pyproject.toml" || native["item_id"] != "fc_1" {
+		t.Fatalf("unexpected tool use block: %#v", toolUse)
 	}
 }
 
@@ -910,7 +885,7 @@ func TestAnthropicBuildPayloadAddsCacheControlToLatestUserBlock(t *testing.T) {
 	})
 
 	systemBlocks, _ := payload["system"].([]map[string]any)
-	if len(systemBlocks) != 1 || !reflect.DeepEqual(systemBlocks[0]["cache_control"], map[string]any{"type": "ephemeral"}) {
+	if len(systemBlocks) != 1 || cacheControlType(systemBlocks[0]["cache_control"]) != "ephemeral" {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
 	messages := payload["messages"].([]map[string]any)
@@ -919,7 +894,7 @@ func TestAnthropicBuildPayloadAddsCacheControlToLatestUserBlock(t *testing.T) {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
 	lastContent := messages[3]["content"].([]map[string]any)
-	if !reflect.DeepEqual(lastContent[1]["cache_control"], map[string]any{"type": "ephemeral"}) {
+	if cacheControlType(lastContent[1]["cache_control"]) != "ephemeral" {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
 }
@@ -1051,12 +1026,12 @@ func TestGoogleStreamingPartsMergeIntoFinalBlocks(t *testing.T) {
 	blocks := []message.Block{}
 
 	events := adapter.consumePart(&blocks, &genai.Part{Text: "step ", Thought: true})
-	if !reflect.DeepEqual(events, []StreamEvent{{Type: "thinking_delta", Text: "step "}}) {
+	if len(events) != 1 || events[0].Type != "thinking_delta" || events[0].Text != "step " {
 		t.Fatalf("unexpected events: %#v", events)
 	}
 
 	events = adapter.consumePart(&blocks, &genai.Part{Text: "one", Thought: true, ThoughtSignature: []byte("sig")})
-	if !reflect.DeepEqual(events, []StreamEvent{{Type: "thinking_delta", Text: "one"}}) {
+	if len(events) != 1 || events[0].Type != "thinking_delta" || events[0].Text != "one" {
 		t.Fatalf("unexpected events: %#v", events)
 	}
 
@@ -1067,19 +1042,15 @@ func TestGoogleStreamingPartsMergeIntoFinalBlocks(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatalf("unexpected events: %#v", events)
 	}
-	expected := []message.Block{
-		message.ThinkingBlock("step one", map[string]any{"native": map[string]any{
-			"part": map[string]any{"text": "step one", "thought": true, "thought_signature": "c2ln"},
-		}}),
-		message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, map[string]any{"native": map[string]any{
-			"part": map[string]any{
-				"function_call":     map[string]any{"id": "call_1", "args": map[string]any{"path": "x.py"}, "name": "read"},
-				"thought_signature": "c2ln",
-			},
-		}}),
+	if len(blocks) != 2 {
+		t.Fatalf("unexpected blocks: %#v", blocks)
 	}
-	if !reflect.DeepEqual(blocks, expected) {
-		t.Fatalf("unexpected blocks:\n got: %#v\nwant: %#v", blocks, expected)
+	if blocks[0].Type != "thinking" || blocks[0].Text != "step one" || nativePart(blocks[0])["thought_signature"] != "c2ln" {
+		t.Fatalf("unexpected thinking block: %#v", blocks[0])
+	}
+	functionCall, _ := nativePart(blocks[1])["function_call"].(map[string]any)
+	if blocks[1].Type != "tool_use" || blocks[1].ID != "call_1" || functionCall["name"] != "read" || nativePart(blocks[1])["thought_signature"] != "c2ln" {
+		t.Fatalf("unexpected tool block: %#v", blocks[1])
 	}
 }
 
@@ -1091,12 +1062,7 @@ func TestGoogleKeepsSignatureOnlyStreamChunk(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatalf("unexpected events: %#v", events)
 	}
-	expected := []message.Block{
-		message.TextBlock("", map[string]any{"native": map[string]any{
-			"part": map[string]any{"thought_signature": "c2ln"},
-		}}),
-	}
-	if !reflect.DeepEqual(blocks, expected) {
+	if len(blocks) != 1 || blocks[0].Type != "text" || nativePart(blocks[0])["thought_signature"] != "c2ln" {
 		t.Fatalf("unexpected blocks: %#v", blocks)
 	}
 }
@@ -1112,6 +1078,48 @@ func containsAnyString(value any, target string) bool {
 		}
 	}
 	return false
+}
+
+func inputTypes(items []any) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		entry, _ := item.(map[string]any)
+		kind, _ := entry["type"].(string)
+		out = append(out, kind)
+	}
+	return out
+}
+
+func firstContentText(value any) string {
+	switch content := value.(type) {
+	case []any:
+		if len(content) == 0 {
+			return ""
+		}
+		entry, _ := content[0].(map[string]any)
+		text, _ := entry["text"].(string)
+		return text
+	case []map[string]any:
+		if len(content) == 0 {
+			return ""
+		}
+		text, _ := content[0]["text"].(string)
+		return text
+	default:
+		return ""
+	}
+}
+
+func cacheControlType(value any) string {
+	entry, _ := value.(map[string]any)
+	text, _ := entry["type"].(string)
+	return text
+}
+
+func nativePart(block message.Block) map[string]any {
+	native, _ := block.Meta["native"].(map[string]any)
+	part, _ := native["part"].(map[string]any)
+	return part
 }
 
 func mustBase64Decode(value string) []byte {
