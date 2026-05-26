@@ -9,8 +9,10 @@ on:
       - ".golangci.yml"
       - ".pre-commit-config.yaml"
       - "Makefile"
-      - "go.work"
-      - "mycode-go/**"
+      - "go.mod"
+      - "go.sum"
+      - "cmd/**"
+      - "internal/**"
       - "scripts/sync_web_dist.sh"
       - "web/**"
   workflow_dispatch:
@@ -29,19 +31,19 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: mycode-go/go.mod
+          go-version-file: go.mod
 
       - name: Vet Go
-        run: go -C mycode-go vet ./...
+        run: go vet ./...
 
       - name: Test Go
-        run: go -C mycode-go test -race ./...
+        run: go test -race ./...
 
       - name: Lint Go
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
-          args: ./mycode-go/...
+          args: ./...
 
   web:
     runs-on: ubuntu-latest
@@ -76,7 +78,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: mycode-go/go.mod
+          go-version-file: go.mod
 
       - name: Install pnpm
         uses: pnpm/action-setup@v5
