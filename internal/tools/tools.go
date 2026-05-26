@@ -690,6 +690,7 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 	waited := false
 	killed := false
 	e.trackCmd(cmd)
+	stopReading := make(chan struct{})
 	defer func() {
 		_ = reader.Close()
 		_ = writer.Close()
@@ -698,6 +699,7 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 			killCmdTree(cmd)
 		}
 	}()
+	defer close(stopReading)
 
 	lines := make(chan string, 256)
 	readerErrors := make(chan error, 1)
@@ -707,13 +709,20 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 		for {
 			line, err := buffered.ReadString('\n')
 			if len(line) > 0 {
-				lines <- strings.TrimRight(line, "\n")
+				select {
+				case lines <- strings.TrimRight(line, "\n"):
+				case <-stopReading:
+					return
+				}
 			}
 			if errors.Is(err, io.EOF) {
 				return
 			}
 			if err != nil {
-				readerErrors <- err
+				select {
+				case readerErrors <- err:
+				case <-stopReading:
+				}
 				return
 			}
 		}

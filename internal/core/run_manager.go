@@ -243,6 +243,7 @@ type RunManager struct {
 	mu              sync.Mutex
 	activeBySession map[string]*runState
 	runsByID        map[string]*runState
+	sessionLocks    map[string]*sync.Mutex
 	sink            EventSink
 }
 
@@ -250,6 +251,7 @@ func NewRunManager(sink EventSink) *RunManager {
 	return &RunManager{
 		activeBySession: map[string]*runState{},
 		runsByID:        map[string]*runState{},
+		sessionLocks:    map[string]*sync.Mutex{},
 		sink:            sink,
 	}
 }
@@ -289,6 +291,32 @@ func (m *RunManager) snapshotSession(sessionID string) *runSnapshot {
 	}
 	snap := state.snapshot()
 	return &snap
+}
+
+func (m *RunManager) activeRunInfo(sessionID string) map[string]any {
+	m.mu.Lock()
+	state := m.activeBySession[sessionID]
+	m.mu.Unlock()
+	if state == nil {
+		return nil
+	}
+	return state.info()
+}
+
+func (m *RunManager) lockSession(sessionID string) func() {
+	m.mu.Lock()
+	if m.sessionLocks == nil {
+		m.sessionLocks = map[string]*sync.Mutex{}
+	}
+	lock := m.sessionLocks[sessionID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		m.sessionLocks[sessionID] = lock
+	}
+	m.mu.Unlock()
+
+	lock.Lock()
+	return lock.Unlock
 }
 
 func (m *RunManager) cancelRun(runID string) map[string]any {

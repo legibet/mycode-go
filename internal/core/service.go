@@ -184,6 +184,13 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		sessionID = "default"
 	}
 
+	unlockSession := s.runs.lockSession(sessionID)
+	defer unlockSession()
+
+	if active := s.runs.activeRunInfo(sessionID); active != nil {
+		return ChatResponse{}, activeRunConflict(active)
+	}
+
 	data, err := s.store.LoadSession(sessionID)
 	if err != nil {
 		return ChatResponse{}, statusError(http.StatusInternalServerError, err.Error())
@@ -251,11 +258,10 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 	})
 	if err != nil {
 		if activeErr, ok := errors.AsType[ActiveRunError](err); ok {
-			detail := map[string]any{"message": "session already has a running task"}
 			if existing := s.runs.getRun(activeErr.RunID); existing != nil {
-				detail["run"] = existing.info()
+				return ChatResponse{}, activeRunConflict(existing.info())
 			}
-			return ChatResponse{}, statusError(http.StatusConflict, detail)
+			return ChatResponse{}, activeRunConflict(nil)
 		}
 		return ChatResponse{}, statusError(http.StatusInternalServerError, err.Error())
 	}
@@ -482,6 +488,9 @@ func (s *Service) LoadSession(sessionID string) (SessionResponse, error) {
 }
 
 func (s *Service) DeleteSession(sessionID string) error {
+	unlockSession := s.runs.lockSession(sessionID)
+	defer unlockSession()
+
 	if s.runs.hasActiveRun(sessionID) {
 		return statusError(http.StatusConflict, "session has a running task")
 	}
@@ -492,6 +501,9 @@ func (s *Service) DeleteSession(sessionID string) error {
 }
 
 func (s *Service) ClearSession(sessionID string) error {
+	unlockSession := s.runs.lockSession(sessionID)
+	defer unlockSession()
+
 	if s.runs.hasActiveRun(sessionID) {
 		return statusError(http.StatusConflict, "session has a running task")
 	}
@@ -499,6 +511,14 @@ func (s *Service) ClearSession(sessionID string) error {
 		return statusError(http.StatusInternalServerError, err.Error())
 	}
 	return nil
+}
+
+func activeRunConflict(run map[string]any) error {
+	detail := map[string]any{"message": "session already has a running task"}
+	if run != nil {
+		detail["run"] = run
+	}
+	return statusError(http.StatusConflict, detail)
 }
 
 func (s *Service) WorkspaceRoots() map[string]any {
