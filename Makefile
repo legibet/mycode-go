@@ -1,4 +1,3 @@
-GO_DIR := mycode-go
 WEB_DIR := web
 DIST_DIR := $(CURDIR)/dist
 BIN := $(DIST_DIR)/mycode-go
@@ -25,13 +24,13 @@ help:
 .PHONY: dev
 dev:
 	@trap 'kill 0' INT TERM EXIT; \
-	go -C $(GO_DIR) run ./cmd/mycode-go web --dev & \
+	go run ./cmd/mycode-go web --dev & \
 	pnpm --dir $(WEB_DIR) dev & \
 	wait
 
 .PHONY: run-web
 run-web:
-	go -C $(GO_DIR) run ./cmd/mycode-go web
+	go run ./cmd/mycode-go web
 
 .PHONY: web-dev
 web-dev:
@@ -54,29 +53,29 @@ web-build: web-install
 
 .PHONY: fmt
 fmt:
-	golangci-lint fmt ./$(GO_DIR)/...
+	golangci-lint fmt ./...
 
 .PHONY: lint
 lint:
-	golangci-lint run ./$(GO_DIR)/...
+	golangci-lint run ./...
 
 .PHONY: test
 test:
-	go -C $(GO_DIR) test ./...
+	go test ./...
 
 .PHONY: check
 check:
-	go -C $(GO_DIR) vet ./...
-	go -C $(GO_DIR) test -race ./...
-	golangci-lint run ./$(GO_DIR)/...
+	go vet ./...
+	go test -race ./...
+	golangci-lint run ./...
 	$(MAKE) web-check
 
 .PHONY: build
 build: web-build
 	mkdir -p $(DIST_DIR)
-	go -C $(GO_DIR) build -tags embedweb -o $(BIN) ./cmd/mycode-go
+	go build -tags embedweb -o $(BIN) ./cmd/mycode-go
 
 .PHONY: clean
 clean:
 	rm -rf $(DIST_DIR)
-	rm -rf $(GO_DIR)/internal/server/webdist
+	rm -rf internal/server/webdist

@@ -21,11 +21,11 @@ repos:
     rev: v2.12.2
     hooks:
       - id: golangci-lint-fmt
-        args: ["./mycode-go/..."]
-        files: ^mycode-go/.*\.go$
+        args: ["./..."]
+        files: ^(cmd|internal)/.*\.go$
       - id: golangci-lint-full
-        args: ["./mycode-go/..."]
-        files: ^mycode-go/.*\.go$
+        args: ["./..."]
+        files: ^(cmd|internal)/.*\.go$
       - id: golangci-lint-config-verify
 
   - repo: https://github.com/biomejs/pre-commit

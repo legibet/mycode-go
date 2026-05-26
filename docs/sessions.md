@@ -1,6 +1,6 @@
 # Sessions
 
-Source: `mycode-go/internal/session/store.go`
+Source: `internal/session/store.go`
 
 ## Storage Layout
 
@@ -125,7 +125,7 @@ Cancelled streaming tools persist emitted output plus `error: cancelled`.
 
 ## Session Store API
 
-`Store` in `mycode-go/internal/session/store.go`:
+`Store` in `internal/session/store.go`:
 
 - `NewStore(dataDir)` — `dataDir` optional; empty resolves to `$MYCODE_HOME/sessions`
 - `SessionExists(sessionID)` — check by `meta.json` presence

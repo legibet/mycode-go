@@ -1,6 +1,6 @@
 # Web UI
 
-React + Vite app in `web/`. Built assets are copied to `mycode-go/internal/server/webdist/` for Go embedding.
+React + Vite app in `web/`. Built assets are copied to `internal/server/webdist/` for Go embedding.
 
 ## Serving Modes
 
@@ -133,4 +133,4 @@ pnpm --dir web build
 ./scripts/sync_web_dist.sh
 ```
 
-`./scripts/sync_web_dist.sh` copies `web/dist/` into `mycode-go/internal/server/webdist/`. The Go build tag `embedweb` embeds that directory for release builds. Without embedded assets, the server can still serve an explicit `MYCODE_WEB_DIST` or local `web/dist` directory.
+`./scripts/sync_web_dist.sh` copies `web/dist/` into `internal/server/webdist/`. The Go build tag `embedweb` embeds that directory for release builds. Without embedded assets, the server can still serve an explicit `MYCODE_WEB_DIST` or local `web/dist` directory.

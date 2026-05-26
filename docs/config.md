@@ -1,6 +1,6 @@
 # Configuration
 
-Source: `mycode-go/internal/config/`
+Source: `internal/config/`
 
 ## Config Files
 
@@ -15,7 +15,7 @@ Explicit request args (CLI flags, API params) override both.
 
 Config resolution: `config.Load(cwd)` returns `Settings`.
 
-The web UI's settings panel edits only the global file. Project-level files continue to override it. Settings API validation lives in `mycode-go/internal/config`; runtime request handling lives in `mycode-go/internal/core/service.go`.
+The web UI's settings panel edits only the global file. Project-level files continue to override it. Settings API validation lives in `internal/config`; runtime request handling lives in `internal/core/service.go`.
 
 ## Schema
 
@@ -136,7 +136,7 @@ The shell checks are intentionally simple and conservative. Project commands suc
 
 ## Model Metadata
 
-`mycode-go/internal/models/catalog.go` reads the bundled `mycode-go/internal/models/models_catalog.json` catalog to look up:
+`internal/models/catalog.go` reads the bundled `internal/models/models_catalog.json` catalog to look up:
 
 - `supports_reasoning` — whether the model supports extended thinking
 - `supports_image_input` — whether the model accepts image input
@@ -160,7 +160,7 @@ uv run --no-project python ./scripts/update_models_catalog.py
 
 ## Skills Discovery
 
-`mycode-go/internal/prompt/prompt.go` scans for `SKILL.md` files and injects an `<available_skills>` block into the system prompt.
+`internal/prompt/prompt.go` scans for `SKILL.md` files and injects an `<available_skills>` block into the system prompt.
 
 Scan roots, lowest to highest priority:
 
@@ -175,7 +175,7 @@ The model uses the `read` tool to load full skill content on demand from the ski
 
 ## Instructions Discovery
 
-`mycode-go/internal/prompt/prompt.go` reads `AGENTS.md` files and injects them as `<project_instructions>` into the system prompt. Files checked:
+`internal/prompt/prompt.go` reads `AGENTS.md` files and injects them as `<project_instructions>` into the system prompt. Files checked:
 
 1. `~/.mycode/AGENTS.md` (fallback: `~/.agents/AGENTS.md`)
 2. all `AGENTS.md` files from `project` to `cwd`

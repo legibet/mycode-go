@@ -133,7 +133,7 @@ mycode-go session list --all         list saved sessions for all cwd values
 ```bash
 git clone <repo> && cd mycode-go
 make test
-go -C mycode-go run ./cmd/mycode-go "hello"
+go run ./cmd/mycode-go "hello"
 ```
 
 Web development (backend + Vite dev server):

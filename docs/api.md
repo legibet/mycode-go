@@ -1,6 +1,6 @@
 # Server API
 
-Base prefix: `/api`. Routes are wired in `mycode-go/internal/server/app.go`; request parsing and handlers live in `mycode-go/internal/server/*.go`.
+Base prefix: `/api`. Routes are wired in `internal/server/app.go`; request parsing and handlers live in `internal/server/*.go`.
 
 The API matches the Python web contract from `main` so the same browser session can switch between Python and Go backends.
 
@@ -16,7 +16,7 @@ The API matches the Python web contract from `main` so the same browser session 
 
 Start one agent run. The handler returns JSON immediately; output streams later through `/api/runs/{run_id}/stream`.
 
-Request body (`core.ChatRequest` in `mycode-go/internal/core/service.go`):
+Request body (`core.ChatRequest` in `internal/core/service.go`):
 
 ```json
 {
@@ -209,7 +209,7 @@ Returns the same shape as `GET /api/settings`. Invalid provider types, invalid p
 
 ## Sessions
 
-Session routes are wired in `mycode-go/internal/server/app.go` and implemented through `mycode-go/internal/core/service.go`.
+Session routes are wired in `internal/server/app.go` and implemented through `internal/core/service.go`.
 
 ### `GET /api/sessions?cwd=...`
 
@@ -258,7 +258,7 @@ Truncate `messages.jsonl`, reset the title, and keep `meta.json`. Returns `409` 
 
 ## Workspaces
 
-Workspace routes are wired in `mycode-go/internal/server/app.go` and implemented through `mycode-go/internal/core/service.go` plus `mycode-go/internal/core/workspace.go`.
+Workspace routes are wired in `internal/server/app.go` and implemented through `internal/core/service.go` plus `internal/core/workspace.go`.
 
 ### `GET /api/workspaces/roots`
 
@@ -308,7 +308,7 @@ The web UI replays `pending_events` from `GET /api/sessions/{id}`, then reconnec
 
 ## Run Manager
 
-`mycode-go/internal/core/run_manager.go` manages concurrent runs:
+`internal/core/run_manager.go` manages concurrent runs:
 
 - One active run per session.
 - Events are buffered for reconnect.

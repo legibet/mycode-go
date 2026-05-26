@@ -15,7 +15,7 @@ Current sync: Python `main` reviewed through `95bac9b`; `web/` is aligned throug
 ## Project Layout
 
 ```text
-mycode-go/
+./
   cmd/mycode-go/              # CLI: run, web, session list, --version
   internal/agent/             # agent loop and compact replay
   internal/core/              # transport-agnostic service layer, RunManager, workspace browser
@@ -38,7 +38,7 @@ web/src/                      # shared React + Vite UI from Python main
   utils/messages.ts           # canonical blocks -> UI messages
 
 scripts/
-  update_models_catalog.py    # regenerates mycode-go/internal/models/models_catalog.json
+  update_models_catalog.py    # regenerates internal/models/models_catalog.json
   sync_web_dist.sh            # copies web/dist into Go's embedded webdist directory
 ```
 
@@ -54,7 +54,7 @@ Full schema, JSONL record types, replay rules, compact, and rewind behavior live
 
 ## Agent Loop
 
-Per user turn (`mycode-go/internal/agent/agent.go`):
+Per user turn (`internal/agent/agent.go`):
 
 1. Append the user message.
 2. Stream one provider turn through `ApplyCompactReplay`.
@@ -140,12 +140,12 @@ Make targets agents may use:
 Raw commands:
 
 ```bash
-go -C mycode-go test ./...
-go -C mycode-go vet ./...
-go -C mycode-go test -race ./...
-golangci-lint fmt ./mycode-go/...
-golangci-lint run ./mycode-go/...
-go -C mycode-go run ./cmd/mycode-go web --dev
+go test ./...
+go vet ./...
+go test -race ./...
+golangci-lint fmt ./...
+golangci-lint run ./...
+go run ./cmd/mycode-go web --dev
 
 pnpm --dir web install
 pnpm --dir web typecheck

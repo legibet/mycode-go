@@ -3,7 +3,7 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 WEB_DIST_DIR="$ROOT_DIR/web/dist"
-TARGET_DIR="$ROOT_DIR/mycode-go/internal/server/webdist"
+TARGET_DIR="$ROOT_DIR/internal/server/webdist"
 
 if [ ! -d "$WEB_DIST_DIR" ]; then
   echo "web build output not found: $WEB_DIST_DIR" >&2

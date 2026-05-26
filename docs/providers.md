@@ -1,6 +1,6 @@
 # Provider Adapters
 
-All adapters live in `mycode-go/internal/provider/`. Provider-specific wire formats stay inside adapters; the agent, session store, server, and web UI only see canonical messages.
+All adapters live in `internal/provider/`. Provider-specific wire formats stay inside adapters; the agent, session store, server, and web UI only see canonical messages.
 
 ## Interface
 
