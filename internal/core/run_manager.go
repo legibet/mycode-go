@@ -433,13 +433,13 @@ func (m *RunManager) run(ctx context.Context, state *runState, onPersist func(me
 	case lastError != "":
 		status = runStatusFailed
 	}
-	state.finish(status, lastError)
-
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.activeBySession[state.sessionID] == state {
 		delete(m.activeBySession, state.sessionID)
 	}
+	m.mu.Unlock()
+
+	state.finish(status, lastError)
 }
 
 func (m *RunManager) pruneFinishedRuns() {
