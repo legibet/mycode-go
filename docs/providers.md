@@ -97,6 +97,8 @@ type Adapter interface {
 - `SupportsReasoningEffort`: true; values are `none`, `low`, `medium`, `high`, `xhigh`
 - Runs stateless with `store=false`
 - Includes encrypted reasoning content
+- When reasoning is enabled, requests `reasoning.summary=auto`; streams `response.reasoning_summary_text.delta` as canonical thinking and does not surface raw `response.reasoning_text.delta`
+- Final reasoning items use `summary` text for the canonical thinking block and retain full native output items for replay
 - Persists completed Responses output items under `assistant.meta.native.output_items` for direct replay
 - Tool results replay as `function_call_output.output`
 - Passes `prompt_cache_key` using the current session id

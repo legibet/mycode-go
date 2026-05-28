@@ -57,6 +57,7 @@ func (a openAIChatAdapter) StreamTurn(ctx context.Context, req Request) <-chan S
 		}
 
 		stream := client.Chat.Completions.NewStreaming(ctx, oparam.Override[openai.ChatCompletionNewParams](json.RawMessage(bodyBytes)))
+		defer func() { _ = stream.Close() }()
 		toolCalls := make([]chatToolCallState, 0)
 		textParts := make([]string, 0)
 		thinkingParts := make([]string, 0)

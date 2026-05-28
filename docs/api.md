@@ -311,7 +311,7 @@ The web UI replays `pending_events` from `GET /api/sessions/{id}`, then reconnec
 `internal/core/run_manager.go` manages concurrent runs:
 
 - One active run per session.
-- Events are buffered for reconnect.
+- The latest 2000 events are buffered for reconnect.
 - Pending permission decisions are tracked per active run.
 - Cancelling waits for final state and clears the active session before returning.
 - Explicit permission `deny` marks the run as cancelled and cancels the agent.

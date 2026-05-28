@@ -29,7 +29,8 @@ const (
 
 	// finishedRunTTL keeps completed runs addressable so a client reconnecting
 	// right after completion can still pull the final events.
-	finishedRunTTL = 5 * time.Minute
+	finishedRunTTL     = 5 * time.Minute
+	runEventBufferSize = 2000
 )
 
 // EventPayload is what desktop adapters consume.
@@ -142,6 +143,9 @@ func (r *runState) appendEvent(event agentpkg.Event) map[string]any {
 	stored := RunEvent{Seq: r.nextSeq, Type: event.Type, Data: payload}
 	r.nextSeq++
 	r.events = append(r.events, stored)
+	if len(r.events) > runEventBufferSize {
+		r.events = r.events[len(r.events)-runEventBufferSize:]
+	}
 	return stored.Payload()
 }
 

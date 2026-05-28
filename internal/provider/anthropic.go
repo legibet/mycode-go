@@ -57,6 +57,7 @@ func (a anthropicAdapter) StreamTurn(ctx context.Context, req Request) <-chan St
 		}
 
 		stream := client.Messages.NewStreaming(ctx, aparam.Override[anthropic.MessageNewParams](json.RawMessage(bodyBytes)))
+		defer func() { _ = stream.Close() }()
 		acc := anthropic.Message{}
 		for stream.Next() {
 			event := stream.Current()

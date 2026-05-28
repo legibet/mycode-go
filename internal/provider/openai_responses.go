@@ -93,7 +93,7 @@ func isBlankSSEDispatchError(err error) bool {
 
 func (a openAIResponsesAdapter) applyStreamEvent(event responses.ResponseStreamEventUnion, doneItems map[int]responses.ResponseOutputItemUnion, final **responses.Response, out chan<- StreamEvent) error {
 	switch event.Type {
-	case "response.reasoning_text.delta":
+	case "response.reasoning_summary_text.delta":
 		if event.Delta != "" {
 			out <- StreamEvent{Type: "thinking_delta", Text: event.Delta}
 		}
@@ -160,7 +160,11 @@ func (a openAIResponsesAdapter) buildPayload(req Request) (map[string]any, error
 		payload["tool_choice"] = "auto"
 	}
 	if req.ReasoningEffort != "" {
-		payload["reasoning"] = map[string]any{"effort": req.ReasoningEffort}
+		reasoning := map[string]any{"effort": req.ReasoningEffort}
+		if req.ReasoningEffort != "none" {
+			reasoning["summary"] = "auto"
+		}
+		payload["reasoning"] = reasoning
 	}
 	return payload, nil
 }
@@ -368,16 +372,9 @@ func (a openAIResponsesAdapter) convertResponse(response responses.Response, out
 		switch variant := item.AsAny().(type) {
 		case responses.ResponseReasoningItem:
 			textParts := make([]string, 0)
-			for _, content := range variant.Content {
-				if content.Text != "" {
-					textParts = append(textParts, content.Text)
-				}
-			}
-			if len(textParts) == 0 {
-				for _, summary := range variant.Summary {
-					if summary.Text != "" {
-						textParts = append(textParts, summary.Text)
-					}
+			for _, summary := range variant.Summary {
+				if summary.Text != "" {
+					textParts = append(textParts, summary.Text)
 				}
 			}
 			native := map[string]any{

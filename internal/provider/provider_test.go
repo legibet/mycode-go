@@ -624,7 +624,7 @@ func TestOpenAIResponsesConvertsFinalResponseBlocks(t *testing.T) {
 		"status":"completed",
 		"usage":{"input_tokens":10,"output_tokens":5},
 		"output":[
-			{"type":"reasoning","id":"rs_1","status":"completed","content":[{"text":"think"}],"summary":[]},
+			{"type":"reasoning","id":"rs_1","status":"completed","summary":[{"text":"think"}]},
 			{"type":"message","content":[{"type":"output_text","text":"answer","annotations":[]}]},
 			{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":"{\"path\": \"x.py\"}","status":"completed"}
 		]
@@ -636,6 +636,15 @@ func TestOpenAIResponsesConvertsFinalResponseBlocks(t *testing.T) {
 	}
 	if msg.Content[0].Type != "thinking" || msg.Content[0].Text != "think" {
 		t.Fatalf("unexpected message: %#v", msg)
+	}
+	nativeBlockMeta, _ := msg.Content[0].Meta["native"].(map[string]any)
+	summary, _ := nativeBlockMeta["summary"].([]any)
+	if len(summary) != 1 {
+		t.Fatalf("unexpected thinking metadata: %#v", msg.Content[0].Meta)
+	}
+	firstSummary, _ := summary[0].(map[string]any)
+	if nativeBlockMeta["item_id"] != "rs_1" || nativeBlockMeta["status"] != "completed" || firstSummary["text"] != "think" {
+		t.Fatalf("unexpected thinking metadata: %#v", msg.Content[0].Meta)
 	}
 	if msg.Content[1].Type != "text" || msg.Content[1].Text != "answer" {
 		t.Fatalf("unexpected text block: %#v", msg.Content[1])
