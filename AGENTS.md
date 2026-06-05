@@ -10,7 +10,7 @@ Always-loaded context for agent runs on this branch. Detailed specs live in `doc
 - `mycode-go` — this Go rewrite; tracks `main`, keeps Go internals idiomatic, and stays free of Wails code.
 - `mycode-go-wails` — Wails desktop adapter on top of `mycode-go`.
 
-Current sync: Python `main` reviewed through `5755a71`; `web/` is aligned through `b7b4c46`; Go backend behavior is aligned through `5755a71` where it affects external CLI/API/session/provider behavior.
+Current sync: Python `main` reviewed through `7139c5e`; `web/` is aligned through `7139c5e`; Go backend behavior is aligned through `7139c5e` where it affects external CLI/API/session/provider behavior.
 
 ## Project Layout
 
@@ -46,7 +46,7 @@ scripts/
 
 A single block-based JSON format is used at runtime, in persistence, and over the API. Block types: `text` · `image` · `document` · `thinking` · `tool_use` · `tool_result`.
 
-`thinking` blocks are first-class session data. Tool results are stored as `user` messages whose `tool_result` blocks carry provider-facing `output` plus structured UI `metadata`. Session `meta.json` stores `cwd`, `title`, `created_at`, `updated_at`, and `message_format_version=7`; provider/model/api_base live on per-turn messages.
+`thinking` blocks are first-class session data. Tool results are stored as `user` messages whose `tool_result` blocks carry provider-facing `output` plus structured UI `metadata`. Session `meta.json` stores `cwd`, `title`, `created_at`, and `updated_at`; provider/model/api_base live on per-turn messages.
 
 Cancelled provider streams may persist partial assistant `thinking`/`text`. Cancelled streaming tools append `error: cancelled` to emitted output.
 

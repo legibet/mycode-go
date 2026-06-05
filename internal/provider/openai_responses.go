@@ -154,7 +154,11 @@ func (a openAIResponsesAdapter) buildPayload(req Request) (map[string]any, error
 	if len(req.Tools) > 0 {
 		toolsPayload := make([]any, 0, len(req.Tools))
 		for _, tool := range req.Tools {
-			toolsPayload = append(toolsPayload, a.serializeTool(tool))
+			serialized, err := a.serializeTool(tool)
+			if err != nil {
+				return nil, err
+			}
+			toolsPayload = append(toolsPayload, serialized)
 		}
 		payload["tools"] = toolsPayload
 		payload["tool_choice"] = "auto"
@@ -303,63 +307,139 @@ func (a openAIResponsesAdapter) serializeFallbackAssistantMessage(msg message.Me
 	return items
 }
 
-func (a openAIResponsesAdapter) serializeTool(tool map[string]any) map[string]any {
+func (a openAIResponsesAdapter) serializeTool(tool map[string]any) (map[string]any, error) {
 	parameters := dumpJSONMap(tool["input_schema"])
-	properties, _ := parameters["properties"].(map[string]any)
-	requiredList, _ := parameters["required"].([]any)
-	required := map[string]struct{}{}
-	for _, item := range requiredList {
-		if name, ok := item.(string); ok {
-			required[name] = struct{}{}
-		}
+	if parameters == nil {
+		parameters = map[string]any{"type": "object", "properties": map[string]any{}}
 	}
-	if properties != nil {
-		copied := dumpJSONMap(properties)
-		names := slices.Sorted(maps.Keys(copied))
-		for name, rawSchema := range copied {
-			schema, ok := rawSchema.(map[string]any)
-			if !ok {
-				copied[name] = map[string]any{"anyOf": []any{rawSchema, map[string]any{"type": "null"}}}
-				continue
-			}
-			if _, ok := required[name]; ok {
-				continue
-			}
-			switch fieldType := schema["type"].(type) {
-			case string:
-				schema["type"] = []any{fieldType, "null"}
-			case []any:
-				if !slices.ContainsFunc(fieldType, func(item any) bool {
-					text, ok := item.(string)
-					return ok && text == "null"
-				}) {
-					schema["type"] = append(fieldType, "null")
-				}
-			default:
-				copied[name] = map[string]any{"anyOf": []any{schema, map[string]any{"type": "null"}}}
-				continue
-			}
-			if enumValues, ok := schema["enum"].([]any); ok {
-				if !slices.Contains(enumValues, any(nil)) {
-					schema["enum"] = append(enumValues, nil)
-				}
-			}
-			copied[name] = schema
-		}
-		parameters["properties"] = copied
-		requiredKeys := make([]any, len(names))
-		for i, name := range names {
-			requiredKeys[i] = name
-		}
-		parameters["required"] = requiredKeys
+	if err := normalizeStrictSchema(parameters); err != nil {
+		return nil, err
 	}
+	name, _ := tool["name"].(string)
+	description, _ := tool["description"].(string)
 	return map[string]any{
 		"type":        "function",
-		"name":        tool["name"],
-		"description": tool["description"],
+		"name":        name,
+		"description": description,
 		"parameters":  parameters,
 		"strict":      true,
+	}, nil
+}
+
+func normalizeStrictSchema(schema any) error {
+	switch value := schema.(type) {
+	case []any:
+		for _, item := range value {
+			if err := normalizeStrictSchema(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	case map[string]any:
+		delete(value, "default")
+		if additionalProperties, ok := value["additionalProperties"]; ok && additionalProperties != nil && additionalProperties != false {
+			return errors.New("OpenAI strict tool schemas do not support object schemas with dynamic keys")
+		}
+
+		properties, _ := value["properties"].(map[string]any)
+		if properties != nil {
+			required := stringSet(value["required"])
+			for name, propertySchema := range properties {
+				if err := normalizeStrictSchema(propertySchema); err != nil {
+					return err
+				}
+				if !required[name] {
+					properties[name] = nullableSchema(propertySchema)
+				}
+			}
+
+			names := slices.Sorted(maps.Keys(properties))
+			requiredNames := make([]any, len(names))
+			for i, name := range names {
+				requiredNames[i] = name
+			}
+			value["required"] = requiredNames
+			value["additionalProperties"] = false
+		}
+
+		for _, key := range []string{"$defs", "defs"} {
+			defs, _ := value[key].(map[string]any)
+			for _, definition := range defs {
+				if err := normalizeStrictSchema(definition); err != nil {
+					return err
+				}
+			}
+		}
+		for _, key := range []string{"items", "anyOf", "oneOf", "allOf"} {
+			if err := normalizeStrictSchema(value[key]); err != nil {
+				return err
+			}
+		}
 	}
+	return nil
+}
+
+func stringSet(value any) map[string]bool {
+	out := map[string]bool{}
+	for _, item := range asSlice(value) {
+		if text, ok := item.(string); ok {
+			out[text] = true
+		}
+	}
+	return out
+}
+
+func nullableSchema(schema any) map[string]any {
+	object, ok := schema.(map[string]any)
+	if !ok {
+		return map[string]any{"anyOf": []any{schema, map[string]any{"type": "null"}}}
+	}
+
+	switch schemaType := object["type"].(type) {
+	case string:
+		if schemaType == "null" {
+			return object
+		}
+		nullable := dumpJSONMap(object)
+		nullable["type"] = []any{schemaType, "null"}
+		addNullToEnum(nullable)
+		return nullable
+	case []any:
+		if slices.ContainsFunc(schemaType, func(item any) bool {
+			text, ok := item.(string)
+			return ok && text == "null"
+		}) {
+			return object
+		}
+		nullable := dumpJSONMap(object)
+		nullable["type"] = append(slices.Clone(schemaType), "null")
+		addNullToEnum(nullable)
+		return nullable
+	default:
+		for _, item := range asSlice(object["anyOf"]) {
+			if itemObject, ok := item.(map[string]any); ok && itemObject["type"] == "null" {
+				return object
+			}
+		}
+		return map[string]any{"anyOf": []any{object, map[string]any{"type": "null"}}}
+	}
+}
+
+func addNullToEnum(schema map[string]any) {
+	if constValue, ok := schema["const"]; ok {
+		delete(schema, "const")
+		schema["enum"] = []any{constValue, nil}
+		return
+	}
+	enumValues, ok := schema["enum"].([]any)
+	if ok && !slices.Contains(enumValues, any(nil)) {
+		schema["enum"] = append(enumValues, nil)
+	}
+}
+
+func asSlice(value any) []any {
+	items, _ := value.([]any)
+	return items
 }
 
 func (a openAIResponsesAdapter) convertResponse(response responses.Response, outputItems []responses.ResponseOutputItemUnion) message.Message {

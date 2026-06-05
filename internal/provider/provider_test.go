@@ -118,11 +118,14 @@ func TestAnthropicConvertMessageKeepsStopSequenceAndServiceTier(t *testing.T) {
 
 func TestOpenAIResponsesSerializeToolMakesOptionalFieldsNullable(t *testing.T) {
 	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
-	readTool := adapter.serializeTool(map[string]any{
+	readTool, err := adapter.serializeTool(map[string]any{
 		"name":         tools.DefaultSpecs()[0].Name,
 		"description":  tools.DefaultSpecs()[0].Description,
 		"input_schema": tools.DefaultSpecs()[0].InputSchema,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	parameters, _ := readTool["parameters"].(map[string]any)
 	properties, _ := parameters["properties"].(map[string]any)
 	offset, _ := properties["offset"].(map[string]any)
@@ -135,6 +138,120 @@ func TestOpenAIResponsesSerializeToolMakesOptionalFieldsNullable(t *testing.T) {
 	}
 	if got := limit["type"]; !containsAnyString(got, "null") {
 		t.Fatalf("limit should be nullable: %#v", readTool)
+	}
+}
+
+func TestOpenAIResponsesSerializeToolDefaultsMissingSchema(t *testing.T) {
+	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
+	tool, err := adapter.serializeTool(map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameters, _ := tool["parameters"].(map[string]any)
+	if tool["name"] != "" || tool["description"] != "" {
+		t.Fatalf("unexpected tool metadata: %#v", tool)
+	}
+	if parameters["type"] != "object" || parameters["additionalProperties"] != false {
+		t.Fatalf("unexpected default schema: %#v", parameters)
+	}
+	if !reflect.DeepEqual(parameters["properties"], map[string]any{}) || !reflect.DeepEqual(parameters["required"], []any{}) {
+		t.Fatalf("unexpected default schema: %#v", parameters)
+	}
+}
+
+func TestOpenAIResponsesSerializesNestedStrictToolSchemas(t *testing.T) {
+	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
+	payload := mustPayload(t, adapter, Request{
+		Model: "gpt-5.4",
+		Messages: []message.Message{
+			message.UserTextMessage("hello", nil),
+		},
+		Tools: []map[string]any{{
+			"name":        "patch",
+			"description": "Patch a file.",
+			"input_schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path":  map[string]any{"type": "string"},
+					"limit": map[string]any{"anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "null"}}, "default": nil},
+					"mode":  map[string]any{"type": "string", "enum": []any{"fast", "safe"}, "default": "fast"},
+					"fixed": map[string]any{"type": "string", "const": "stable", "default": "stable"},
+					"edits": map[string]any{"type": "array", "items": map[string]any{"$ref": "#/$defs/EditEntry"}},
+				},
+				"required": []any{"path", "edits"},
+				"$defs": map[string]any{
+					"EditEntry": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"oldText": map[string]any{"type": "string"},
+							"newText": map[string]any{"type": "string"},
+						},
+						"required": []any{"oldText", "newText"},
+					},
+				},
+			},
+		}},
+	})
+
+	toolsPayload, _ := payload["tools"].([]any)
+	serializedTool, _ := toolsPayload[0].(map[string]any)
+	parameters, _ := serializedTool["parameters"].(map[string]any)
+	properties, _ := parameters["properties"].(map[string]any)
+	if serializedTool["strict"] != true || parameters["additionalProperties"] != false {
+		t.Fatalf("unexpected strict schema: %#v", serializedTool)
+	}
+	if !reflect.DeepEqual(parameters["required"], []any{"edits", "fixed", "limit", "mode", "path"}) {
+		t.Fatalf("unexpected required fields: %#v", parameters["required"])
+	}
+
+	limit, _ := properties["limit"].(map[string]any)
+	if _, ok := limit["default"]; ok {
+		t.Fatalf("default should be removed: %#v", limit)
+	}
+	if !reflect.DeepEqual(limit["anyOf"], []any{map[string]any{"type": "integer"}, map[string]any{"type": "null"}}) {
+		t.Fatalf("unexpected nullable anyOf: %#v", limit)
+	}
+
+	mode, _ := properties["mode"].(map[string]any)
+	if !reflect.DeepEqual(mode["type"], []any{"string", "null"}) || !reflect.DeepEqual(mode["enum"], []any{"fast", "safe", nil}) {
+		t.Fatalf("unexpected nullable enum: %#v", mode)
+	}
+	fixed, _ := properties["fixed"].(map[string]any)
+	if !reflect.DeepEqual(fixed["enum"], []any{"stable", nil}) {
+		t.Fatalf("unexpected nullable const: %#v", fixed)
+	}
+
+	defs, _ := parameters["$defs"].(map[string]any)
+	editEntry, _ := defs["EditEntry"].(map[string]any)
+	if editEntry["additionalProperties"] != false || !reflect.DeepEqual(editEntry["required"], []any{"newText", "oldText"}) {
+		t.Fatalf("unexpected nested object schema: %#v", editEntry)
+	}
+}
+
+func TestOpenAIResponsesRejectsDynamicObjectToolSchemas(t *testing.T) {
+	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
+	_, err := adapter.buildPayload(Request{
+		Model: "gpt-5.4",
+		Messages: []message.Message{
+			message.UserTextMessage("hello", nil),
+		},
+		Tools: []map[string]any{{
+			"name":        "search",
+			"description": "Search entries.",
+			"input_schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"filters": map[string]any{
+						"type":                 "object",
+						"additionalProperties": map[string]any{"type": "string"},
+					},
+				},
+				"required": []any{"filters"},
+			},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "dynamic keys") {
+		t.Fatalf("expected dynamic key schema error, got %v", err)
 	}
 }
 

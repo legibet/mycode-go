@@ -78,17 +78,6 @@ func TestListSessionsFiltersSortsAndLatest(t *testing.T) {
 	}
 }
 
-func TestNewSessionUsesV7FormatVersion(t *testing.T) {
-	store := NewStore(t.TempDir())
-	data, err := store.CreateSession("s1", "/tmp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if data.Session.MessageFormatVersion != 7 {
-		t.Fatalf("expected format version 7, got %d", data.Session.MessageFormatVersion)
-	}
-}
-
 func TestAppendMessageNormalizesSessionTitle(t *testing.T) {
 	store := NewStore(t.TempDir())
 	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
@@ -182,6 +171,13 @@ func TestClearSessionKeepsSessionAddressable(t *testing.T) {
 	if loaded == nil || len(loaded.Messages) != 0 || loaded.Session.Title != DefaultSessionTitle {
 		t.Fatalf("unexpected cleared session: %#v", loaded)
 	}
+	sessions, err := store.ListSessions("/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Title != DefaultSessionTitle {
+		t.Fatalf("unexpected session list after clear: %#v", sessions)
+	}
 }
 
 func TestDeleteSessionRemovesSession(t *testing.T) {
@@ -203,6 +199,45 @@ func TestDeleteSessionRemovesSession(t *testing.T) {
 	}
 	if loaded != nil {
 		t.Fatalf("unexpected deleted session: %#v", loaded)
+	}
+	sessions, err := store.ListSessions("/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("unexpected session list after delete: %#v", sessions)
+	}
+}
+
+func TestListSessionsRecoversUnavailableIndex(t *testing.T) {
+	for _, name := range []string{"missing", "damaged"} {
+		t.Run(name, func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			if _, err := store.CreateSession("s1", "/tmp"); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.AppendMessage("s1", message.UserTextMessage("Hello", nil), "/tmp"); err != nil {
+				t.Fatal(err)
+			}
+			switch name {
+			case "missing":
+				if err := os.Remove(store.indexPath()); err != nil {
+					t.Fatal(err)
+				}
+			case "damaged":
+				if err := os.WriteFile(store.indexPath(), []byte("{bad json"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			sessions, err := store.ListSessions("/tmp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(sessions) != 1 || sessions[0].ID != "s1" || sessions[0].Title != "Hello" {
+				t.Fatalf("unexpected recovered sessions: %#v", sessions)
+			}
+		})
 	}
 }
 

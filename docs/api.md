@@ -68,8 +68,7 @@ Response:
     "cwd": "...",
     "title": "...",
     "created_at": "...",
-    "updated_at": "...",
-    "message_format_version": 7
+    "updated_at": "..."
   }
 }
 ```
@@ -216,7 +215,7 @@ Session routes are wired in `internal/server/app.go` and implemented through `in
 List sessions. Optional `cwd` filters by the exact stored cwd. Each session includes `is_running`.
 
 ```json
-{"sessions": [{"id": "...", "title": "...", "cwd": "...", "message_format_version": 7, "is_running": false}]}
+{"sessions": [{"id": "...", "title": "...", "cwd": "...", "is_running": false}]}
 ```
 
 ### `POST /api/sessions`

@@ -285,6 +285,15 @@ func TestBash(t *testing.T) {
 		}
 	})
 
+	t.Run("does not wait for implicit stdin", func(t *testing.T) {
+		dir := t.TempDir()
+		executor := NewExecutor(dir, dir, false)
+		result := executor.Bash("stdin-devnull", `python3 -c "import sys; print(repr(sys.stdin.read()))"`, 1, nil)
+		if result.Output != "''" {
+			t.Fatalf("unexpected output: %q", result.Output)
+		}
+	})
+
 	t.Run("large output truncates and saves log", func(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)

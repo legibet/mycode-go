@@ -5,10 +5,12 @@ Source: `internal/session/store.go`
 ## Storage Layout
 
 ```text
-$MYCODE_HOME/sessions/<session_id>/
-  meta.json        # session metadata
-  messages.jsonl   # one JSON record per line, append-only
-  tool-output/     # bash spill files, created lazily
+$MYCODE_HOME/sessions/
+  index.json       # session list cache
+  <session_id>/
+    meta.json      # session metadata
+    messages.jsonl # one JSON record per line, append-only
+    tool-output/   # bash spill files, created lazily
 ```
 
 `$MYCODE_HOME` defaults to `~/.mycode`. `tool-output/` is the per-session directory passed into tool execution and is created only when bash output spills.
@@ -20,17 +22,30 @@ $MYCODE_HOME/sessions/<session_id>/
   "cwd": "/path/to/workspace",
   "title": "...",
   "created_at": "...",
-  "updated_at": "...",
-  "message_format_version": 7
+  "updated_at": "..."
 }
 ```
 
 - `cwd` — workspace path recorded at session creation; used by `ListSessions(cwd)` for filtering
 - `title` — defaults to `"New chat"`; promoted to the first user message text, truncated to 48 chars
 - `updated_at` — bumped on every appended message
-- `message_format_version` — written as `7`
 
 Per-turn state (`provider` / `model` / `api_base`) lives only on each assistant message `meta`; caching a current value at the session level would drift after model switches.
+
+## index.json
+
+```json
+{
+  "session-id": {
+    "cwd": "/path/to/workspace",
+    "title": "...",
+    "created_at": "...",
+    "updated_at": "..."
+  }
+}
+```
+
+`index.json` maps session ids to session metadata. `ListSessions(cwd)` reads it directly; missing or invalid index data is rebuilt from existing `meta.json` files.
 
 ## messages.jsonl Record Types
 

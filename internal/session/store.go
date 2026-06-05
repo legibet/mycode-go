@@ -22,19 +22,15 @@ import (
 )
 
 const (
-	// MessageFormatVersion is the shared persisted session format version.
-	// Change it only with a cross-runtime migration plan.
-	MessageFormatVersion = 7
-	DefaultSessionTitle  = "New chat"
+	DefaultSessionTitle = "New chat"
 )
 
 // Meta is the JSON saved in meta.json.
 type Meta struct {
-	CWD                  string `json:"cwd"`
-	Title                string `json:"title"`
-	CreatedAt            string `json:"created_at"`
-	UpdatedAt            string `json:"updated_at"`
-	MessageFormatVersion int    `json:"message_format_version"`
+	CWD       string `json:"cwd"`
+	Title     string `json:"title"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 type Summary struct {
@@ -52,6 +48,7 @@ type Data struct {
 type Store struct {
 	dataDir string
 	mu      sync.Mutex
+	indexMu sync.Mutex
 	locks   map[string]*sync.Mutex
 }
 
@@ -100,11 +97,10 @@ func ApplyRewind(messages []message.Message) []message.Message {
 func (s *Store) DraftSession(cwd string) Data {
 	nowValue := now()
 	meta := Meta{
-		CWD:                  config.ExpandAbs(cwd),
-		Title:                DefaultSessionTitle,
-		CreatedAt:            nowValue,
-		UpdatedAt:            nowValue,
-		MessageFormatVersion: MessageFormatVersion,
+		CWD:       config.ExpandAbs(cwd),
+		Title:     DefaultSessionTitle,
+		CreatedAt: nowValue,
+		UpdatedAt: nowValue,
 	}
 	return Data{
 		Session:  Summary{ID: randomHex16(), Meta: meta},
@@ -140,24 +136,20 @@ func (s *Store) CreateSession(sessionID, cwd string) (Data, error) {
 
 // ListSessions returns sessions (filtered by cwd when non-empty), sorted by updated_at desc.
 func (s *Store) ListSessions(cwd string) ([]Summary, error) {
-	entries, err := os.ReadDir(s.dataDir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	s.indexMu.Lock()
+	index, err := s.readIndexLocked()
+	s.indexMu.Unlock()
+	if err != nil {
 		return nil, err
 	}
+
 	filterCWD := config.ExpandAbs(cwd)
-	out := make([]Summary, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		meta, err := s.readMeta(entry.Name())
-		if err != nil {
-			continue
-		}
+	out := make([]Summary, 0, len(index))
+	for sessionID, meta := range index {
 		if filterCWD != "" && config.ExpandAbs(meta.CWD) != filterCWD {
 			continue
 		}
-		out = append(out, Summary{ID: entry.Name(), Meta: meta})
+		out = append(out, Summary{ID: sessionID, Meta: meta})
 	}
 	slices.SortFunc(out, func(a, b Summary) int {
 		return cmp.Compare(b.UpdatedAt, a.UpdatedAt)
@@ -200,7 +192,19 @@ func (s *Store) DeleteSession(sessionID string) error {
 	lock := s.sessionLock(sessionID)
 	lock.Lock()
 	defer lock.Unlock()
-	return os.RemoveAll(s.SessionDir(sessionID))
+
+	if err := os.RemoveAll(s.SessionDir(sessionID)); err != nil {
+		return err
+	}
+
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	index, err := s.readIndexLocked()
+	if err != nil {
+		return err
+	}
+	delete(index, sessionID)
+	return s.writeIndexLocked(index)
 }
 
 // ClearSession resets messages but keeps meta so the session id stays addressable.
@@ -264,11 +268,10 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string)
 		}
 		nowValue := now()
 		meta = Meta{
-			CWD:                  config.ExpandAbs(cwd),
-			Title:                DefaultSessionTitle,
-			CreatedAt:            nowValue,
-			UpdatedAt:            nowValue,
-			MessageFormatVersion: MessageFormatVersion,
+			CWD:       config.ExpandAbs(cwd),
+			Title:     DefaultSessionTitle,
+			CreatedAt: nowValue,
+			UpdatedAt: nowValue,
 		}
 	}
 
@@ -345,7 +348,63 @@ func (s *Store) writeMeta(sessionID string, meta Meta) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.metaPath(sessionID), data, 0o644)
+	if err := os.WriteFile(s.metaPath(sessionID), data, 0o644); err != nil {
+		return err
+	}
+
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	index, err := s.readIndexLocked()
+	if err != nil {
+		return err
+	}
+	index[sessionID] = meta
+	return s.writeIndexLocked(index)
+}
+
+func (s *Store) readIndexLocked() (map[string]Meta, error) {
+	data, err := os.ReadFile(s.indexPath())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return s.rebuildIndexLocked()
+		}
+		return nil, err
+	}
+	var index map[string]Meta
+	if err := json.Unmarshal(data, &index); err != nil || index == nil {
+		return s.rebuildIndexLocked()
+	}
+	return index, nil
+}
+
+func (s *Store) rebuildIndexLocked() (map[string]Meta, error) {
+	entries, err := os.ReadDir(s.dataDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]Meta{}, nil
+		}
+		return nil, err
+	}
+
+	index := make(map[string]Meta)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		meta, err := s.readMeta(entry.Name())
+		if err == nil {
+			index[entry.Name()] = meta
+		}
+	}
+	return index, s.writeIndexLocked(index)
+}
+
+func (s *Store) writeIndexLocked(index map[string]Meta) error {
+	data, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.indexPath(), data, 0o644)
 }
 
 func (s *Store) ensureSessionDir(sessionID string) error {
@@ -358,6 +417,10 @@ func (s *Store) SessionDir(sessionID string) string {
 
 func (s *Store) metaPath(sessionID string) string {
 	return filepath.Join(s.SessionDir(sessionID), "meta.json")
+}
+
+func (s *Store) indexPath() string {
+	return filepath.Join(s.dataDir, "index.json")
 }
 
 func (s *Store) messagesPath(sessionID string) string {

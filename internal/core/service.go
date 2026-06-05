@@ -88,13 +88,12 @@ type SessionResponse struct {
 }
 
 type SessionListItem struct {
-	ID                   string `json:"id"`
-	Title                string `json:"title"`
-	CWD                  string `json:"cwd"`
-	CreatedAt            string `json:"created_at"`
-	UpdatedAt            string `json:"updated_at"`
-	MessageFormatVersion int    `json:"message_format_version"`
-	IsRunning            bool   `json:"is_running"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	CWD       string `json:"cwd"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	IsRunning bool   `json:"is_running"`
 }
 
 type SessionsResponse struct {
@@ -451,13 +450,12 @@ func (s *Service) ListSessions(cwd string) (SessionsResponse, error) {
 	sessions := make([]SessionListItem, 0, len(items))
 	for _, item := range items {
 		sessions = append(sessions, SessionListItem{
-			ID:                   item.ID,
-			Title:                item.Title,
-			CWD:                  item.CWD,
-			CreatedAt:            item.CreatedAt,
-			UpdatedAt:            item.UpdatedAt,
-			MessageFormatVersion: item.MessageFormatVersion,
-			IsRunning:            s.runs.hasActiveRun(item.ID),
+			ID:        item.ID,
+			Title:     item.Title,
+			CWD:       item.CWD,
+			CreatedAt: item.CreatedAt,
+			UpdatedAt: item.UpdatedAt,
+			IsRunning: s.runs.hasActiveRun(item.ID),
 		})
 	}
 	return SessionsResponse{Sessions: sessions}, nil
