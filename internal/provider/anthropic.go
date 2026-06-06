@@ -83,8 +83,7 @@ func (a anthropicAdapter) StreamTurn(ctx context.Context, req Request) <-chan St
 			return
 		}
 
-		final := a.convertMessage(acc)
-		out <- StreamEvent{Type: "message_done", Msg: &final}
+		out <- StreamEvent{Type: "message_done", Msg: new(a.convertMessage(acc))}
 	}()
 	return out
 }

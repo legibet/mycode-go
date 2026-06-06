@@ -241,7 +241,7 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 	}
 
 	var assistant *message.Message
-	partialContent := []message.Block{}
+	var partialContent []message.Block
 	var thinkingStartedAt time.Time
 	thinkingDurationMs := -1
 	for event := range a.Adapter.StreamTurn(ctx, req) {
@@ -307,12 +307,11 @@ func (a *Agent) cancelledAssistantMessage(blocks []message.Block, thinkingStarte
 	}
 	applyThinkingDuration(blocks, thinkingDurationMs)
 
-	msg := message.BuildMessage("assistant", blocks, map[string]any{
+	return new(message.BuildMessage("assistant", blocks, map[string]any{
 		"provider":       a.Provider,
 		"model":          a.Model,
 		"context_window": a.ContextWindow,
-	})
-	return &msg
+	}))
 }
 
 func applyThinkingDuration(blocks []message.Block, durationMs int) {
@@ -360,8 +359,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 			result = &tools.Result{Output: "error: unknown tool: " + toolCall.Name, IsError: true}
 		}
 		if result == nil {
-			runResult := a.runTool(ctx, toolCall, out)
-			result = &runResult
+			result = new(a.runTool(ctx, toolCall, out))
 		}
 		toolResults = append(toolResults, message.ToolResultBlock(
 			toolCall.ID,
@@ -432,7 +430,7 @@ func (a *Agent) runTool(ctx context.Context, toolCall message.Block, out chan<- 
 	case "edit":
 		return a.Tools.Edit(asString(toolCall.Input["path"]), asEdits(toolCall.Input["edits"]))
 	case "bash":
-		outputParts := []string{}
+		var outputParts []string
 		result := a.Tools.Bash(toolCall.ID, asString(toolCall.Input["command"]), asInt(toolCall.Input["timeout"]), func(text string) {
 			if ctx.Err() != nil {
 				return

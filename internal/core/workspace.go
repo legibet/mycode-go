@@ -37,7 +37,7 @@ func workspaceRoots() []string {
 	}
 
 	seen := map[string]struct{}{}
-	out := []string{}
+	var out []string
 	for _, value := range values {
 		value = strings.TrimSpace(value)
 		if value == "" {

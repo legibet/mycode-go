@@ -1149,7 +1149,7 @@ func TestGoogleHTTPOptionsDropsVersionWhenBaseIncludesAPIVersion(t *testing.T) {
 
 func TestGoogleStreamingPartsMergeIntoFinalBlocks(t *testing.T) {
 	adapter := newGoogleAdapter().(googleAdapter)
-	blocks := []message.Block{}
+	var blocks []message.Block
 
 	events := adapter.consumePart(&blocks, &genai.Part{Text: "step ", Thought: true})
 	if len(events) != 1 || events[0].Type != "thinking_delta" || events[0].Text != "step " {

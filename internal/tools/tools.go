@@ -428,7 +428,7 @@ func (e *Executor) Read(path string, offset, limit int) Result {
 	defer func() { _ = file.Close() }()
 
 	reader := bufio.NewReader(file)
-	lines := []string{}
+	var lines []string
 	totalLines := 0
 	nextOffset := 0
 	firstShortened := 0
@@ -473,7 +473,7 @@ func (e *Executor) Read(path string, offset, limit int) Result {
 		return errorResult(fmt.Sprintf("error: offset %d beyond end of file (%d lines)", offset, totalLines))
 	}
 
-	parts := []string{}
+	var parts []string
 	content := strings.Join(lines, "\n")
 	if content != "" {
 		parts = append(parts, content)
@@ -735,10 +735,10 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 	}()
 
 	logPath := filepath.Join(e.toolOutputDir, "bash-"+toolCallID+".log")
-	keptLines := []string{}
+	var keptLines []string
 	keptBytes := 0
 	totalLineCount := 0
-	tailLines := []string{}
+	var tailLines []string
 	var logFile *os.File
 	var savedOutputPath string
 	doneReading := false
@@ -1043,7 +1043,7 @@ func splitLinesKeepEnds(text string) []string {
 	if text == "" {
 		return nil
 	}
-	lines := []string{}
+	var lines []string
 	start := 0
 	for start < len(text) {
 		end := start

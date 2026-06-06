@@ -407,7 +407,7 @@ func (s *Service) UpdateSettings(req SettingsRequest) (map[string]any, error) {
 		return nil, statusError(http.StatusInternalServerError, err.Error())
 	}
 	incoming := map[string]any{}
-	order := config.ConfigOrder{}
+	order := config.Order{}
 	if text := strings.TrimSpace(string(req.Config)); text != "" && text != "null" {
 		if err := json.Unmarshal(req.Config, &incoming); err != nil {
 			return nil, statusError(http.StatusBadRequest, err.Error())

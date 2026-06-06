@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/legibet/mycode-go/internal/models"
+	M "github.com/legibet/mycode-go/internal/models"
 	"github.com/legibet/mycode-go/internal/provider"
 )
 
@@ -31,7 +31,7 @@ var (
 	validPermissionModes  = []string{"ask", "deny"}
 )
 
-var lookupModelMetadata = models.Lookup
+var lookupModelMetadata = M.Lookup
 
 var ErrUnsupportedReasoningEffort = errors.New("unsupported reasoning_effort")
 
@@ -100,7 +100,7 @@ type loadedConfig struct {
 	ModelOrder    map[string][]string
 }
 
-type ConfigOrder struct {
+type Order struct {
 	ProviderOrder []string
 	ModelOrder    map[string][]string
 }
@@ -242,7 +242,7 @@ func Load(cwd string) (Settings, error) {
 
 	mergedProviders := map[string]map[string]any{}
 	mergedModelOrder := map[string][]string{}
-	providerOrder := []string{}
+	var providerOrder []string
 	seenProviders := map[string]struct{}{}
 
 	configPaths := []string{ResolveSymlinks(filepath.Join(ResolveHome(), "config.json"))}
@@ -364,8 +364,8 @@ func PermissionModeOptions() []string {
 }
 
 // ParseConfigOrder preserves model order lost by map unmarshalling.
-func ParseConfigOrder(data []byte) ConfigOrder {
-	out := ConfigOrder{ModelOrder: map[string][]string{}}
+func ParseConfigOrder(data []byte) Order {
+	out := Order{ModelOrder: map[string][]string{}}
 	root, err := parseOrderedObject(data)
 	if err != nil {
 		return out
@@ -524,7 +524,7 @@ func ResolveProvider(settings Settings, providerName, model, apiKey, apiBase str
 		}
 	}
 
-	envNames := []string{}
+	var envNames []string
 	seen := map[string]struct{}{}
 	for _, spec := range provider.Specs() {
 		if !spec.AutoDiscoverable {
@@ -559,7 +559,7 @@ func AvailableProviders(settings Settings) []ResolvedProvider {
 }
 
 func availableProviderReferences(settings Settings) []string {
-	names := []string{}
+	var names []string
 	seen := map[string]struct{}{}
 	configuredTypesWithCredentials := map[string]struct{}{}
 	add := func(name string) {
@@ -616,7 +616,7 @@ func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiB
 	providerType := cmp.Or(configured.Type, selectedName)
 	spec, ok := provider.LookupSpec(providerType)
 	if !ok {
-		supported := []string{}
+		var supported []string
 		for _, candidate := range provider.Specs() {
 			supported = append(supported, candidate.ID)
 		}
@@ -702,7 +702,7 @@ func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiB
 	}, nil
 }
 
-func resolveMetadata(providerType, model string, hasConfig bool, configured ProviderConfig) *models.Metadata {
+func resolveMetadata(providerType, model string, hasConfig bool, configured ProviderConfig) *M.Metadata {
 	meta := lookupModelMetadata(providerType, model)
 	if !hasConfig {
 		return meta
@@ -712,7 +712,7 @@ func resolveMetadata(providerType, model string, hasConfig bool, configured Prov
 		return meta
 	}
 	if meta == nil {
-		meta = &models.Metadata{Provider: providerType, Model: model}
+		meta = &M.Metadata{Provider: providerType, Model: model}
 	}
 	if override.ContextWindow > 0 {
 		meta.ContextWindow = override.ContextWindow
@@ -979,7 +979,7 @@ func validateModelsPayload(name string, value any) (map[string]any, error) {
 		return models, nil
 	case map[string]any:
 		items := map[string]any{}
-		order := []string{}
+		var order []string
 		for modelID, overrides := range raw {
 			if strings.TrimSpace(modelID) == "" {
 				return nil, fmt.Errorf("provider %q: model id must be a non-empty string", name)
@@ -1288,29 +1288,29 @@ func ResponseReasoningEffort(value string) any {
 // ReadRawSettings loads the global settings JSON. Returns an empty map and
 // exists=false when the file is missing or not a regular file (e.g. a
 // directory placeholder). Parse failures bubble up with the file path.
-func ReadRawSettings(path string) (raw map[string]any, order ConfigOrder, exists bool, err error) {
+func ReadRawSettings(path string) (raw map[string]any, order Order, exists bool, err error) {
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return map[string]any{}, ConfigOrder{}, false, nil
+		return map[string]any{}, Order{}, false, nil
 	}
 	if err != nil {
-		return nil, ConfigOrder{}, false, err
+		return nil, Order{}, false, err
 	}
 	if !info.Mode().IsRegular() {
-		return map[string]any{}, ConfigOrder{}, false, nil
+		return map[string]any{}, Order{}, false, nil
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, ConfigOrder{}, false, err
+		return nil, Order{}, false, err
 	}
 	var parsed any
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		return nil, ConfigOrder{}, true, fmt.Errorf("failed to parse %s: %w", path, err)
+		return nil, Order{}, true, fmt.Errorf("failed to parse %s: %w", path, err)
 	}
 	root, ok := parsed.(map[string]any)
 	if !ok {
-		return nil, ConfigOrder{}, true, fmt.Errorf("%s must contain a JSON object", path)
+		return nil, Order{}, true, fmt.Errorf("%s must contain a JSON object", path)
 	}
 	return root, ParseConfigOrder(data), true, nil
 }
@@ -1318,7 +1318,7 @@ func ReadRawSettings(path string) (raw map[string]any, order ConfigOrder, exists
 // BuildSettingsResponse renders the GET /api/settings payload. The web UI
 // needs the saved config plus metadata about valid options / env vars to
 // render the settings form without making extra calls.
-func BuildSettingsResponse(path string, exists bool, raw map[string]any, order ConfigOrder) map[string]any {
+func BuildSettingsResponse(path string, exists bool, raw map[string]any, order Order) map[string]any {
 	providerTypes := make([]string, 0, len(provider.Specs()))
 	envNames := map[string]struct{}{}
 	typeEnvVars := map[string][]string{}
@@ -1377,7 +1377,7 @@ func BuildSettingsResponse(path string, exists bool, raw map[string]any, order C
 // presentConfig redacts saved api_key strings (replacing them with the
 // api_key_saved flag) and reshapes models into a sorted name list with
 // optional overrides, so the UI never sees raw secrets.
-func presentConfig(raw map[string]any, order ConfigOrder) map[string]any {
+func presentConfig(raw map[string]any, order Order) map[string]any {
 	out := maps.Clone(raw)
 	if out == nil {
 		out = map[string]any{}
@@ -1450,7 +1450,7 @@ func MergeAPIKeys(incoming, existing map[string]any) {
 // WriteSettingsFile writes payload as pretty-printed JSON via a temp-file
 // rename, preserving the caller-supplied provider/model ordering. The atomic
 // rename ensures a crash mid-write cannot truncate the settings.
-func WriteSettingsFile(path string, payload map[string]any, order ConfigOrder) error {
+func WriteSettingsFile(path string, payload map[string]any, order Order) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

@@ -44,7 +44,6 @@ func TestServiceStartChatRejectsActiveSessionBeforeRewind(t *testing.T) {
 	defer manager.cancelRun(run["id"].(string))
 	waitRunEvent(t, manager, run["id"].(string), "text")
 
-	rewindTo := 0
 	_, err = service.StartChat(ChatRequest{
 		SessionID: sessionID,
 		Message:   "new prompt",
@@ -52,7 +51,7 @@ func TestServiceStartChatRejectsActiveSessionBeforeRewind(t *testing.T) {
 		Provider:  "openai",
 		Model:     "gpt-5.4",
 		APIKey:    "sk-test",
-		RewindTo:  &rewindTo,
+		RewindTo:  new(0),
 	})
 	expectStatus(t, err, http.StatusConflict)
 

@@ -192,7 +192,7 @@ func classifyBash(command string) Tier {
 }
 
 func shellTokens(command string) ([]string, error) {
-	tokens := []string{}
+	var tokens []string
 	var current strings.Builder
 	quote := rune(0)
 	escaped := false

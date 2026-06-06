@@ -293,8 +293,7 @@ func (m *RunManager) snapshotSession(sessionID string) *runSnapshot {
 	if state == nil {
 		return nil
 	}
-	snap := state.snapshot()
-	return &snap
+	return new(state.snapshot())
 }
 
 func (m *RunManager) activeRunInfo(sessionID string) map[string]any {

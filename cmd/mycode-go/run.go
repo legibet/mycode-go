@@ -102,8 +102,7 @@ func runCommand(args []string) int {
 	var latestAssistant *message.Message
 	onPersist := func(msg message.Message) error {
 		if msg.Role == "assistant" {
-			cloned := message.Clone(msg)
-			latestAssistant = &cloned
+			latestAssistant = new(message.Clone(msg))
 		}
 		return store.AppendMessage(resolvedSession.ID, msg, cwd)
 	}

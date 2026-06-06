@@ -109,8 +109,7 @@ func (a googleAdapter) StreamTurn(ctx context.Context, req Request) <-chan Strea
 		if finishMessage != "" {
 			nativeMeta["finish_message"] = finishMessage
 		}
-		msg := message.AssistantMessage(blocks, a.Spec().ID, cmp.Or(responseModel, req.Model), responseID, finishReason, totalTokens, nativeMeta)
-		out <- StreamEvent{Type: "message_done", Msg: &msg}
+		out <- StreamEvent{Type: "message_done", Msg: new(message.AssistantMessage(blocks, a.Spec().ID, cmp.Or(responseModel, req.Model), responseID, finishReason, totalTokens, nativeMeta))}
 	}()
 	return out
 }

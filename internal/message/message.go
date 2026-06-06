@@ -220,8 +220,7 @@ func CloneBlock(block Block) Block {
 		out.Meta = maps.Clone(block.Meta)
 	}
 	if block.IsError != nil {
-		value := *block.IsError
-		out.IsError = &value
+		out.IsError = new(*block.IsError)
 	}
 	return out
 }

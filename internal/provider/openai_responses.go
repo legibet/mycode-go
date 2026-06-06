@@ -80,8 +80,7 @@ func (a openAIResponsesAdapter) StreamTurn(ctx context.Context, req Request) <-c
 		for _, idx := range slices.Sorted(maps.Keys(doneItems)) {
 			items = append(items, doneItems[idx])
 		}
-		msg := a.convertResponse(*final, items)
-		out <- StreamEvent{Type: "message_done", Msg: &msg}
+		out <- StreamEvent{Type: "message_done", Msg: new(a.convertResponse(*final, items))}
 	}()
 	return out
 }
@@ -104,8 +103,7 @@ func (a openAIResponsesAdapter) applyStreamEvent(event responses.ResponseStreamE
 	case "response.output_item.done":
 		doneItems[int(event.OutputIndex)] = event.Item
 	case "response.completed":
-		response := event.Response
-		*final = &response
+		*final = new(event.Response)
 	case "error":
 		return errors.New(strings.TrimSpace(event.Message))
 	case "response.failed":

@@ -71,7 +71,7 @@ func Build(cwd, project, home string) string {
 }
 
 func loadInstructions(cwd, project, home string) string {
-	sections := []string{}
+	var sections []string
 	for _, path := range discoverInstructionFiles(cwd, project, home) {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -96,7 +96,7 @@ func discoverInstructionFiles(cwd, project, home string) []string {
 	resolvedCWD := config.ResolveSymlinks(cwd)
 	resolvedProject := config.ResolveSymlinks(project)
 	resolvedHome := config.ResolveSymlinks(home)
-	files := []string{}
+	var files []string
 
 	globalCandidate := filepath.Join(resolvedHome, "AGENTS.md")
 	if isFile(globalCandidate) {
@@ -150,7 +150,7 @@ func DiscoverSkills(cwd, project, home string) []Skill {
 		path   string
 		source string
 	}
-	roots := []skillRoot{}
+	var roots []skillRoot
 	if compatHome != "" {
 		roots = append(roots, skillRoot{filepath.Join(compatHome, ".agents", "skills"), "global"})
 	}
@@ -204,7 +204,7 @@ func scanSkillRoot(root, source string) []Skill {
 		return strings.Compare(a.Name(), b.Name())
 	})
 
-	skills := []Skill{}
+	var skills []Skill
 	seenPaths := map[string]struct{}{}
 	addSkill := func(path, fallbackName string) {
 		skill, ok := parseSkill(path, source, fallbackName)
@@ -241,7 +241,7 @@ func scanSkillRoot(root, source string) []Skill {
 		path  string
 		depth int
 	}
-	queue := []pendingDir{}
+	var queue []pendingDir
 	for _, entry := range rootEntries {
 		if !shouldScanDir(entry) {
 			continue

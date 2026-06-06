@@ -91,7 +91,7 @@ func RepairMessagesForReplay(source []message.Message, supportsImageInput, suppo
 	replay := make([]message.Message, 0, len(source))
 	seenToolUseIDs := map[string]struct{}{}
 	seenToolResultIDs := map[string]struct{}{}
-	pendingToolUseIDs := []string{}
+	var pendingToolUseIDs []string
 
 	for _, msg := range source {
 		switch msg.Role {

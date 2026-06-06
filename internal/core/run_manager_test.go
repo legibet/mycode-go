@@ -32,8 +32,7 @@ func (a *blockingAdapter) StreamTurn(ctx context.Context, _ provider.Request) <-
 			return
 		case <-a.release:
 		}
-		msg := message.AssistantMessage([]message.Block{message.TextBlock("reply", nil)}, "openai", "gpt-5.4", "", "", 0, nil)
-		out <- provider.StreamEvent{Type: "message_done", Msg: &msg}
+		out <- provider.StreamEvent{Type: "message_done", Msg: new(message.AssistantMessage([]message.Block{message.TextBlock("reply", nil)}, "openai", "gpt-5.4", "", "", 0, nil))}
 	}()
 	return out
 }
@@ -51,8 +50,7 @@ func (a *completeAdapter) StreamTurn(_ context.Context, _ provider.Request) <-ch
 	go func() {
 		defer close(out)
 		out <- provider.StreamEvent{Type: "text_delta", Text: "reply"}
-		msg := message.AssistantMessage([]message.Block{message.TextBlock("reply", nil)}, "openai", "gpt-5.4", "", "", 0, nil)
-		out <- provider.StreamEvent{Type: "message_done", Msg: &msg}
+		out <- provider.StreamEvent{Type: "message_done", Msg: new(message.AssistantMessage([]message.Block{message.TextBlock("reply", nil)}, "openai", "gpt-5.4", "", "", 0, nil))}
 	}()
 	return out
 }

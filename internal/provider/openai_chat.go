@@ -148,8 +148,7 @@ func (a openAIChatAdapter) StreamTurn(ctx context.Context, req Request) <-chan S
 			blocks = append(blocks, message.ToolUseBlock(cmp.Or(state.ToolID, fmt.Sprintf("tool_call_%d", index)), state.Name, toolInput, meta))
 		}
 
-		msg := message.AssistantMessage(blocks, a.Spec().ID, responseModel, responseID, finishReason, mapTokenCount(usage, "total_tokens"), nil)
-		out <- StreamEvent{Type: "message_done", Msg: &msg}
+		out <- StreamEvent{Type: "message_done", Msg: new(message.AssistantMessage(blocks, a.Spec().ID, responseModel, responseID, finishReason, mapTokenCount(usage, "total_tokens"), nil))}
 	}()
 	return out
 }
