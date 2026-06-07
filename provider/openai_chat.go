@@ -12,8 +12,8 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	oparam "github.com/openai/openai-go/v3/packages/param"
 
-	"github.com/legibet/mycode-go/internal/message"
-	"github.com/legibet/mycode-go/internal/tools"
+	"github.com/legibet/mycode-go/message"
+	"github.com/legibet/mycode-go/tools"
 )
 
 type chatToolCallState struct {

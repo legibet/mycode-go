@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/message"
 )
 
 const CompactSummaryPrompt = `Summarize this conversation to create a continuation document. This summary will replace the full conversation history, so it must capture everything needed to continue the work seamlessly.

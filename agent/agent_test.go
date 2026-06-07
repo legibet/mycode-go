@@ -7,9 +7,10 @@ import (
 	"time"
 
 	"github.com/legibet/mycode-go/internal/config"
-	"github.com/legibet/mycode-go/internal/message"
 	"github.com/legibet/mycode-go/internal/permissions"
-	"github.com/legibet/mycode-go/internal/provider"
+	"github.com/legibet/mycode-go/message"
+	"github.com/legibet/mycode-go/provider"
+	"github.com/legibet/mycode-go/tools"
 )
 
 type fakeAdapter struct {
@@ -59,7 +60,7 @@ func (a *slowProviderAdapter) StreamTurn(ctx context.Context, _ provider.Request
 
 func TestChatPersistsReasoningBlocks(t *testing.T) {
 	dir := t.TempDir()
-	agent, err := New(Agent{
+	agent, err := New(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
@@ -87,9 +88,11 @@ func TestChatPersistsReasoningBlocks(t *testing.T) {
 	}
 
 	persisted := []message.Message{}
-	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), func(msg message.Message) error {
-		persisted = append(persisted, msg)
-		return nil
+	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), ChatOptions{
+		OnPersist: func(msg message.Message) error {
+			persisted = append(persisted, msg)
+			return nil
+		},
 	}))
 
 	if len(events) != 3 || events[0].Type != "reasoning" || events[1].Type != "reasoning_done" || events[2].Type != "text" {
@@ -111,7 +114,7 @@ func TestChatPersistsReasoningBlocks(t *testing.T) {
 func TestChatPersistsPartialAssistantOnProviderCancel(t *testing.T) {
 	dir := t.TempDir()
 	adapter := &slowProviderAdapter{spec: provider.Spec{ID: "openai"}}
-	agent, err := New(Agent{
+	agent, err := New(Config{
 		Model:              "gpt-5.5",
 		Provider:           "openai",
 		CWD:                dir,
@@ -130,9 +133,11 @@ func TestChatPersistsPartialAssistantOnProviderCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	persisted := []message.Message{}
-	stream := agent.Chat(ctx, message.UserTextMessage("hello", nil), func(msg message.Message) error {
-		persisted = append(persisted, msg)
-		return nil
+	stream := agent.Chat(ctx, message.UserTextMessage("hello", nil), ChatOptions{
+		OnPersist: func(msg message.Message) error {
+			persisted = append(persisted, msg)
+			return nil
+		},
 	})
 
 	var first Event
@@ -170,7 +175,7 @@ func TestChatPersistsPartialAssistantOnProviderCancel(t *testing.T) {
 
 func TestChatRespectsExplicitTurnLimit(t *testing.T) {
 	dir := t.TempDir()
-	agent, err := New(Agent{
+	agent, err := New(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
@@ -204,7 +209,7 @@ func TestChatRespectsExplicitTurnLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), nil))
+	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), ChatOptions{}))
 	last := events[len(events)-1]
 	if last.Type != "error" || last.Data["message"] != "max_turns reached" {
 		t.Fatalf("unexpected events: %#v", events)
@@ -222,7 +227,7 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 			},
 		}},
 	}
-	agent, err := New(Agent{
+	agent, err := New(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
@@ -239,7 +244,7 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), nil))
+	collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), ChatOptions{}))
 
 	if len(adapter.requests) != 1 || adapter.requests[0].SessionID != "session-explicit" {
 		t.Fatalf("unexpected requests: %#v", adapter.requests)
@@ -248,7 +253,7 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 
 func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 	dir := t.TempDir()
-	agent, err := New(Agent{
+	agent, err := New(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
@@ -259,7 +264,11 @@ func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 		CompactThreshold:   0.8,
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
-		Permission:         config.PermissionConfig{Level: "readonly", Mode: "deny"},
+		Hooks: tools.Hooks{
+			BeforeTool: []tools.BeforeToolHook{
+				permissions.ToolHook(config.PermissionConfig{Level: "readonly", Mode: "deny"}, nil, dir, dir, nil),
+			},
+		},
 		Adapter: &fakeAdapter{
 			spec: provider.Spec{ID: "openai"},
 			turns: [][]provider.StreamEvent{
@@ -286,7 +295,7 @@ func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), nil))
+	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), ChatOptions{}))
 
 	found := false
 	for _, event := range events {
@@ -302,7 +311,7 @@ func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 
 func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
 	dir := t.TempDir()
-	agent, err := New(Agent{
+	agent, err := New(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
@@ -313,7 +322,7 @@ func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
 		CompactThreshold:   0.8,
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
-		Permission:         config.PermissionConfig{Level: "yolo"},
+		ToolSpecs:          tools.DefaultSpecs(),
 		Adapter: &fakeAdapter{
 			spec: provider.Spec{ID: "openai"},
 			turns: [][]provider.StreamEvent{{
@@ -334,7 +343,7 @@ func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stream := agent.Chat(ctx, message.UserTextMessage("run bash", nil), nil)
+	stream := agent.Chat(ctx, message.UserTextMessage("run bash", nil), ChatOptions{})
 	events := []Event{}
 	for event := range stream {
 		events = append(events, event)
@@ -380,7 +389,7 @@ func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 			}},
 		},
 	}
-	agent, err := New(Agent{
+	agent, err := New(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
@@ -398,7 +407,7 @@ func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), nil))
+	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), ChatOptions{}))
 
 	if len(adapter.requests) != 2 {
 		t.Fatalf("unexpected requests: %#v", adapter.requests)
@@ -417,7 +426,7 @@ func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 
 func TestNewRejectsUnsupportedProviderAdapter(t *testing.T) {
 	dir := t.TempDir()
-	agent, err := New(Agent{
+	agent, err := New(Config{
 		Model:     "gpt-5.4",
 		Provider:  "missing",
 		CWD:       dir,

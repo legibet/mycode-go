@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	agentpkg "github.com/legibet/mycode-go/internal/agent"
-	"github.com/legibet/mycode-go/internal/message"
+	agentpkg "github.com/legibet/mycode-go/agent"
 	"github.com/legibet/mycode-go/internal/permissions"
-	"github.com/legibet/mycode-go/internal/provider"
+	"github.com/legibet/mycode-go/message"
+	"github.com/legibet/mycode-go/provider"
 )
 
 type blockingAdapter struct {
@@ -76,7 +76,7 @@ func (a *errorAdapter) StreamTurn(_ context.Context, _ provider.Request) <-chan 
 func newTestAgent(t *testing.T, adapter provider.Adapter) *agentpkg.Agent {
 	t.Helper()
 	dir := t.TempDir()
-	agent, err := agentpkg.New(agentpkg.Agent{
+	agent, err := agentpkg.New(agentpkg.Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,

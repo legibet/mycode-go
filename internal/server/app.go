@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/legibet/mycode-go/internal/core"
-	"github.com/legibet/mycode-go/internal/session"
+	"github.com/legibet/mycode-go/session"
 )
 
 type app struct {

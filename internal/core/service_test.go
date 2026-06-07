@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/legibet/mycode-go/internal/message"
-	"github.com/legibet/mycode-go/internal/provider"
-	"github.com/legibet/mycode-go/internal/session"
+	"github.com/legibet/mycode-go/message"
+	"github.com/legibet/mycode-go/provider"
+	"github.com/legibet/mycode-go/session"
 )
 
 func TestServiceStartChatRejectsActiveSessionBeforeRewind(t *testing.T) {

@@ -14,8 +14,8 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"google.golang.org/genai"
 
-	"github.com/legibet/mycode-go/internal/message"
-	"github.com/legibet/mycode-go/internal/tools"
+	"github.com/legibet/mycode-go/message"
+	"github.com/legibet/mycode-go/tools"
 )
 
 var (

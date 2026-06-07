@@ -14,8 +14,8 @@ import (
 	oparam "github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/legibet/mycode-go/internal/message"
-	"github.com/legibet/mycode-go/internal/tools"
+	"github.com/legibet/mycode-go/message"
+	"github.com/legibet/mycode-go/tools"
 )
 
 type openAIResponsesAdapter struct {

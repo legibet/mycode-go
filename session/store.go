@@ -17,8 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/legibet/mycode-go/internal/config"
-	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/message"
 )
 
 const (
@@ -54,8 +53,9 @@ type Store struct {
 
 func NewStore(dataDir string) *Store {
 	if dataDir == "" {
-		dataDir = config.ResolveSessionsDir()
+		dataDir = "."
 	}
+	dataDir = absPath(dataDir)
 	_ = os.MkdirAll(dataDir, 0o755)
 	return &Store{
 		dataDir: dataDir,
@@ -97,7 +97,7 @@ func ApplyRewind(messages []message.Message) []message.Message {
 func (s *Store) DraftSession(cwd string) Data {
 	nowValue := now()
 	meta := Meta{
-		CWD:       config.ExpandAbs(cwd),
+		CWD:       absPath(cwd),
 		Title:     DefaultSessionTitle,
 		CreatedAt: nowValue,
 		UpdatedAt: nowValue,
@@ -143,10 +143,10 @@ func (s *Store) ListSessions(cwd string) ([]Summary, error) {
 		return nil, err
 	}
 
-	filterCWD := config.ExpandAbs(cwd)
+	filterCWD := absPath(cwd)
 	out := make([]Summary, 0, len(index))
 	for sessionID, meta := range index {
-		if filterCWD != "" && config.ExpandAbs(meta.CWD) != filterCWD {
+		if filterCWD != "" && absPath(meta.CWD) != filterCWD {
 			continue
 		}
 		out = append(out, Summary{ID: sessionID, Meta: meta})
@@ -268,7 +268,7 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string)
 		}
 		nowValue := now()
 		meta = Meta{
-			CWD:       config.ExpandAbs(cwd),
+			CWD:       absPath(cwd),
 			Title:     DefaultSessionTitle,
 			CreatedAt: nowValue,
 			UpdatedAt: nowValue,
@@ -477,4 +477,15 @@ func asInt(value any) int {
 	default:
 		return 0
 	}
+}
+
+func absPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(absolute)
 }

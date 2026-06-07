@@ -7,7 +7,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/legibet/mycode-go/internal/session"
+	"github.com/legibet/mycode-go/internal/config"
+	"github.com/legibet/mycode-go/session"
 )
 
 func sessionCommand(args []string) int {
@@ -52,7 +53,7 @@ func sessionListCommand(args []string) int {
 		return 1
 	}
 
-	store := session.NewStore("")
+	store := session.NewStore(config.ResolveSessionsDir())
 	filterCWD := cwd
 	if *allWorkspaces {
 		filterCWD = ""

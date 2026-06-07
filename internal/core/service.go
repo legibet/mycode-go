@@ -3,7 +3,6 @@ package core
 import (
 	"cmp"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,13 +11,15 @@ import (
 	"path/filepath"
 	"strings"
 
-	agentpkg "github.com/legibet/mycode-go/internal/agent"
+	agentpkg "github.com/legibet/mycode-go/agent"
+	"github.com/legibet/mycode-go/attachment"
 	"github.com/legibet/mycode-go/internal/config"
-	"github.com/legibet/mycode-go/internal/message"
 	"github.com/legibet/mycode-go/internal/permissions"
-	"github.com/legibet/mycode-go/internal/provider"
-	"github.com/legibet/mycode-go/internal/session"
-	"github.com/legibet/mycode-go/internal/tools"
+	"github.com/legibet/mycode-go/internal/prompt"
+	"github.com/legibet/mycode-go/message"
+	"github.com/legibet/mycode-go/provider"
+	"github.com/legibet/mycode-go/session"
+	"github.com/legibet/mycode-go/tools"
 )
 
 type Service struct {
@@ -121,7 +122,7 @@ type SettingsRequest struct {
 func NewService(opts Options) *Service {
 	store := opts.Store
 	if store == nil {
-		store = session.NewStore("")
+		store = session.NewStore(config.ResolveSessionsDir())
 	}
 	runs := opts.Runs
 	if runs == nil {
@@ -226,15 +227,15 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		}
 	}
 
-	agent, err := agentpkg.New(agentpkg.Agent{
+	agent, err := agentpkg.New(agentpkg.Config{
 		Model:              resolved.Model,
 		Provider:           resolved.ProviderType,
 		CWD:                cwd,
-		Project:            settings.Project,
 		SessionDir:         s.store.SessionDir(sessionID),
 		SessionID:          sessionID,
 		APIKey:             resolved.APIKey,
 		APIBase:            resolved.APIBase,
+		System:             prompt.Build(cwd, settings.Project, config.ResolveHome()),
 		Messages:           baseMessages,
 		MaxTokens:          resolved.MaxTokens,
 		ContextWindow:      resolved.ContextWindow,
@@ -242,11 +243,20 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		ReasoningEffort:    resolved.ReasoningEffort,
 		SupportsImageInput: resolved.SupportsImageInput,
 		SupportsPDFInput:   resolved.SupportsPDFInput,
-		Permission:         settings.Permission,
-		PermissionReviewer: func(ctx context.Context, req permissions.ReviewRequest) permissions.ReviewDecision {
-			return s.runs.requestDecision(ctx, sessionID, req)
+		ToolSpecs:          tools.DefaultSpecs(),
+		Hooks: tools.Hooks{
+			BeforeTool: []tools.BeforeToolHook{
+				permissions.ToolHook(
+					settings.Permission,
+					func(ctx context.Context, req permissions.ReviewRequest) permissions.ReviewDecision {
+						return s.runs.requestDecision(ctx, sessionID, req)
+					},
+					cwd,
+					settings.Project,
+					permissions.SkillRoots(cwd, settings.Project, config.ResolveHome()),
+				),
+			},
 		},
-		SkillRoots: permissions.SkillRoots(cwd, settings.Project, config.ResolveHome()),
 	})
 	if err != nil {
 		return ChatResponse{}, statusError(http.StatusInternalServerError, err.Error())
@@ -603,10 +613,7 @@ func buildUserMessage(req ChatRequest, cwd string) (message.Message, error) {
 				if name == "" {
 					name = "attached-file"
 				}
-				block = message.TextBlock(
-					fmt.Sprintf("<file name=\"%s\">\n%s\n</file>", message.EscapeXMLAttr(name), input.Text),
-					map[string]any{"attachment": true, "path": name},
-				)
+				block, err = buildAttachmentBlock(attachment.Text(input.Text, name), cwd)
 			} else if input.Text == "" {
 				continue
 			} else {
@@ -639,25 +646,14 @@ func buildImageBlock(block ChatInputBlock, cwd string) (message.Block, error) {
 		return message.ImageBlock(block.Data, block.MIMEType, cmp.Or(block.Name, "image"), nil), nil
 	}
 
-	resolvedPath, data, err := readInputFile(block, cwd, "image")
+	mediaBlock, err := buildAttachmentBlock(attachment.PathWithName(block.Path, block.Name), cwd)
 	if err != nil {
 		return message.Block{}, err
 	}
-
-	mimeType := strings.TrimSpace(block.MIMEType)
-	if mimeType == "" {
-		mimeType = tools.DetectImageMIMEType(resolvedPath)
-	}
-	if mimeType == "" {
+	if mediaBlock.Type != "image" {
 		return message.Block{}, fmt.Errorf("unsupported image file: %s", block.Path)
 	}
-
-	return message.ImageBlock(
-		base64.StdEncoding.EncodeToString(data),
-		mimeType,
-		cmp.Or(block.Name, filepath.Base(resolvedPath)),
-		nil,
-	), nil
+	return mediaBlock, nil
 }
 
 func buildDocumentBlock(block ChatInputBlock, cwd string) (message.Block, error) {
@@ -669,43 +665,25 @@ func buildDocumentBlock(block ChatInputBlock, cwd string) (message.Block, error)
 		return message.DocumentBlock(block.Data, mimeType, cmp.Or(block.Name, "document.pdf"), nil), nil
 	}
 
-	resolvedPath, data, err := readInputFile(block, cwd, "document")
+	mediaBlock, err := buildAttachmentBlock(attachment.PathWithName(block.Path, block.Name), cwd)
 	if err != nil {
 		return message.Block{}, err
 	}
-
-	mimeType := strings.TrimSpace(block.MIMEType)
-	if mimeType == "" {
-		mimeType = tools.DetectDocumentMIMEType(resolvedPath)
-	}
-	if mimeType != "application/pdf" {
+	if mediaBlock.Type != "document" || mediaBlock.MIMEType != "application/pdf" {
 		return message.Block{}, fmt.Errorf("unsupported document file: %s", block.Path)
 	}
-
-	return message.DocumentBlock(
-		base64.StdEncoding.EncodeToString(data),
-		mimeType,
-		cmp.Or(block.Name, filepath.Base(resolvedPath)),
-		nil,
-	), nil
+	return mediaBlock, nil
 }
 
-func readInputFile(block ChatInputBlock, cwd, kind string) (string, []byte, error) {
-	if strings.TrimSpace(block.Path) == "" {
-		return "", nil, fmt.Errorf("%s input requires path or data", kind)
-	}
-
-	resolvedPath := tools.ResolvePath(block.Path, cwd)
-	info, err := os.Stat(resolvedPath)
-	if err != nil || info.IsDir() {
-		return "", nil, fmt.Errorf("%s file not found: %s", kind, block.Path)
-	}
-
-	data, err := os.ReadFile(resolvedPath)
+func buildAttachmentBlock(item attachment.Attachment, cwd string) (message.Block, error) {
+	blocks, err := attachment.Build([]attachment.Attachment{item}, attachment.Options{CWD: cwd})
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to read %s file: %w", kind, err)
+		return message.Block{}, err
 	}
-	return resolvedPath, data, nil
+	if len(blocks) == 0 {
+		return message.Block{}, errors.New("attachment produced no blocks")
+	}
+	return blocks[0], nil
 }
 
 func isRealUserMessage(msg message.Message) bool {

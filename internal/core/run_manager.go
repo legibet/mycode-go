@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	agentpkg "github.com/legibet/mycode-go/internal/agent"
-	"github.com/legibet/mycode-go/internal/message"
+	agentpkg "github.com/legibet/mycode-go/agent"
 	"github.com/legibet/mycode-go/internal/permissions"
+	"github.com/legibet/mycode-go/message"
 )
 
 type runStatus string
@@ -416,7 +416,7 @@ func (m *RunManager) run(ctx context.Context, state *runState, onPersist func(me
 	defer close(state.done)
 
 	var lastError string
-	for event := range state.agent.Chat(ctx, state.userMessage, onPersist) {
+	for event := range state.agent.Chat(ctx, state.userMessage, agentpkg.ChatOptions{OnPersist: onPersist}) {
 		if event.Type == "error" {
 			if messageText, _ := event.Data["message"].(string); messageText != "" {
 				lastError = messageText

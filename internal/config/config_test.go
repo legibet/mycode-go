@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/legibet/mycode-go/internal/provider"
+	"github.com/legibet/mycode-go/provider"
 )
 
 func TestLoadMergesGlobalAndCurrentDirectoryConfigs(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -25,7 +26,7 @@ import (
 
 	"github.com/pmezard/go-difflib/difflib"
 
-	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/message"
 )
 
 const (
@@ -42,6 +43,27 @@ type ToolSpec struct {
 	Description   string         `json:"description"`
 	InputSchema   map[string]any `json:"input_schema"`
 	StreamsOutput bool           `json:"-"`
+	Runner        ToolRunner     `json:"-"`
+}
+
+type ToolRunner func(context.Context, ToolCall) Result
+
+type ToolCall struct {
+	ID    string
+	Name  string
+	Input map[string]any
+	CWD   string
+	Emit  OutputCallback
+}
+
+type (
+	BeforeToolHook func(context.Context, ToolCall) (Result, bool)
+	AfterToolHook  func(context.Context, ToolCall, Result) (Result, bool)
+)
+
+type Hooks struct {
+	BeforeTool []BeforeToolHook
+	AfterTool  []AfterToolHook
 }
 
 // Result is the canonical tool result. Output is provider-facing text;

@@ -7,16 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/message"
 )
 
-func TestNewStoreUsesMycodeHome(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, ".mycode")
-	t.Setenv("MYCODE_HOME", home)
+func TestNewStoreUsesExplicitDataDir(t *testing.T) {
+	expected := filepath.Join(t.TempDir(), "sessions")
 
-	store := NewStore("")
-	expected := filepath.Join(home, "sessions")
+	store := NewStore(expected)
 	if store.dataDir != expected {
 		t.Fatalf("unexpected data dir: %s", store.dataDir)
 	}

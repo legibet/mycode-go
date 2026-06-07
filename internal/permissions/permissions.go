@@ -8,7 +8,7 @@ import (
 
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/prompt"
-	"github.com/legibet/mycode-go/internal/tools"
+	"github.com/legibet/mycode-go/tools"
 )
 
 const (
@@ -113,6 +113,31 @@ func DecisionFor(permission config.PermissionConfig, tier Tier) Decision {
 		return DecisionDeny
 	}
 	return DecisionAsk
+}
+
+func ToolHook(permission config.PermissionConfig, reviewer Reviewer, cwd, project string, skillRoots []string) tools.BeforeToolHook {
+	return func(ctx context.Context, call tools.ToolCall) (tools.Result, bool) {
+		check := ClassifyTool(call.Name, call.Input, cwd, project, skillRoots)
+		switch DecisionFor(permission, check.Tier) {
+		case DecisionAllow:
+			return tools.Result{}, false
+		case DecisionDeny:
+			return tools.Result{Output: DeniedOutput, IsError: true}, true
+		default:
+			if reviewer == nil {
+				return tools.Result{Output: DeniedOutput, IsError: true}, true
+			}
+			decision := reviewer(ctx, ReviewRequest{
+				ToolCallID: call.ID,
+				ToolName:   call.Name,
+				Preview:    check.Preview,
+			})
+			if decision == ReviewAllow {
+				return tools.Result{}, false
+			}
+			return tools.Result{Output: DeniedByUserOutput, IsError: true}, true
+		}
+	}
 }
 
 func ClassifyTool(toolName string, input map[string]any, cwd, project string, skillRoots []string) Check {

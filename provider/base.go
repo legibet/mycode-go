@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/message"
 )
 
 const defaultRequestTimeout = 300 * time.Second

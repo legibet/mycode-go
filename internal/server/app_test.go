@@ -10,11 +10,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/legibet/mycode-go/internal/core"
-	"github.com/legibet/mycode-go/internal/message"
-	"github.com/legibet/mycode-go/internal/provider"
-	"github.com/legibet/mycode-go/internal/session"
+	"github.com/legibet/mycode-go/message"
+	"github.com/legibet/mycode-go/provider"
+	"github.com/legibet/mycode-go/session"
 )
 
 func TestServeStaticFromConfiguredWebRoot(t *testing.T) {
@@ -254,7 +255,7 @@ func TestChatTextAttachmentIsPersistedAsFileBlock(t *testing.T) {
 		"providers": map[string]any{
 			"openai": map[string]any{
 				"api_key":  "sk-test",
-				"api_base": upstream.URL,
+				"base_url": upstream.URL,
 			},
 		},
 	})
@@ -308,6 +309,105 @@ func TestChatTextAttachmentIsPersistedAsFileBlock(t *testing.T) {
 	want := "<file name=\"report &lt;&quot;draft&quot;&gt;.py\">\nprint(1)\n</file>"
 	if got != want {
 		t.Fatalf("unexpected attachment block: %q", got)
+	}
+}
+
+func TestChatSendsBuiltInToolsToProvider(t *testing.T) {
+	isolateServerConfigTest(t)
+
+	requests := make(chan map[string]any, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		defer func() { _ = r.Body.Close() }()
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		requests <- payload
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w,
+			"event: response.output_text.delta\n"+
+				"data: {\"type\":\"response.output_text.delta\",\"content_index\":0,\"delta\":\"ok\",\"item_id\":\"msg_1\",\"logprobs\":[],\"output_index\":0,\"sequence_number\":1}\n\n"+
+				"event: response.output_item.done\n"+
+				"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"logprobs\":[],\"text\":\"ok\"}],\"role\":\"assistant\"},\"output_index\":0,\"sequence_number\":2}\n\n"+
+				"event: response.completed\n"+
+				"data: {\"type\":\"response.completed\",\"sequence_number\":3,\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5.4\",\"object\":\"response\",\"output\":[],\"status\":\"completed\"}}\n\n",
+		)
+	}))
+	defer upstream.Close()
+
+	home := filepath.Join(t.TempDir(), "home", ".mycode")
+	t.Setenv("MYCODE_HOME", home)
+	writeServerJSON(t, filepath.Join(home, "config.json"), map[string]any{
+		"default": map[string]any{"provider": "openai", "model": "gpt-5.4"},
+		"providers": map[string]any{
+			"openai": map[string]any{
+				"api_key":  "sk-test",
+				"base_url": upstream.URL,
+			},
+		},
+	})
+
+	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	recorder := performJSON(t, handler, http.MethodPost, "/api/chat", map[string]any{
+		"session_id": "tools",
+		"cwd":        t.TempDir(),
+		"message":    "hello",
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Run map[string]any `json:"run"`
+	}
+	decodeBody(t, recorder, &response)
+	runID, _ := response.Run["id"].(string)
+	if runID == "" {
+		t.Fatalf("missing run id: %#v", response)
+	}
+
+	streamDone := make(chan string, 1)
+	go func() {
+		stream := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/runs/"+runID+"/stream", nil)
+		handler.ServeHTTP(stream, request)
+		streamDone <- stream.Body.String()
+	}()
+
+	var payload map[string]any
+	select {
+	case payload = <-requests:
+	case body := <-streamDone:
+		t.Fatalf("stream completed before provider request: %s", body)
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider request was not received")
+	}
+
+	rawTools, ok := payload["tools"].([]any)
+	if !ok {
+		t.Fatalf("missing tools payload: %#v", payload)
+	}
+	names := map[string]bool{}
+	for _, raw := range rawTools {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected tool payload: %#v", raw)
+		}
+		name, _ := tool["name"].(string)
+		names[name] = true
+	}
+	for _, name := range []string{"read", "write", "edit", "bash"} {
+		if !names[name] {
+			t.Fatalf("tool %q missing from provider request: %#v", name, rawTools)
+		}
+	}
+	select {
+	case <-streamDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream did not finish")
 	}
 }
 

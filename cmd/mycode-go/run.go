@@ -6,13 +6,17 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
-	agentpkg "github.com/legibet/mycode-go/internal/agent"
+	agentpkg "github.com/legibet/mycode-go/agent"
+	"github.com/legibet/mycode-go/attachment"
 	"github.com/legibet/mycode-go/internal/config"
-	"github.com/legibet/mycode-go/internal/message"
 	"github.com/legibet/mycode-go/internal/permissions"
-	"github.com/legibet/mycode-go/internal/session"
+	promptpkg "github.com/legibet/mycode-go/internal/prompt"
+	"github.com/legibet/mycode-go/message"
+	"github.com/legibet/mycode-go/session"
+	"github.com/legibet/mycode-go/tools"
 )
 
 type resolvedSession struct {
@@ -63,7 +67,7 @@ func runCommand(args []string) int {
 		return 1
 	}
 
-	store := session.NewStore("")
+	store := session.NewStore(config.ResolveSessionsDir())
 	resolvedSession, err := resolveSession(
 		store,
 		cwd,
@@ -75,7 +79,7 @@ func runCommand(args []string) int {
 		return 1
 	}
 
-	agent, err := agentpkg.New(agentpkg.Agent{
+	agent, err := agentpkg.New(agentpkg.Config{
 		Model:              resolvedProvider.Model,
 		Provider:           resolvedProvider.ProviderType,
 		CWD:                cwd,
@@ -83,6 +87,7 @@ func runCommand(args []string) int {
 		SessionID:          resolvedSession.ID,
 		APIKey:             resolvedProvider.APIKey,
 		APIBase:            resolvedProvider.APIBase,
+		System:             promptpkg.Build(cwd, settings.Project, config.ResolveHome()),
 		Messages:           resolvedSession.Messages,
 		MaxTurns:           *maxTurns,
 		MaxTokens:          resolvedProvider.MaxTokens,
@@ -91,8 +96,18 @@ func runCommand(args []string) int {
 		ReasoningEffort:    resolvedProvider.ReasoningEffort,
 		SupportsImageInput: resolvedProvider.SupportsImageInput,
 		SupportsPDFInput:   resolvedProvider.SupportsPDFInput,
-		Permission:         settings.Permission,
-		SkillRoots:         permissions.SkillRoots(cwd, settings.Project, config.ResolveHome()),
+		ToolSpecs:          tools.DefaultSpecs(),
+		Hooks: tools.Hooks{
+			BeforeTool: []tools.BeforeToolHook{
+				permissions.ToolHook(
+					settings.Permission,
+					nil,
+					cwd,
+					settings.Project,
+					permissions.SkillRoots(cwd, settings.Project, config.ResolveHome()),
+				),
+			},
+		},
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
@@ -107,9 +122,9 @@ func runCommand(args []string) int {
 		return store.AppendMessage(resolvedSession.ID, msg, cwd)
 	}
 
-	userMessage := message.UserTextMessage(prompt, nil)
+	userMessage := buildRunUserMessage(prompt, cwd)
 	errorMessage := ""
-	for event := range agent.Chat(context.Background(), userMessage, onPersist) {
+	for event := range agent.Chat(context.Background(), userMessage, agentpkg.ChatOptions{OnPersist: onPersist}) {
 		if event.Type != "error" {
 			continue
 		}
@@ -129,6 +144,48 @@ func runCommand(args []string) int {
 		_, _ = fmt.Fprintln(os.Stdout, reply)
 	}
 	return 0
+}
+
+func buildRunUserMessage(prompt, cwd string) message.Message {
+	blocks := []message.Block{message.TextBlock(prompt, nil)}
+	seen := map[string]struct{}{}
+	for _, pathText := range runAttachmentPaths(prompt) {
+		resolved := tools.ResolvePath(pathText, cwd)
+		info, err := os.Stat(resolved)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if _, ok := seen[resolved]; ok {
+			continue
+		}
+		seen[resolved] = struct{}{}
+
+		item := attachment.Path(resolved)
+		if tools.DetectImageMIMEType(resolved) == "" && tools.DetectDocumentMIMEType(resolved) == "" {
+			item = attachment.PathWithName(resolved, resolved)
+		}
+		attachmentBlocks, err := attachment.Build([]attachment.Attachment{item}, attachment.Options{CWD: cwd})
+		if err != nil {
+			continue
+		}
+		blocks = append(blocks, attachmentBlocks...)
+	}
+	return message.BuildMessage("user", blocks, nil)
+}
+
+func runAttachmentPaths(prompt string) []string {
+	tokens := strings.Fields(strings.ReplaceAll(strings.ReplaceAll(prompt, "\r\n", "\n"), "\r", "\n"))
+	paths := make([]string, 0)
+	for _, token := range tokens {
+		if !strings.HasPrefix(token, "@") || token == "@" {
+			continue
+		}
+		path := strings.Trim(token[1:], `"'`)
+		if path != "" {
+			paths = append(paths, filepath.Clean(path))
+		}
+	}
+	return paths
 }
 
 func resolveSession(store *session.Store, cwd, requestedSessionID string, continueLast bool) (resolvedSession, error) {

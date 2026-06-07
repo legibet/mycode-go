@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/message"
 )
 
 func TestShouldCompactRespectsThresholdBoundaries(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 
 	"google.golang.org/genai"
 
-	"github.com/legibet/mycode-go/internal/message"
+	"github.com/legibet/mycode-go/message"
 )
 
 const (

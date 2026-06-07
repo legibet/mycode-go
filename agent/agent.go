@@ -11,12 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/legibet/mycode-go/internal/config"
-	"github.com/legibet/mycode-go/internal/message"
-	"github.com/legibet/mycode-go/internal/permissions"
-	"github.com/legibet/mycode-go/internal/prompt"
-	"github.com/legibet/mycode-go/internal/provider"
-	"github.com/legibet/mycode-go/internal/tools"
+	"github.com/legibet/mycode-go/message"
+	"github.com/legibet/mycode-go/provider"
+	"github.com/legibet/mycode-go/tools"
 )
 
 // Event is one normalized streaming event sent to the API and CLI.
@@ -28,13 +25,15 @@ type Event struct {
 // PersistFunc stores one canonical message.
 type PersistFunc func(message.Message) error
 
-// Agent is the single orchestration loop. Construct via New so derived fields
-// (TranscriptPath, default Tools/Adapter, default System prompt) are filled.
-type Agent struct {
+type ChatOptions struct {
+	OnPersist PersistFunc
+}
+
+// Config describes one agent runtime.
+type Config struct {
 	Model              string
 	Provider           string
 	CWD                string
-	Project            string
 	SessionDir         string
 	SessionID          string
 	APIKey             string
@@ -48,18 +47,24 @@ type Agent struct {
 	ReasoningEffort    string
 	SupportsImageInput bool
 	SupportsPDFInput   bool
-	Permission         config.PermissionConfig
-	PermissionReviewer permissions.Reviewer
-	SkillRoots         []string
 	Adapter            provider.Adapter
-	Tools              *tools.Executor
+	ToolSpecs          []tools.ToolSpec
+	Hooks              tools.Hooks
+}
+
+// Agent is the single orchestration loop. Construct via New so derived fields
+// are filled.
+type Agent struct {
+	Config
+	Tools *tools.Executor
 
 	// TranscriptPath is set by New from SessionDir.
 	TranscriptPath string
 }
 
 // New fills defaults and returns a runnable Agent.
-func New(a Agent) (*Agent, error) {
+func New(cfg Config) (*Agent, error) {
+	a := &Agent{Config: cfg}
 	if a.CWD == "" {
 		if wd, err := os.Getwd(); err == nil {
 			a.CWD = wd
@@ -67,7 +72,7 @@ func New(a Agent) (*Agent, error) {
 			a.CWD = "."
 		}
 	}
-	a.CWD = config.ResolveSymlinks(a.CWD)
+	a.CWD = resolvePath(a.CWD)
 
 	// Only persisted sessions have a stable transcript path to include in the
 	// compact continuation prompt.
@@ -76,17 +81,6 @@ func New(a Agent) (*Agent, error) {
 	a.SessionID = cmp.Or(a.SessionID, filepath.Base(a.SessionDir))
 	if a.TranscriptPath == "" && explicitSessionDir != "" {
 		a.TranscriptPath = filepath.Join(explicitSessionDir, "messages.jsonl")
-	}
-
-	if a.Permission.Level == "" {
-		a.Permission = config.DefaultPermissionConfig()
-	}
-	a.Project = cmp.Or(a.Project, config.ResolveProject(a.CWD))
-
-	if a.SkillRoots == nil {
-		a.SkillRoots = permissions.SkillRoots(a.CWD, a.Project, config.ResolveHome())
-	} else {
-		a.SkillRoots = slices.Clone(a.SkillRoots)
 	}
 
 	if a.Tools == nil {
@@ -101,15 +95,12 @@ func New(a Agent) (*Agent, error) {
 		a.Adapter = adapter
 	}
 
-	if a.System == "" {
-		a.System = prompt.Build(a.CWD, a.Project, config.ResolveHome())
-	}
 	if a.ContextWindow == 0 {
 		a.ContextWindow = 128000
 	}
 
 	a.Messages = message.CloneMessages(a.Messages)
-	return &a, nil
+	return a, nil
 }
 
 // Cancel stops active tools. Provider cancellation is driven by ctx.
@@ -118,7 +109,7 @@ func (a *Agent) Cancel() {
 }
 
 // Chat runs one user turn.
-func (a *Agent) Chat(ctx context.Context, userInput message.Message, onPersist PersistFunc) <-chan Event {
+func (a *Agent) Chat(ctx context.Context, userInput message.Message, opts ChatOptions) <-chan Event {
 	out := make(chan Event, 32)
 	go func() {
 		defer close(out)
@@ -132,10 +123,10 @@ func (a *Agent) Chat(ctx context.Context, userInput message.Message, onPersist P
 		}
 
 		persist := func(msg message.Message) error {
-			if onPersist == nil {
+			if opts.OnPersist == nil {
 				return nil
 			}
-			return onPersist(msg)
+			return opts.OnPersist(msg)
 		}
 
 		a.Messages = append(a.Messages, message.Clone(userInput))
@@ -231,7 +222,7 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 		SessionID:          a.SessionID,
 		Messages:           ApplyCompactReplay(a.Messages, a.TranscriptPath),
 		System:             a.System,
-		Tools:              toolSpecs(tools.DefaultSpecs()),
+		Tools:              toolSpecs(a.providerToolSpecs()),
 		MaxTokens:          a.MaxTokens,
 		APIKey:             a.APIKey,
 		APIBase:            a.APIBase,
@@ -350,17 +341,20 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 		}}
 
 		toolCall.Input = input
-		var result *tools.Result
-		stop := false
-		switch toolCall.Name {
-		case "read", "write", "edit", "bash":
-			result, stop = a.authorizeTool(ctx, toolCall, input)
-		default:
-			result = &tools.Result{Output: "error: unknown tool: " + toolCall.Name, IsError: true}
+		var result tools.Result
+		call := a.toolCall(toolCall, input, nil)
+		if hookResult, handled := a.runBeforeToolHooks(ctx, call); handled {
+			result = hookResult
+		} else if spec, ok := a.lookupToolSpec(toolCall.Name); ok {
+			if spec.Runner != nil {
+				result = a.runCustomTool(ctx, toolCall, spec, out)
+			} else {
+				result = a.runTool(ctx, toolCall, out)
+			}
+		} else {
+			result = tools.Result{Output: "error: unknown tool: " + toolCall.Name, IsError: true}
 		}
-		if result == nil {
-			result = new(a.runTool(ctx, toolCall, out))
-		}
+		result = a.runAfterToolHooks(ctx, call, result)
 		toolResults = append(toolResults, message.ToolResultBlock(
 			toolCall.ID,
 			result.Output,
@@ -383,9 +377,6 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 		}
 		out <- Event{Type: "tool_done", Data: data}
 
-		if stop {
-			return message.BuildMessage("user", toolResults, nil), true
-		}
 		if result.IsError && ctx.Err() != nil && strings.HasSuffix(result.Output, "error: cancelled") {
 			return message.BuildMessage("user", toolResults, nil), true
 		}
@@ -394,26 +385,56 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 	return message.BuildMessage("user", toolResults, nil), false
 }
 
-func (a *Agent) authorizeTool(ctx context.Context, toolCall message.Block, input map[string]any) (*tools.Result, bool) {
-	check := permissions.ClassifyTool(toolCall.Name, input, a.CWD, a.Project, a.SkillRoots)
-	switch permissions.DecisionFor(a.Permission, check.Tier) {
-	case permissions.DecisionAllow:
-		return nil, false
-	case permissions.DecisionDeny:
-		return &tools.Result{Output: permissions.DeniedOutput, IsError: true}, false
-	default:
-		if a.PermissionReviewer == nil {
-			return &tools.Result{Output: permissions.DeniedOutput, IsError: true}, false
+func (a *Agent) lookupToolSpec(name string) (tools.ToolSpec, bool) {
+	for _, spec := range a.providerToolSpecs() {
+		if spec.Name == name {
+			return spec, true
 		}
-		decision := a.PermissionReviewer(ctx, permissions.ReviewRequest{
-			ToolCallID: toolCall.ID,
-			ToolName:   toolCall.Name,
-			Preview:    check.Preview,
-		})
-		if decision == permissions.ReviewAllow {
-			return nil, false
+	}
+	return tools.ToolSpec{}, false
+}
+
+func (a *Agent) runBeforeToolHooks(ctx context.Context, call tools.ToolCall) (tools.Result, bool) {
+	for _, hook := range a.Hooks.BeforeTool {
+		if result, handled := hook(ctx, call); handled {
+			return result, true
 		}
-		return &tools.Result{Output: permissions.DeniedByUserOutput, IsError: true}, true
+	}
+	return tools.Result{}, false
+}
+
+func (a *Agent) runAfterToolHooks(ctx context.Context, call tools.ToolCall, result tools.Result) tools.Result {
+	for _, hook := range a.Hooks.AfterTool {
+		if next, replaced := hook(ctx, call, result); replaced {
+			result = next
+		}
+	}
+	return result
+}
+
+func (a *Agent) runCustomTool(ctx context.Context, toolCall message.Block, spec tools.ToolSpec, out chan<- Event) tools.Result {
+	call := a.toolCall(toolCall, toolCall.Input, nil)
+	if spec.StreamsOutput {
+		call.Emit = func(text string) {
+			if ctx.Err() != nil {
+				return
+			}
+			out <- Event{Type: "tool_output", Data: map[string]any{
+				"tool_use_id": toolCall.ID,
+				"output":      text,
+			}}
+		}
+	}
+	return spec.Runner(ctx, call)
+}
+
+func (a *Agent) toolCall(toolCall message.Block, input map[string]any, emit tools.OutputCallback) tools.ToolCall {
+	return tools.ToolCall{
+		ID:    toolCall.ID,
+		Name:  toolCall.Name,
+		Input: maps.Clone(input),
+		CWD:   a.CWD,
+		Emit:  emit,
 	}
 }
 
@@ -502,6 +523,10 @@ func (a *Agent) compactIfNeeded(ctx context.Context, persist PersistFunc, out ch
 	return false
 }
 
+func (a *Agent) providerToolSpecs() []tools.ToolSpec {
+	return a.ToolSpecs
+}
+
 func toolSpecs(specs []tools.ToolSpec) []map[string]any {
 	out := make([]map[string]any, 0, len(specs))
 	for _, spec := range specs {
@@ -548,4 +573,18 @@ func asEdits(value any) []map[string]string {
 		})
 	}
 	return out
+}
+
+func resolvePath(path string) string {
+	if path == "" {
+		return ""
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(absolute)
 }

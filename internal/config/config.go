@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	M "github.com/legibet/mycode-go/internal/models"
-	"github.com/legibet/mycode-go/internal/provider"
+	"github.com/legibet/mycode-go/provider"
 )
 
 const (

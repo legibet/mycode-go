@@ -79,7 +79,7 @@ func Lookup(providerType, model string) *Metadata {
 	if entry, ok := catalog[providerType][requestedModel]; ok {
 		return build(entry)
 	}
-	if fallback := defaultProvider(modelName); fallback != "" && fallback != providerType {
+	if fallback := InferProvider(modelName); fallback != "" && fallback != providerType {
 		if entry, ok := catalog[fallback][modelName]; ok {
 			return build(entry)
 		}
@@ -105,8 +105,8 @@ func Lookup(providerType, model string) *Metadata {
 	return nil
 }
 
-// defaultProvider guesses the owning provider from a bare model name.
-func defaultProvider(model string) string {
+// InferProvider guesses the owning provider from a bare model name.
+func InferProvider(model string) string {
 	switch m := strings.ToLower(model); {
 	case strings.HasPrefix(m, "claude-"):
 		return "anthropic"
