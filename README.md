@@ -10,7 +10,23 @@ A minimal coding agent.
 - Mobile-friendly web UI.
 - Native image and pdf input support.
 
-This branch is the Go CLI/server rewrite. It keeps the `.mycode` config and session layout, HTTP API, SSE events, provider ids, and web UI contract aligned with `mycode` on Python `main`. The terminal TUI and Python SDK are not part of this branch.
+This branch is the Go CLI/server rewrite. It keeps the `.mycode` config and session layout, HTTP API, SSE events, provider ids, and web UI contract aligned with `mycode` on Python `main`. The terminal TUI is not part of this branch.
+
+## Go SDK
+
+The reusable agent runtime is exposed as small Go packages: `agent`, `message`, `attachment`, `tools`, `session`, and `provider`. CLI/server configuration, AGENTS discovery, system prompt construction, and permission UI stay in app code.
+
+```go
+a, err := agent.New(agent.Config{
+    Provider: "openai",
+    Model:    "gpt-5",
+    APIKey:   os.Getenv("OPENAI_API_KEY"),
+    CWD:      cwd,
+    ToolSpecs: tools.DefaultSpecs(),
+})
+```
+
+See [docs/sdk.md](docs/sdk.md) for the public interface and examples.
 
 ## Quick Start
 
