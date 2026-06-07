@@ -4,33 +4,33 @@ Always-loaded context for agent runs on this branch. Detailed specs live in `doc
 
 ## Product
 
-`mycode-go` is the Go rewrite of `mycode`: a minimal coding agent with a small CLI, HTTP server, and shared React web UI. It keeps `.mycode` config, message, session, API, SSE, provider id, and web UI compatibility with Python `main`.
+`mycode-go` is the Go rewrite of `mycode`, implemented as reusable Go packages plus app adapters:
 
-- `main` — Python implementation; source of truth for `web/`, message/session formats, HTTP API, and SSE contracts.
-- `mycode-go` — this Go rewrite; tracks `main`, keeps Go internals idiomatic, and stays free of Wails code.
-- `mycode-go-wails` — Wails desktop adapter on top of `mycode-go`.
-
-Current sync: Python `main` reviewed through `7139c5e`; `web/` is aligned through `7139c5e`; Go backend behavior is aligned through `7139c5e` where it affects external CLI/API/session/provider behavior.
+- Public packages — `agent`, `message`, `attachment`, `tools`, `session`, and `provider`: the runtime, canonical message format, attachment conversion, tool execution, append-only sessions, and provider adapters.
+- `cmd/mycode-go` + `internal/*` — the CLI, HTTP server, config loading, system prompt, permission policy, run manager, and web adapter built on top of the public packages.
+- `web/` — the shared React + Vite UI.
 
 ## Project Layout
 
 ```text
 ./
+  agent/                    # agent loop and compact replay
+  attachment/               # file/text/bytes attachments -> message blocks
+  message/                  # canonical block-based message model
+  tools/                    # the 4 built-in tools and execution; keep implementation in tools.go
+  session/                  # append-only JSONL store and rewind
+  provider/                 # provider adapters
+    anthropic.go            # anthropic, moonshotai, minimax
+    google.go               # google
+    openai_responses.go     # openai
+    openai_chat.go          # openai_chat, deepseek, zai, openrouter
+
   cmd/mycode-go/              # CLI: run, web, session list, --version
-  internal/agent/             # agent loop and compact replay
   internal/core/              # transport-agnostic service layer, RunManager, workspace browser
-  internal/message/           # canonical block-based message model
-  internal/tools/             # the 4 built-in tools and execution; keep implementation in tools.go
   internal/permissions/       # CLI/web tool permission policy
-  internal/session/           # append-only JSONL store and rewind
   internal/config/            # layered config loading and provider resolution
   internal/models/            # bundled model metadata lookup
   internal/prompt/            # system prompt, AGENTS discovery, skills discovery
-  internal/provider/          # provider adapters
-    anthropic.go              # anthropic, moonshotai, minimax
-    google.go                 # google
-    openai_responses.go       # openai
-    openai_chat.go            # openai_chat, deepseek, zai, openrouter
   internal/server/            # HTTP adapter and SSE framing
 
 web/src/                      # shared React + Vite UI from Python main
@@ -42,7 +42,7 @@ scripts/
   sync_web_dist.sh            # copies web/dist into Go's embedded webdist directory
 ```
 
-## Internal Message Model
+## Message Model
 
 A single block-based JSON format is used at runtime, in persistence, and over the API. Block types: `text` · `image` · `document` · `thinking` · `tool_use` · `tool_result`.
 
@@ -54,7 +54,7 @@ Full schema, JSONL record types, replay rules, compact, and rewind behavior live
 
 ## Agent Loop
 
-Per user turn (`internal/agent/agent.go`):
+Per user turn (`agent/agent.go`):
 
 1. Append the user message.
 2. Stream one provider turn through `ApplyCompactReplay`.
@@ -80,8 +80,8 @@ Read the relevant doc before related changes.
 
 | Area                                                                 | Doc                                                |
 | -------------------------------------------------------------------- | -------------------------------------------------- |
-| `internal/{agent,message,tools,session}`                             | `docs/sessions.md`                                 |
-| `internal/provider/*`                                                | `docs/providers.md`                                |
+| `agent`, `attachment`, `message`, `tools`, `session`                 | `docs/sessions.md`                                 |
+| `provider/*`                                                         | `docs/providers.md`                                |
 | `internal/core`, `internal/server`, SSE events, or routes            | `docs/api.md`                                      |
 | `internal/config`, `internal/prompt`, `internal/permissions`, models | `docs/config.md`                                   |
 | `web/src/**`                                                         | `docs/web.md`                                      |
@@ -99,12 +99,20 @@ Server routes are mounted under `/api`: chat runs, run stream/cancel/decide, con
 
 Sync direction: `main` -> `mycode-go` -> `mycode-go-wails`.
 
+- `main` — Python implementation; source of truth for `web/`, message/session formats, HTTP API, and SSE contracts.
+- `mycode-go` — this Go rewrite; tracks `main`, keeps Go internals idiomatic, and stays free of Wails code.
+- `mycode-go-wails` — Wails desktop adapter on top of `mycode-go`.
+
+Current sync: Python `main` reviewed through `7139c5e`; `web/` is aligned through `7139c5e`; Go backend behavior is aligned through `7139c5e` where it affects external SDK/CLI/API/session/provider behavior.
+
 When syncing from Python `main`:
 
 - Fetch `main` into `refs/remotes/local-main/main`.
 - Directly cherry-pick `web/` commits.
-- Reimplement backend commits in Go only when they affect CLI behavior, API/SSE contracts, message/session formats, tools, providers, config, models, prompts, or web expectations.
-- Skip Python-only release/package/TUI/SDK work unless it changes shared behavior.
+- Sync external behavior. Keep Go implementation idiomatic.
+- Use Python `mycode-sdk` as the scope reference for Go SDK behavior; Go API shape may differ when that is the clearer Go design.
+- Reimplement backend commits in Go when they affect SDK-visible behavior, CLI behavior, API/SSE contracts, message/session formats, tools, providers, config, models, prompts, permissions, or web expectations.
+- Skip Python-only release/package/TUI work unless it changes shared external behavior.
 - Keep `web/` commits separate from Go backend, config, model, and docs commits.
 
 Useful checks:
