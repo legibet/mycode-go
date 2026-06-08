@@ -244,6 +244,7 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		MaxTokens:          resolved.MaxTokens,
 		ContextWindow:      resolved.ContextWindow,
 		CompactThreshold:   settings.CompactThreshold,
+		DisableCompact:     settings.CompactThreshold <= 0,
 		ReasoningEffort:    resolved.ReasoningEffort,
 		SupportsImageInput: resolved.SupportsImageInput,
 		SupportsPDFInput:   resolved.SupportsPDFInput,

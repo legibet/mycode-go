@@ -59,6 +59,8 @@ func main() {
 
 `ToolSpecs` is explicit. Leave it nil for a runtime with no tools. Pass `tools.DefaultSpecs()` to expose `read`, `write`, `edit`, and `bash`.
 
+`CompactThreshold` defaults to `agent.DefaultCompactThreshold`. Set `DisableCompact` to disable automatic compaction.
+
 ## Attachments
 
 `attachment.Build` returns canonical `message.Block` values.

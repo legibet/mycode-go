@@ -67,6 +67,9 @@ func build(item Attachment, opts Options) (message.Block, error) {
 	case attachmentBytes:
 		return buildBytes(item)
 	case attachmentText:
+		if item.name == "" {
+			return message.Block{}, fmt.Errorf("attachment text requires a non-empty name")
+		}
 		return textBlock(item.text, item.name), nil
 	default:
 		return message.Block{}, fmt.Errorf("unsupported attachment")

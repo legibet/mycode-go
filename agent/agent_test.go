@@ -370,6 +370,88 @@ func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
 	}
 }
 
+func TestChatCancelBetweenToolsKeepsCompletedResults(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	agent, err := New(Config{
+		Model:              "gpt-5.4",
+		Provider:           "openai",
+		CWD:                dir,
+		SessionDir:         filepath.Join(dir, "session"),
+		SessionID:          "session",
+		MaxTokens:          4096,
+		ContextWindow:      128000,
+		CompactThreshold:   0.8,
+		SupportsImageInput: true,
+		SupportsPDFInput:   true,
+		ToolSpecs: []tools.ToolSpec{
+			{
+				Name: "first",
+				Runner: func(context.Context, tools.ToolCall) tools.Result {
+					cancel()
+					return tools.Result{Output: "first result"}
+				},
+			},
+			{
+				Name: "second",
+				Runner: func(context.Context, tools.ToolCall) tools.Result {
+					return tools.Result{Output: "second result"}
+				},
+			},
+		},
+		Adapter: &fakeAdapter{
+			spec: provider.Spec{ID: "openai"},
+			turns: [][]provider.StreamEvent{{
+				{
+					Type: "message_done",
+					Msg: new(message.AssistantMessage([]message.Block{
+						message.ToolUseBlock("call-1", "first", nil, nil),
+						message.ToolUseBlock("call-2", "second", nil, nil),
+					}, "openai", "gpt-5.4", "", "", 0, nil)),
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	persisted := []message.Message{}
+	events := collectEvents(agent.Chat(ctx, message.UserTextMessage("hello", nil), ChatOptions{
+		OnPersist: func(msg message.Message) error {
+			persisted = append(persisted, msg)
+			return nil
+		},
+	}))
+
+	var done []Event
+	for _, event := range events {
+		if event.Type == "tool_done" {
+			done = append(done, event)
+		}
+	}
+	if len(done) != 2 {
+		t.Fatalf("unexpected events: %#v", events)
+	}
+	if done[0].Data["tool_use_id"] != "call-1" || done[0].Data["output"] != "first result" || done[0].Data["is_error"] != false {
+		t.Fatalf("unexpected first tool result: %#v", done[0])
+	}
+	if done[1].Data["tool_use_id"] != "call-2" || done[1].Data["output"] != "error: cancelled" || done[1].Data["is_error"] != true {
+		t.Fatalf("unexpected second tool result: %#v", done[1])
+	}
+
+	last := persisted[len(persisted)-1]
+	if last.Role != "user" || len(last.Content) != 2 {
+		t.Fatalf("unexpected persisted tool message: %#v", persisted)
+	}
+	if last.Content[0].ToolUseID != "call-1" || last.Content[0].Output != "first result" {
+		t.Fatalf("missing completed tool result: %#v", last.Content)
+	}
+	if last.Content[1].ToolUseID != "call-2" || last.Content[1].Output != "error: cancelled" || last.Content[1].IsError == nil || !*last.Content[1].IsError {
+		t.Fatalf("missing cancelled tool result: %#v", last.Content)
+	}
+}
+
 func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 	dir := t.TempDir()
 	adapter := &fakeAdapter{

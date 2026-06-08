@@ -95,6 +95,7 @@ func runCommand(args []string) int {
 		MaxTokens:          resolvedProvider.MaxTokens,
 		ContextWindow:      resolvedProvider.ContextWindow,
 		CompactThreshold:   settings.CompactThreshold,
+		DisableCompact:     settings.CompactThreshold <= 0,
 		ReasoningEffort:    resolvedProvider.ReasoningEffort,
 		SupportsImageInput: resolvedProvider.SupportsImageInput,
 		SupportsPDFInput:   resolvedProvider.SupportsPDFInput,

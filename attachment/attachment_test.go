@@ -109,6 +109,15 @@ func TestBuildTextAttachment(t *testing.T) {
 	}
 }
 
+func TestBuildTextAttachmentRequiresName(t *testing.T) {
+	_, err := attachment.Build([]attachment.Attachment{
+		attachment.Text("package main\n", ""),
+	}, attachment.Options{})
+	if err == nil {
+		t.Fatal("expected text attachment name error")
+	}
+}
+
 func mustDecodeBase64(t *testing.T, value string) []byte {
 	t.Helper()
 	data, err := base64.StdEncoding.DecodeString(value)

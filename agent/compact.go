@@ -29,6 +29,8 @@ Rules:
 - Do not add suggestions or opinions — only summarize what happened.
 - Keep it concise but complete.`
 
+const DefaultCompactThreshold = 0.8
+
 const continuationHeader = "This session is being continued from a previous conversation that was compacted to fit the context window. The summary below covers the earlier portion of the conversation."
 
 const transcriptHintTemplate = "For verbatim details not captured in this summary (exact code snippets, error messages, or earlier output), read the original conversation log at: %s"

@@ -3,6 +3,8 @@ package agent
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"maps"
 	"os"
@@ -47,6 +49,7 @@ type Config struct {
 	ReasoningEffort    string
 	SupportsImageInput bool
 	SupportsPDFInput   bool
+	DisableCompact     bool
 	Adapter            provider.Adapter
 	ToolSpecs          []tools.ToolSpec
 	Hooks              tools.Hooks
@@ -76,15 +79,23 @@ func New(cfg Config) (*Agent, error) {
 
 	// Only persisted sessions have a stable transcript path to include in the
 	// compact continuation prompt.
-	explicitSessionDir := a.SessionDir
-	a.SessionDir = cmp.Or(a.SessionDir, a.CWD)
-	a.SessionID = cmp.Or(a.SessionID, filepath.Base(a.SessionDir))
-	if a.TranscriptPath == "" && explicitSessionDir != "" {
-		a.TranscriptPath = filepath.Join(explicitSessionDir, "messages.jsonl")
+	if a.SessionID == "" {
+		if a.SessionDir != "" {
+			a.SessionID = filepath.Base(a.SessionDir)
+		} else {
+			a.SessionID = randomSessionID()
+		}
+	}
+	toolOutputRoot := a.SessionDir
+	if toolOutputRoot == "" {
+		toolOutputRoot = filepath.Join(os.TempDir(), "mycode", a.SessionID)
+	}
+	if a.TranscriptPath == "" && a.SessionDir != "" {
+		a.TranscriptPath = filepath.Join(a.SessionDir, "messages.jsonl")
 	}
 
 	if a.Tools == nil {
-		a.Tools = tools.NewExecutor(a.CWD, a.SessionDir, a.SupportsImageInput)
+		a.Tools = tools.NewExecutor(a.CWD, toolOutputRoot, a.SupportsImageInput)
 	}
 
 	if a.Adapter == nil {
@@ -97,6 +108,11 @@ func New(cfg Config) (*Agent, error) {
 
 	if a.ContextWindow == 0 {
 		a.ContextWindow = 128000
+	}
+	if a.DisableCompact {
+		a.CompactThreshold = 0
+	} else if a.CompactThreshold == 0 {
+		a.CompactThreshold = DefaultCompactThreshold
 	}
 
 	a.Messages = message.CloneMessages(a.Messages)
@@ -323,38 +339,7 @@ func applyThinkingDuration(blocks []message.Block, durationMs int) {
 
 func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block, out chan<- Event) (message.Message, bool) {
 	toolResults := make([]message.Block, 0, len(toolCalls))
-	for _, toolCall := range toolCalls {
-		if ctx.Err() != nil {
-			return message.Message{}, true
-		}
-
-		input := maps.Clone(toolCall.Input)
-		if input == nil {
-			input = map[string]any{}
-		}
-		out <- Event{Type: "tool_start", Data: map[string]any{
-			"tool_call": map[string]any{
-				"id":    toolCall.ID,
-				"name":  toolCall.Name,
-				"input": input,
-			},
-		}}
-
-		toolCall.Input = input
-		var result tools.Result
-		call := a.toolCall(toolCall, input, nil)
-		if hookResult, handled := a.runBeforeToolHooks(ctx, call); handled {
-			result = hookResult
-		} else if spec, ok := a.lookupToolSpec(toolCall.Name); ok {
-			if spec.Runner != nil {
-				result = a.runCustomTool(ctx, toolCall, spec, out)
-			} else {
-				result = a.runTool(ctx, toolCall, out)
-			}
-		} else {
-			result = tools.Result{Output: "error: unknown tool: " + toolCall.Name, IsError: true}
-		}
-		result = a.runAfterToolHooks(ctx, call, result)
+	appendResult := func(toolCall message.Block, result tools.Result) {
 		toolResults = append(toolResults, message.ToolResultBlock(
 			toolCall.ID,
 			result.Output,
@@ -376,6 +361,42 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 			data["content"] = result.Content
 		}
 		out <- Event{Type: "tool_done", Data: data}
+	}
+
+	for _, toolCall := range toolCalls {
+		input := maps.Clone(toolCall.Input)
+		if input == nil {
+			input = map[string]any{}
+		}
+		out <- Event{Type: "tool_start", Data: map[string]any{
+			"tool_call": map[string]any{
+				"id":    toolCall.ID,
+				"name":  toolCall.Name,
+				"input": input,
+			},
+		}}
+
+		toolCall.Input = input
+		if ctx.Err() != nil {
+			appendResult(toolCall, tools.Result{Output: "error: cancelled", IsError: true})
+			return message.BuildMessage("user", toolResults, nil), true
+		}
+
+		var result tools.Result
+		call := a.toolCall(toolCall, input, nil)
+		if hookResult, handled := a.runBeforeToolHooks(ctx, call); handled {
+			result = hookResult
+		} else if spec, ok := a.lookupToolSpec(toolCall.Name); ok {
+			if spec.Runner != nil {
+				result = a.runCustomTool(ctx, toolCall, spec, out)
+			} else {
+				result = a.runTool(ctx, toolCall, out)
+			}
+		} else {
+			result = tools.Result{Output: "error: unknown tool: " + toolCall.Name, IsError: true}
+		}
+		result = a.runAfterToolHooks(ctx, call, result)
+		appendResult(toolCall, result)
 
 		if result.IsError && ctx.Err() != nil && strings.HasSuffix(result.Output, "error: cancelled") {
 			return message.BuildMessage("user", toolResults, nil), true
@@ -383,6 +404,14 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 	}
 
 	return message.BuildMessage("user", toolResults, nil), false
+}
+
+func randomSessionID() string {
+	var data [8]byte
+	if _, err := rand.Read(data[:]); err == nil {
+		return hex.EncodeToString(data[:])
+	}
+	return "session-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "")
 }
 
 func (a *Agent) lookupToolSpec(name string) (tools.ToolSpec, bool) {
