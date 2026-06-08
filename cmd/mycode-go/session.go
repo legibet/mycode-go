@@ -53,7 +53,11 @@ func sessionListCommand(args []string) int {
 		return 1
 	}
 
-	store := session.NewStore(config.ResolveSessionsDir())
+	store, err := session.NewStore(config.ResolveSessionsDir())
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	filterCWD := cwd
 	if *allWorkspaces {
 		filterCWD = ""

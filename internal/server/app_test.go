@@ -18,6 +18,33 @@ import (
 	"github.com/legibet/mycode-go/session"
 )
 
+func newServerTestStore(t *testing.T) *session.Store {
+	t.Helper()
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func newTestApp(t *testing.T, serveWeb bool, webRoot string, store *session.Store, runs *core.RunManager) *app {
+	t.Helper()
+	app, err := newApp(serveWeb, webRoot, store, runs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return app
+}
+
+func newTestDevHandler(t *testing.T) http.Handler {
+	t.Helper()
+	handler, err := NewDevHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler
+}
+
 func TestServeStaticFromConfiguredWebRoot(t *testing.T) {
 	webRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(webRoot, "index.html"), []byte("index"), 0o644); err != nil {
@@ -27,7 +54,7 @@ func TestServeStaticFromConfiguredWebRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler := newApp(true, webRoot, session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	handler := newTestApp(t, true, webRoot, newServerTestStore(t), core.NewRunManager(nil))
 
 	t.Run("asset", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
@@ -57,7 +84,7 @@ func TestServeStaticFromConfiguredWebRoot(t *testing.T) {
 }
 
 func TestDefaultAppDoesNotEnableCORS(t *testing.T) {
-	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	handler := newTestApp(t, false, "", newServerTestStore(t), core.NewRunManager(nil))
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodOptions, "/api/settings", nil)
@@ -71,7 +98,7 @@ func TestDefaultAppDoesNotEnableCORS(t *testing.T) {
 }
 
 func TestDevAppAllowsOnlyLocalViteCORS(t *testing.T) {
-	handler := NewDevHandler()
+	handler := newTestDevHandler(t)
 
 	allowed := httptest.NewRecorder()
 	allowedReq := httptest.NewRequest(http.MethodOptions, "/api/settings", nil)
@@ -102,7 +129,7 @@ func TestChatRequestShapeValidation(t *testing.T) {
 		{"input": []map[string]any{{"type": "document", "data": "abc", "mime_type": "text/plain"}}},
 		{"input": []map[string]any{{"type": "image"}}},
 	}
-	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	handler := newTestApp(t, false, "", newServerTestStore(t), core.NewRunManager(nil))
 
 	for _, payload := range cases {
 		recorder := performJSON(t, handler, http.MethodPost, "/api/chat", payload)
@@ -116,8 +143,8 @@ func TestChatRejectsRewindForNewSessionWithoutCreatingFiles(t *testing.T) {
 	isolateServerConfigTest(t)
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
-	store := session.NewStore(t.TempDir())
-	handler := newApp(false, "", store, core.NewRunManager(nil))
+	store := newServerTestStore(t)
+	handler := newTestApp(t, false, "", store, core.NewRunManager(nil))
 
 	recorder := performJSON(
 		t,
@@ -154,7 +181,7 @@ func TestChatRejectsUnsupportedReasoningEffortAsBadRequest(t *testing.T) {
 	isolateServerConfigTest(t)
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
-	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	handler := newTestApp(t, false, "", newServerTestStore(t), core.NewRunManager(nil))
 	recorder := performJSON(
 		t,
 		handler,
@@ -191,8 +218,8 @@ func TestChatCapabilityFailureDoesNotCreateSession(t *testing.T) {
 		},
 	})
 
-	store := session.NewStore(t.TempDir())
-	handler := newApp(false, "", store, core.NewRunManager(nil))
+	store := newServerTestStore(t)
+	handler := newTestApp(t, false, "", store, core.NewRunManager(nil))
 
 	recorder := performJSON(
 		t,
@@ -260,8 +287,8 @@ func TestChatTextAttachmentIsPersistedAsFileBlock(t *testing.T) {
 		},
 	})
 
-	store := session.NewStore(t.TempDir())
-	handler := newApp(false, "", store, core.NewRunManager(nil))
+	store := newServerTestStore(t)
+	handler := newTestApp(t, false, "", store, core.NewRunManager(nil))
 	recorder := performJSON(
 		t,
 		handler,
@@ -351,7 +378,7 @@ func TestChatSendsBuiltInToolsToProvider(t *testing.T) {
 		},
 	})
 
-	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	handler := newTestApp(t, false, "", newServerTestStore(t), core.NewRunManager(nil))
 	recorder := performJSON(t, handler, http.MethodPost, "/api/chat", map[string]any{
 		"session_id": "tools",
 		"cwd":        t.TempDir(),
@@ -415,8 +442,8 @@ func TestChatRejectsRewindToCompactSummary(t *testing.T) {
 	isolateServerConfigTest(t)
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
-	store := session.NewStore(t.TempDir())
-	handler := newApp(false, "", store, core.NewRunManager(nil))
+	store := newServerTestStore(t)
+	handler := newTestApp(t, false, "", store, core.NewRunManager(nil))
 	created, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)
@@ -466,7 +493,7 @@ func TestChatRejectsRewindToCompactSummary(t *testing.T) {
 
 func TestSettingsRouteReturnsEmptyWhenNoFile(t *testing.T) {
 	isolateServerConfigTest(t)
-	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	handler := newTestApp(t, false, "", newServerTestStore(t), core.NewRunManager(nil))
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
 	handler.ServeHTTP(recorder, request)
@@ -499,7 +526,7 @@ func TestSettingsRouteMasksSecretsAndReportsEnv(t *testing.T) {
 		},
 	})
 
-	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	handler := newTestApp(t, false, "", newServerTestStore(t), core.NewRunManager(nil))
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
 	handler.ServeHTTP(recorder, request)
@@ -549,7 +576,7 @@ func TestSettingsPutPreservesOrClearsExistingAPIKey(t *testing.T) {
 					"anthropic": map[string]any{"type": "anthropic", "api_key": "sk-old"},
 				},
 			})
-			handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+			handler := newTestApp(t, false, "", newServerTestStore(t), core.NewRunManager(nil))
 			recorder := performJSON(t, handler, http.MethodPut, "/api/settings", map[string]any{
 				"config": map[string]any{
 					"providers": map[string]any{
@@ -584,7 +611,7 @@ func TestSettingsPutWritesModelsAsDict(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(home, "config.json")
-	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	handler := newTestApp(t, false, "", newServerTestStore(t), core.NewRunManager(nil))
 
 	recorder := performJSON(t, handler, http.MethodPut, "/api/settings", map[string]any{
 		"config": map[string]any{
@@ -628,7 +655,7 @@ func TestSettingsPutDropsEmptyFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(home, "config.json")
-	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	handler := newTestApp(t, false, "", newServerTestStore(t), core.NewRunManager(nil))
 
 	recorder := performJSON(t, handler, http.MethodPut, "/api/settings", map[string]any{
 		"config": map[string]any{
@@ -664,7 +691,7 @@ func TestSettingsPutPersistsCompactThresholdFalse(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(home, "config.json")
-	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	handler := newTestApp(t, false, "", newServerTestStore(t), core.NewRunManager(nil))
 
 	recorder := performJSON(t, handler, http.MethodPut, "/api/settings", map[string]any{
 		"config": map[string]any{
@@ -690,7 +717,7 @@ func TestSettingsPutPersistsCompactThresholdFalse(t *testing.T) {
 
 func TestSettingsPutRejectsInvalidProviderType(t *testing.T) {
 	isolateServerConfigTest(t)
-	handler := newApp(false, "", session.NewStore(t.TempDir()), core.NewRunManager(nil))
+	handler := newTestApp(t, false, "", newServerTestStore(t), core.NewRunManager(nil))
 	recorder := performJSON(t, handler, http.MethodPut, "/api/settings", map[string]any{
 		"config": map[string]any{
 			"providers": map[string]any{

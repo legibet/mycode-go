@@ -6,11 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	agentpkg "github.com/legibet/mycode-go/agent"
-	"github.com/legibet/mycode-go/attachment"
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/permissions"
 	promptpkg "github.com/legibet/mycode-go/internal/prompt"
@@ -67,7 +65,11 @@ func runCommand(args []string) int {
 		return 1
 	}
 
-	store := session.NewStore(config.ResolveSessionsDir())
+	store, err := session.NewStore(config.ResolveSessionsDir())
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	resolvedSession, err := resolveSession(
 		store,
 		cwd,
@@ -114,78 +116,56 @@ func runCommand(args []string) int {
 		return 1
 	}
 
-	var latestAssistant *message.Message
 	onPersist := func(msg message.Message) error {
-		if msg.Role == "assistant" {
-			latestAssistant = new(message.Clone(msg))
-		}
 		return store.AppendMessage(resolvedSession.ID, msg, cwd)
 	}
 
-	userMessage := buildRunUserMessage(prompt, cwd)
-	errorMessage := ""
-	for event := range agent.Chat(context.Background(), userMessage, agentpkg.ChatOptions{OnPersist: onPersist}) {
-		if event.Type != "error" {
-			continue
-		}
-		if text, ok := event.Data["message"].(string); ok && text != "" {
-			errorMessage = text
-		} else {
-			errorMessage = "agent error"
-		}
-	}
-	if errorMessage != "" {
-		_, _ = fmt.Fprintln(os.Stderr, errorMessage)
-		return 1
-	}
-
-	reply := flattenAssistantReply(latestAssistant)
+	userMessage := message.UserTextMessage(prompt, nil)
+	reply, errorMessage := runNoninteractive(context.Background(), agent, userMessage, onPersist)
 	if reply != "" {
 		_, _ = fmt.Fprintln(os.Stdout, reply)
+	}
+	if errorMessage != "" {
+		if reply == "" {
+			_, _ = fmt.Fprintln(os.Stderr, errorMessage)
+		}
+		return 1
 	}
 	return 0
 }
 
-func buildRunUserMessage(prompt, cwd string) message.Message {
-	blocks := []message.Block{message.TextBlock(prompt, nil)}
-	seen := map[string]struct{}{}
-	for _, pathText := range runAttachmentPaths(prompt) {
-		resolved := tools.ResolvePath(pathText, cwd)
-		info, err := os.Stat(resolved)
-		if err != nil || !info.Mode().IsRegular() {
-			continue
+func runNoninteractive(ctx context.Context, agent *agentpkg.Agent, userMessage message.Message, onPersist agentpkg.PersistFunc) (string, string) {
+	var latestAssistant *message.Message
+	persist := func(msg message.Message) error {
+		if msg.Role == "assistant" {
+			latestAssistant = new(message.Clone(msg))
 		}
-		if _, ok := seen[resolved]; ok {
-			continue
+		if onPersist == nil {
+			return nil
 		}
-		seen[resolved] = struct{}{}
-
-		item := attachment.Path(resolved)
-		if tools.DetectImageMIMEType(resolved) == "" && tools.DetectDocumentMIMEType(resolved) == "" {
-			item = attachment.PathWithName(resolved, resolved)
-		}
-		attachmentBlocks, err := attachment.Build([]attachment.Attachment{item}, attachment.Options{CWD: cwd})
-		if err != nil {
-			continue
-		}
-		blocks = append(blocks, attachmentBlocks...)
+		return onPersist(msg)
 	}
-	return message.BuildMessage("user", blocks, nil)
-}
 
-func runAttachmentPaths(prompt string) []string {
-	tokens := strings.Fields(strings.ReplaceAll(strings.ReplaceAll(prompt, "\r\n", "\n"), "\r", "\n"))
-	paths := make([]string, 0)
-	for _, token := range tokens {
-		if !strings.HasPrefix(token, "@") || token == "@" {
-			continue
-		}
-		path := strings.Trim(token[1:], `"'`)
-		if path != "" {
-			paths = append(paths, filepath.Clean(path))
+	errorMessage := ""
+	for event := range agent.Chat(ctx, userMessage, agentpkg.ChatOptions{OnPersist: persist}) {
+		switch event.Type {
+		case "error":
+			if text, ok := event.Data["message"].(string); ok && text != "" {
+				errorMessage = text
+			} else {
+				errorMessage = "agent error"
+			}
+		case "tool_done":
+			if event.Data["is_error"] != true {
+				continue
+			}
+			output, _ := event.Data["output"].(string)
+			if output == permissions.DeniedOutput || output == permissions.DeniedByUserOutput {
+				errorMessage = output
+			}
 		}
 	}
-	return paths
+	return flattenAssistantReply(latestAssistant), errorMessage
 }
 
 func resolveSession(store *session.Store, cwd, requestedSessionID string, continueLast bool) (resolvedSession, error) {

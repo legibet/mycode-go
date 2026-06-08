@@ -51,16 +51,18 @@ type Store struct {
 	locks   map[string]*sync.Mutex
 }
 
-func NewStore(dataDir string) *Store {
-	if dataDir == "" {
-		dataDir = "."
+func NewStore(dataDir string) (*Store, error) {
+	if strings.TrimSpace(dataDir) == "" {
+		return nil, errors.New("session data dir is required")
 	}
 	dataDir = absPath(dataDir)
-	_ = os.MkdirAll(dataDir, 0o755)
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create session data dir: %w", err)
+	}
 	return &Store{
 		dataDir: dataDir,
 		locks:   map[string]*sync.Mutex{},
-	}
+	}, nil
 }
 
 // BuildRewindEvent is the marker appended on rewind requests; ApplyRewind
@@ -106,6 +108,14 @@ func (s *Store) DraftSession(cwd string) Data {
 		Session:  Summary{ID: randomHex16(), Meta: meta},
 		Messages: []message.Message{},
 	}
+}
+
+func (s *Store) SessionExists(sessionID string) bool {
+	if strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	_, err := os.Stat(s.metaPath(sessionID))
+	return err == nil
 }
 
 func (s *Store) CreateSession(sessionID, cwd string) (Data, error) {

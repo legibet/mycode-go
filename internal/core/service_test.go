@@ -14,9 +14,12 @@ func TestServiceStartChatRejectsActiveSessionBeforeRewind(t *testing.T) {
 	t.Setenv("MYCODE_HOME", t.TempDir())
 
 	cwd := t.TempDir()
-	store := session.NewStore(t.TempDir())
+	store := newServiceTestStore(t)
 	manager := NewRunManager(nil)
-	service := NewService(Options{Store: store, Runs: manager})
+	service, err := NewService(Options{Store: store, Runs: manager})
+	if err != nil {
+		t.Fatal(err)
+	}
 	sessionID := "session-1"
 
 	if _, err := store.CreateSession(sessionID, cwd); err != nil {
@@ -69,9 +72,12 @@ func TestServiceStartChatRejectsActiveSessionBeforeRewind(t *testing.T) {
 
 func TestServiceClearAndDeleteRejectActiveSession(t *testing.T) {
 	cwd := t.TempDir()
-	store := session.NewStore(t.TempDir())
+	store := newServiceTestStore(t)
 	manager := NewRunManager(nil)
-	service := NewService(Options{Store: store, Runs: manager})
+	service, err := NewService(Options{Store: store, Runs: manager})
+	if err != nil {
+		t.Fatal(err)
+	}
 	sessionID := "session-1"
 
 	if _, err := store.CreateSession(sessionID, cwd); err != nil {
@@ -103,6 +109,15 @@ func TestServiceClearAndDeleteRejectActiveSession(t *testing.T) {
 	if loaded == nil || len(loaded.Messages) != 1 || loaded.Messages[0].Content[0].Text != "keep me" {
 		t.Fatalf("unexpected session after rejected clear/delete: %#v", loaded)
 	}
+}
+
+func newServiceTestStore(t *testing.T) *session.Store {
+	t.Helper()
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
 }
 
 func expectStatus(t *testing.T, err error, status int) {

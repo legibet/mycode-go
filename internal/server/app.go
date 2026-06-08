@@ -27,16 +27,20 @@ type app struct {
 }
 
 // NewHandler builds the HTTP handler for the API and optional web UI.
-func NewHandler(serveWeb bool) http.Handler {
+func NewHandler(serveWeb bool) (http.Handler, error) {
 	return newApp(serveWeb, "", nil, nil)
 }
 
 // NewDevHandler builds the API-only handler used with the Vite dev server.
-func NewDevHandler() http.Handler {
-	return withDevCORS(NewHandler(false))
+func NewDevHandler() (http.Handler, error) {
+	handler, err := NewHandler(false)
+	if err != nil {
+		return nil, err
+	}
+	return withDevCORS(handler), nil
 }
 
-func newApp(serveWeb bool, webRoot string, store *session.Store, runs *core.RunManager) *app {
+func newApp(serveWeb bool, webRoot string, store *session.Store, runs *core.RunManager) (*app, error) {
 	resolvedWebRoot := webRoot
 	var webFS fs.FS
 	if serveWeb {
@@ -49,8 +53,12 @@ func newApp(serveWeb bool, webRoot string, store *session.Store, runs *core.RunM
 	}
 
 	mux := http.NewServeMux()
+	svc, err := core.NewService(core.Options{Store: store, Runs: runs})
+	if err != nil {
+		return nil, err
+	}
 	app := &app{
-		svc:      core.NewService(core.Options{Store: store, Runs: runs}),
+		svc:      svc,
 		serveWeb: serveWeb,
 		webRoot:  resolvedWebRoot,
 		webFS:    webFS,
@@ -75,7 +83,7 @@ func newApp(serveWeb bool, webRoot string, store *session.Store, runs *core.RunM
 	mux.HandleFunc("GET /api/workspaces/browse", app.handleWorkspaceBrowse)
 	mux.HandleFunc("GET /api/workspaces/cwd", app.handleWorkspaceCWD)
 
-	return app
+	return app, nil
 }
 
 func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {

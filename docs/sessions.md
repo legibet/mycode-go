@@ -142,7 +142,7 @@ Cancelled streaming tools persist emitted output plus `error: cancelled`.
 
 `Store` in `session/store.go`:
 
-- `NewStore(dataDir)` — `dataDir` optional; empty resolves to `$MYCODE_HOME/sessions`
+- `NewStore(dataDir)` — `dataDir` required; creates the directory and returns an error on failure
 - `SessionExists(sessionID)` — check by `meta.json` presence
 - `CreateSession(sessionID, cwd)` — write `meta.json` and touch `messages.jsonl`
 - `DraftSession(cwd)` — create an in-memory session summary with a fresh id

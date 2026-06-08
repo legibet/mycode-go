@@ -46,9 +46,17 @@ func webCommand(args []string) int {
 	}
 
 	addr := net.JoinHostPort(*hostname, strconv.Itoa(resolvedPort))
-	handler := server.NewHandler(true)
+	handler, err := server.NewHandler(true)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	if *dev {
-		handler = server.NewDevHandler()
+		handler, err = server.NewDevHandler()
+		if err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 
 	serverInstance := &http.Server{

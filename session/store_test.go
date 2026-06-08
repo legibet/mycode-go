@@ -13,7 +13,10 @@ import (
 func TestNewStoreUsesExplicitDataDir(t *testing.T) {
 	expected := filepath.Join(t.TempDir(), "sessions")
 
-	store := NewStore(expected)
+	store, err := NewStore(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if store.dataDir != expected {
 		t.Fatalf("unexpected data dir: %s", store.dataDir)
 	}
@@ -22,8 +25,36 @@ func TestNewStoreUsesExplicitDataDir(t *testing.T) {
 	}
 }
 
+func TestNewStoreRequiresDataDir(t *testing.T) {
+	if _, err := NewStore(""); err == nil {
+		t.Fatal("expected data dir error")
+	}
+}
+
+func TestSessionExistsChecksMeta(t *testing.T) {
+	store := newTestStore(t)
+	if store.SessionExists("s1") {
+		t.Fatal("session should not exist")
+	}
+	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if !store.SessionExists("s1") {
+		t.Fatal("session should exist")
+	}
+}
+
+func newTestStore(t *testing.T) *Store {
+	t.Helper()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
 func TestCreateSessionPreservesExistingMessages(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := newTestStore(t)
 	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +76,7 @@ func TestCreateSessionPreservesExistingMessages(t *testing.T) {
 }
 
 func TestListSessionsFiltersSortsAndLatest(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := newTestStore(t)
 	if _, err := store.CreateSession("first", "/workspace"); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +107,7 @@ func TestListSessionsFiltersSortsAndLatest(t *testing.T) {
 }
 
 func TestAppendMessageNormalizesSessionTitle(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := newTestStore(t)
 	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +125,7 @@ func TestAppendMessageNormalizesSessionTitle(t *testing.T) {
 }
 
 func TestAppendMessageTruncatesSessionTitleByRune(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := newTestStore(t)
 	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +145,7 @@ func TestAppendMessageTruncatesSessionTitleByRune(t *testing.T) {
 }
 
 func TestLoadSessionLeavesOrphanToolUseInPlace(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := newTestStore(t)
 	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +180,7 @@ func TestLoadSessionLeavesOrphanToolUseInPlace(t *testing.T) {
 }
 
 func TestClearSessionKeepsSessionAddressable(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := newTestStore(t)
 	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +209,7 @@ func TestClearSessionKeepsSessionAddressable(t *testing.T) {
 }
 
 func TestDeleteSessionRemovesSession(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := newTestStore(t)
 	if _, err := store.CreateSession("s1", "/tmp"); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +240,7 @@ func TestDeleteSessionRemovesSession(t *testing.T) {
 func TestListSessionsRecoversUnavailableIndex(t *testing.T) {
 	for _, name := range []string{"missing", "damaged"} {
 		t.Run(name, func(t *testing.T) {
-			store := NewStore(t.TempDir())
+			store := newTestStore(t)
 			if _, err := store.CreateSession("s1", "/tmp"); err != nil {
 				t.Fatal(err)
 			}
@@ -239,7 +270,7 @@ func TestListSessionsRecoversUnavailableIndex(t *testing.T) {
 }
 
 func TestLoadSessionAppliesMultipleRewindMarkers(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := newTestStore(t)
 	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)
@@ -286,7 +317,7 @@ func TestLoadSessionAppliesMultipleRewindMarkers(t *testing.T) {
 }
 
 func TestLoadSessionAppliesRewindToZero(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := newTestStore(t)
 	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)
@@ -314,7 +345,7 @@ func TestLoadSessionAppliesRewindToZero(t *testing.T) {
 }
 
 func TestLoadSessionPreservesCompactMarkersInline(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := newTestStore(t)
 	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)
@@ -347,7 +378,7 @@ func TestLoadSessionPreservesCompactMarkersInline(t *testing.T) {
 }
 
 func TestRewindAfterCompactKeepsCompactMarker(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := newTestStore(t)
 	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +422,7 @@ func TestRewindAfterCompactKeepsCompactMarker(t *testing.T) {
 }
 
 func TestRewindTruncatesPastOpenToolUse(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := newTestStore(t)
 	data, err := store.CreateSession("", "/tmp")
 	if err != nil {
 		t.Fatal(err)

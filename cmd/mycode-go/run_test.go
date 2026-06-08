@@ -1,19 +1,22 @@
 package main
 
 import (
-	"encoding/base64"
-	"os"
+	"context"
 	"path/filepath"
-	"strings"
 	"testing"
 
+	agentpkg "github.com/legibet/mycode-go/agent"
+	"github.com/legibet/mycode-go/internal/config"
+	"github.com/legibet/mycode-go/internal/permissions"
 	"github.com/legibet/mycode-go/message"
+	"github.com/legibet/mycode-go/provider"
 	"github.com/legibet/mycode-go/session"
+	"github.com/legibet/mycode-go/tools"
 )
 
 func TestResolveSession(t *testing.T) {
 	t.Run("new session stays draft", func(t *testing.T) {
-		store := session.NewStore(t.TempDir())
+		store := newRunTestStore(t)
 		resolved, err := resolveSession(store, t.TempDir(), "", false)
 		if err != nil {
 			t.Fatal(err)
@@ -32,7 +35,7 @@ func TestResolveSession(t *testing.T) {
 
 	t.Run("continue latest", func(t *testing.T) {
 		cwd := t.TempDir()
-		store := session.NewStore(t.TempDir())
+		store := newRunTestStore(t)
 		if _, err := store.CreateSession("first", cwd); err != nil {
 			t.Fatal(err)
 		}
@@ -53,51 +56,141 @@ func TestResolveSession(t *testing.T) {
 	})
 
 	t.Run("missing explicit session", func(t *testing.T) {
-		store := session.NewStore(t.TempDir())
+		store := newRunTestStore(t)
 		if _, err := resolveSession(store, t.TempDir(), "missing", false); err == nil {
 			t.Fatal("expected missing session error")
 		}
 	})
 }
 
-func TestBuildRunUserMessageWithAttachments(t *testing.T) {
-	cwd := t.TempDir()
-	codePath := filepath.Join(cwd, "main.py")
-	imagePath := filepath.Join(cwd, "diagram.png")
-	imageData := mustDecodeBase64(t, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1X8AAAAASUVORK5CYII=")
-	if err := os.WriteFile(codePath, []byte("print('hello')\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(imagePath, imageData, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	prompt := "check @" + codePath + " @" + imagePath
-	msg := buildRunUserMessage(prompt, cwd)
-	resolvedCodePath, err := filepath.EvalSymlinks(codePath)
+func TestRunNoninteractiveFailsOnPermissionDenied(t *testing.T) {
+	dir := t.TempDir()
+	agent, err := agentpkg.New(agentpkg.Config{
+		Model:              "gpt-5.4",
+		Provider:           "openai",
+		CWD:                dir,
+		SessionDir:         filepath.Join(dir, "session"),
+		SessionID:          "session",
+		MaxTokens:          4096,
+		ContextWindow:      128000,
+		CompactThreshold:   0.8,
+		SupportsImageInput: true,
+		SupportsPDFInput:   true,
+		Hooks: tools.Hooks{
+			BeforeTool: []tools.BeforeToolHook{
+				permissions.ToolHook(config.PermissionConfig{Level: "readonly", Mode: "deny"}, nil, dir, dir, nil),
+			},
+		},
+		Adapter: &runFakeAdapter{
+			turns: [][]provider.StreamEvent{
+				{
+					{
+						Type: "message_done",
+						Msg: new(message.AssistantMessage([]message.Block{
+							message.ToolUseBlock("call-1", "edit", map[string]any{
+								"path": "file.txt",
+								"edits": []map[string]any{{
+									"oldText": "a",
+									"newText": "b",
+								}},
+							}, nil),
+						}, "openai", "gpt-5.4", "", "", 0, nil)),
+					},
+				},
+				{
+					{
+						Type: "message_done",
+						Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("blocked", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
+					},
+				},
+			},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if msg.Role != "user" || len(msg.Content) != 3 {
-		t.Fatalf("unexpected message: %#v", msg)
+	reply, errorMessage := runNoninteractive(context.Background(), agent, message.UserTextMessage("go", nil), nil)
+	if reply != "blocked" {
+		t.Fatalf("unexpected reply: %q", reply)
 	}
-	if msg.Content[0].Type != "text" || msg.Content[0].Text != prompt {
-		t.Fatalf("unexpected prompt block: %#v", msg.Content[0])
-	}
-	if msg.Content[1].Type != "text" || msg.Content[1].Meta["path"] != resolvedCodePath || !strings.Contains(msg.Content[1].Text, "print('hello')") {
-		t.Fatalf("unexpected text attachment: %#v", msg.Content[1])
-	}
-	if msg.Content[2].Type != "image" || msg.Content[2].Data != base64.StdEncoding.EncodeToString(imageData) || msg.Content[2].Name != "diagram.png" {
-		t.Fatalf("unexpected image attachment: %#v", msg.Content[2])
+	if errorMessage != permissions.DeniedOutput {
+		t.Fatalf("unexpected error: %q", errorMessage)
 	}
 }
 
-func mustDecodeBase64(t *testing.T, value string) []byte {
-	t.Helper()
-	data, err := base64.StdEncoding.DecodeString(value)
+func TestRunNoninteractiveKeepsAtReferencesInPrompt(t *testing.T) {
+	dir := t.TempDir()
+	adapter := &runFakeAdapter{
+		turns: [][]provider.StreamEvent{{
+			{
+				Type: "message_done",
+				Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("ok", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
+			},
+		}},
+	}
+	agent, err := agentpkg.New(agentpkg.Config{
+		Model:              "gpt-5.4",
+		Provider:           "openai",
+		CWD:                dir,
+		SessionDir:         filepath.Join(dir, "session"),
+		SessionID:          "session",
+		MaxTokens:          4096,
+		ContextWindow:      128000,
+		CompactThreshold:   0.8,
+		SupportsImageInput: true,
+		SupportsPDFInput:   true,
+		Adapter:            adapter,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return data
+
+	prompt := "explain @decorator and @scope/pkg"
+	reply, errorMessage := runNoninteractive(context.Background(), agent, message.UserTextMessage(prompt, nil), nil)
+	if reply != "ok" || errorMessage != "" {
+		t.Fatalf("unexpected run result: reply=%q error=%q", reply, errorMessage)
+	}
+	if len(adapter.requests) != 1 || len(adapter.requests[0].Messages) != 1 {
+		t.Fatalf("unexpected provider requests: %#v", adapter.requests)
+	}
+	got := adapter.requests[0].Messages[0].Content[0].Text
+	if got != prompt {
+		t.Fatalf("unexpected prompt: %q", got)
+	}
+}
+
+func newRunTestStore(t *testing.T) *session.Store {
+	t.Helper()
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+type runFakeAdapter struct {
+	turns    [][]provider.StreamEvent
+	requests []provider.Request
+}
+
+func (f *runFakeAdapter) Spec() provider.Spec {
+	return provider.Spec{ID: "openai"}
+}
+
+func (f *runFakeAdapter) StreamTurn(_ context.Context, req provider.Request) <-chan provider.StreamEvent {
+	out := make(chan provider.StreamEvent, 8)
+	f.requests = append(f.requests, req)
+	events := []provider.StreamEvent{}
+	if len(f.turns) > 0 {
+		events = f.turns[0]
+		f.turns = f.turns[1:]
+	}
+	go func() {
+		defer close(out)
+		for _, event := range events {
+			out <- event
+		}
+	}()
+	return out
 }

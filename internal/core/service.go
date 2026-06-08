@@ -119,16 +119,20 @@ type SettingsRequest struct {
 	Config json.RawMessage `json:"config"`
 }
 
-func NewService(opts Options) *Service {
+func NewService(opts Options) (*Service, error) {
 	store := opts.Store
 	if store == nil {
-		store = session.NewStore(config.ResolveSessionsDir())
+		var err error
+		store, err = session.NewStore(config.ResolveSessionsDir())
+		if err != nil {
+			return nil, err
+		}
 	}
 	runs := opts.Runs
 	if runs == nil {
 		runs = NewRunManager(opts.Sink)
 	}
-	return &Service{store: store, runs: runs}
+	return &Service{store: store, runs: runs}, nil
 }
 
 func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
