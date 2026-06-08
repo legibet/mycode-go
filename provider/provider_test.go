@@ -118,10 +118,11 @@ func TestAnthropicConvertMessageKeepsStopSequenceAndServiceTier(t *testing.T) {
 
 func TestOpenAIResponsesSerializeToolMakesOptionalFieldsNullable(t *testing.T) {
 	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
+	read := tools.Read
 	readTool, err := adapter.serializeTool(map[string]any{
-		"name":         tools.DefaultSpecs()[0].Name,
-		"description":  tools.DefaultSpecs()[0].Description,
-		"input_schema": tools.DefaultSpecs()[0].InputSchema,
+		"name":         read.Name,
+		"description":  read.Description,
+		"input_schema": read.InputSchema,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -46,7 +46,7 @@ func TestRead(t *testing.T) {
 	t.Run("directory", func(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)
-		result := executor.Read(".", 0, 0)
+		result := executor.read(".", 0, 0)
 		if !result.IsError || !strings.Contains(strings.ToLower(result.Output), "not a file") {
 			t.Fatalf("unexpected result: %#v", result)
 		}
@@ -59,7 +59,7 @@ func TestRead(t *testing.T) {
 		if err := osWriteFile(path, []byte{0x80, 0x81, 0x82}); err != nil {
 			t.Fatal(err)
 		}
-		result := executor.Read("binary.bin", 0, 0)
+		result := executor.read("binary.bin", 0, 0)
 		if !result.IsError || !strings.Contains(strings.ToLower(result.Output), "utf-8") {
 			t.Fatalf("unexpected result: %#v", result)
 		}
@@ -73,7 +73,7 @@ func TestRead(t *testing.T) {
 		if err := osWriteFile(path, []byte(data)); err != nil {
 			t.Fatal(err)
 		}
-		result := executor.Read("long.txt", 0, 0)
+		result := executor.read("long.txt", 0, 0)
 		if !strings.Contains(result.Output, "... [line truncated]") {
 			t.Fatalf("missing truncation marker: %q", result.Output)
 		}
@@ -90,7 +90,7 @@ func TestRead(t *testing.T) {
 		if err := osWriteFile(path, []byte(data)); err != nil {
 			t.Fatal(err)
 		}
-		result := executor.Read("unicode.txt", 0, 0)
+		result := executor.read("unicode.txt", 0, 0)
 		if result.IsError || !utf8.ValidString(result.Output) || !strings.Contains(result.Output, "... [line truncated]") {
 			t.Fatalf("unexpected result: %#v", result)
 		}
@@ -103,7 +103,7 @@ func TestRead(t *testing.T) {
 		if err := osWriteFile(path, png1x1); err != nil {
 			t.Fatal(err)
 		}
-		result := executor.Read("tiny.png", 0, 0)
+		result := executor.read("tiny.png", 0, 0)
 		if result.IsError || result.Output != "Read image file [image/png]" {
 			t.Fatalf("unexpected result: %#v", result)
 		}
@@ -121,9 +121,9 @@ func TestEdit(t *testing.T) {
 		if err := osWriteFile(path, []byte("alpha\nbeta gamma\ndelta\n")); err != nil {
 			t.Fatal(err)
 		}
-		result := executor.Edit("test.txt", []map[string]string{{
-			"oldText": "beta gamam",
-			"newText": "replacement",
+		result := executor.edit("test.txt", []editEntry{{
+			OldText: "beta gamam",
+			NewText: "replacement",
 		}})
 		if !result.IsError || !strings.Contains(result.Output, "closest line: beta gamma") {
 			t.Fatalf("unexpected result: %#v", result)
@@ -137,9 +137,9 @@ func TestEdit(t *testing.T) {
 		if err := osWriteFile(path, []byte("def f():\n    return 1    \n")); err != nil {
 			t.Fatal(err)
 		}
-		result := executor.Edit("test.py", []map[string]string{{
-			"oldText": "def f():\n    return 1\n",
-			"newText": "def f():\n    return 2\n",
+		result := executor.edit("test.py", []editEntry{{
+			OldText: "def f():\n    return 1\n",
+			NewText: "def f():\n    return 2\n",
 		}})
 		assertEditOK(t, result)
 		data, err := osReadFile(path)
@@ -158,9 +158,9 @@ func TestEdit(t *testing.T) {
 		if err := osWriteFile(path, []byte("line1\r\nline2\r\n")); err != nil {
 			t.Fatal(err)
 		}
-		result := executor.Edit("test.txt", []map[string]string{{
-			"oldText": "line1\nline2\n",
-			"newText": "line1\nlineX\n",
+		result := executor.edit("test.txt", []editEntry{{
+			OldText: "line1\nline2\n",
+			NewText: "line1\nlineX\n",
 		}})
 		assertEditOK(t, result)
 		data, err := osReadFile(path)
@@ -179,9 +179,9 @@ func TestEdit(t *testing.T) {
 		if err := osWriteFile(path, []byte("x  \r\nx\t\r\n")); err != nil {
 			t.Fatal(err)
 		}
-		result := executor.Edit("test.txt", []map[string]string{{
-			"oldText": "x\n",
-			"newText": "y\n",
+		result := executor.edit("test.txt", []editEntry{{
+			OldText: "x\n",
+			NewText: "y\n",
 		}})
 		if !result.IsError || !strings.Contains(strings.ToLower(result.Output), "after normalization") {
 			t.Fatalf("unexpected result: %#v", result)
@@ -195,9 +195,9 @@ func TestEdit(t *testing.T) {
 		if err := osWriteFile(path, []byte("a\nb\nc\n")); err != nil {
 			t.Fatal(err)
 		}
-		result := executor.Edit("test.txt", []map[string]string{
-			{"oldText": "a", "newText": "a1\na2"},
-			{"oldText": "c", "newText": "C"},
+		result := executor.edit("test.txt", []editEntry{
+			{OldText: "a", NewText: "a1\na2"},
+			{OldText: "c", NewText: "C"},
 		})
 		assertEditOK(t, result)
 		data, err := osReadFile(path)
@@ -216,9 +216,9 @@ func TestEdit(t *testing.T) {
 		if err := osWriteFile(path, []byte("line 1\nline 2\nline 3\nline 4\nline 5\n")); err != nil {
 			t.Fatal(err)
 		}
-		result := executor.Edit("test.txt", []map[string]string{
-			{"oldText": "line 5", "newText": "LINE 5"},
-			{"oldText": "line 2", "newText": "LINE 2"},
+		result := executor.edit("test.txt", []editEntry{
+			{OldText: "line 5", NewText: "LINE 5"},
+			{OldText: "line 2", NewText: "LINE 2"},
 		})
 		assertEditOK(t, result)
 		patch := result.Metadata["patch"].(string)
@@ -250,9 +250,9 @@ func TestEdit(t *testing.T) {
 				if err := osWriteFile(path, []byte(tc.initial)); err != nil {
 					t.Fatal(err)
 				}
-				result := executor.Edit("test.txt", []map[string]string{{
-					"oldText": tc.oldText,
-					"newText": tc.newText,
+				result := executor.edit("test.txt", []editEntry{{
+					OldText: tc.oldText,
+					NewText: tc.newText,
 				}})
 				assertEditOK(t, result)
 				if result.Metadata["added_lines"] != tc.added || result.Metadata["removed_lines"] != tc.removed {
@@ -267,7 +267,7 @@ func TestBash(t *testing.T) {
 	t.Run("empty output", func(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)
-		result := executor.Bash("empty", "true", 0, nil)
+		result := executor.bash("empty", "true", 0, nil)
 		if result.Output != "(empty)" {
 			t.Fatalf("unexpected result: %#v", result)
 		}
@@ -276,7 +276,7 @@ func TestBash(t *testing.T) {
 	t.Run("nonzero exit is not tool error", func(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)
-		result := executor.Bash("exit", "echo some output; exit 42", 0, nil)
+		result := executor.bash("exit", "echo some output; exit 42", 0, nil)
 		if result.IsError {
 			t.Fatalf("unexpected error result: %#v", result)
 		}
@@ -288,7 +288,7 @@ func TestBash(t *testing.T) {
 	t.Run("does not wait for implicit stdin", func(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)
-		result := executor.Bash("stdin-devnull", `python3 -c "import sys; print(repr(sys.stdin.read()))"`, 1, nil)
+		result := executor.bash("stdin-devnull", `python3 -c "import sys; print(repr(sys.stdin.read()))"`, 1, nil)
 		if result.Output != "''" {
 			t.Fatalf("unexpected output: %q", result.Output)
 		}
@@ -297,7 +297,7 @@ func TestBash(t *testing.T) {
 	t.Run("large output truncates and saves log", func(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)
-		result := executor.Bash("large", "seq 1 3000", 0, nil)
+		result := executor.bash("large", "seq 1 3000", 0, nil)
 		if !strings.Contains(result.Output, "Truncated:") || !strings.Contains(result.Output, "Full output:") {
 			t.Fatalf("unexpected output: %q", result.Output)
 		}
@@ -309,7 +309,7 @@ func TestBash(t *testing.T) {
 	t.Run("long single line truncates by bytes", func(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)
-		result := executor.Bash("long-line", "head -c 60000 /dev/zero | tr '\\000' x", 0, nil)
+		result := executor.bash("long-line", "head -c 60000 /dev/zero | tr '\\000' x", 0, nil)
 		if !strings.Contains(result.Output, "KB limit") || !strings.Contains(result.Output, "Full output:") {
 			t.Fatalf("unexpected output: %q", result.Output)
 		}
@@ -321,7 +321,7 @@ func TestBash(t *testing.T) {
 	t.Run("timeout", func(t *testing.T) {
 		dir := t.TempDir()
 		executor := NewExecutor(dir, dir, false)
-		result := executor.Bash("timeout", "sleep 2", 1, nil)
+		result := executor.bash("timeout", "sleep 2", 1, nil)
 		if !result.IsError || !strings.Contains(strings.ToLower(result.Output), "timeout") {
 			t.Fatalf("unexpected result: %#v", result)
 		}
@@ -358,4 +358,41 @@ func osWriteFile(path string, data []byte) error {
 
 func osReadFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// TestBuiltinToolSchemas locks the reflected schema shape against drift:
+// optional fields stay out of "required", nested entries inline, and the
+// JSON Schema dialect marker is stripped.
+func TestBuiltinToolSchemas(t *testing.T) {
+	read := Read.InputSchema
+	if read["type"] != "object" || read["additionalProperties"] != false {
+		t.Fatalf("read schema shape: %#v", read)
+	}
+	if _, ok := read["$schema"]; ok {
+		t.Fatalf("dialect marker should be stripped: %#v", read)
+	}
+	if req := requiredNames(read); len(req) != 1 || !req["path"] {
+		t.Fatalf("read required = %v, want only path", req)
+	}
+
+	properties, _ := Edit.InputSchema["properties"].(map[string]any)
+	edits, _ := properties["edits"].(map[string]any)
+	items, _ := edits["items"].(map[string]any)
+	if items["type"] != "object" {
+		t.Fatalf("edit items should inline an object: %#v", edits)
+	}
+	if req := requiredNames(items); !req["oldText"] || !req["newText"] {
+		t.Fatalf("edit item required = %v, want oldText and newText", req)
+	}
+}
+
+func requiredNames(schema map[string]any) map[string]bool {
+	out := map[string]bool{}
+	req, _ := schema["required"].([]any)
+	for _, name := range req {
+		if text, ok := name.(string); ok {
+			out[text] = true
+		}
+	}
+	return out
 }

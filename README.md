@@ -22,7 +22,7 @@ a, err := agent.New(agent.Config{
     Model:    "gpt-5",
     APIKey:   os.Getenv("OPENAI_API_KEY"),
     CWD:      cwd,
-    ToolSpecs: tools.DefaultSpecs(),
+    Tools:    []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 })
 ```
 

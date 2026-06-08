@@ -261,7 +261,7 @@ func NewRunManager(sink EventSink) *RunManager {
 }
 
 // startRun returns ActiveRunError if the session already has a run in flight.
-func (m *RunManager) startRun(sessionID string, userMessage message.Message, baseMessages []message.Message, agent *agentpkg.Agent, onPersist func(message.Message) error) (map[string]any, error) {
+func (m *RunManager) startRun(sessionID string, userMessage message.Message, baseMessages []message.Message, agent *agentpkg.Agent) (map[string]any, error) {
 	m.pruneFinishedRuns()
 
 	m.mu.Lock()
@@ -275,7 +275,7 @@ func (m *RunManager) startRun(sessionID string, userMessage message.Message, bas
 	m.activeBySession[sessionID] = state
 	m.runsByID[state.id] = state
 
-	go m.run(ctx, state, onPersist)
+	go m.run(ctx, state)
 	return state.info(), nil
 }
 
@@ -412,11 +412,11 @@ func (m *RunManager) emit(state *runState, event map[string]any) {
 	})
 }
 
-func (m *RunManager) run(ctx context.Context, state *runState, onPersist func(message.Message) error) {
+func (m *RunManager) run(ctx context.Context, state *runState) {
 	defer close(state.done)
 
 	var lastError string
-	for event := range state.agent.Chat(ctx, state.userMessage, agentpkg.ChatOptions{OnPersist: onPersist}) {
+	for event := range state.agent.ChatMessage(ctx, state.userMessage) {
 		if event.Type == "error" {
 			if messageText, _ := event.Data["message"].(string); messageText != "" {
 				lastError = messageText

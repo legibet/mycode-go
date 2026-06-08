@@ -248,7 +248,10 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		ReasoningEffort:    resolved.ReasoningEffort,
 		SupportsImageInput: resolved.SupportsImageInput,
 		SupportsPDFInput:   resolved.SupportsPDFInput,
-		ToolSpecs:          tools.DefaultSpecs(),
+		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
+		OnPersist: func(msg message.Message) error {
+			return s.store.AppendMessage(sessionID, msg, cwd)
+		},
 		Hooks: tools.Hooks{
 			BeforeTool: []tools.BeforeToolHook{
 				permissions.ToolHook(
@@ -267,9 +270,7 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		return ChatResponse{}, statusError(http.StatusInternalServerError, err.Error())
 	}
 
-	run, err := s.runs.startRun(sessionID, userMessage, baseMessages, agent, func(msg message.Message) error {
-		return s.store.AppendMessage(sessionID, msg, cwd)
-	})
+	run, err := s.runs.startRun(sessionID, userMessage, baseMessages, agent)
 	if err != nil {
 		if activeErr, ok := errors.AsType[ActiveRunError](err); ok {
 			if existing := s.runs.getRun(activeErr.RunID); existing != nil {

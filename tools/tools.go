@@ -23,6 +23,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/invopop/jsonschema"
 	"github.com/pmezard/go-difflib/difflib"
 
 	"github.com/legibet/mycode-go/attachment"
@@ -37,16 +38,16 @@ const (
 	BashMaxInMemoryBytes = 5_000_000
 )
 
-// ToolSpec is the provider-facing tool definition.
-type ToolSpec struct {
-	Name          string         `json:"name"`
-	Description   string         `json:"description"`
-	InputSchema   map[string]any `json:"input_schema"`
-	StreamsOutput bool           `json:"-"`
-	Runner        ToolRunner     `json:"-"`
+// Spec is the provider-facing tool definition plus its runner. Build custom
+// tools with Define; the built-in tools are package-level Spec values
+// (Read, Write, Edit, Bash).
+type Spec struct {
+	Name          string                                 `json:"name"`
+	Description   string                                 `json:"description"`
+	InputSchema   map[string]any                         `json:"input_schema"`
+	StreamsOutput bool                                   `json:"-"`
+	Runner        func(context.Context, ToolCall) Result `json:"-"`
 }
-
-type ToolRunner func(context.Context, ToolCall) Result
 
 type ToolCall struct {
 	ID    string
@@ -54,6 +55,91 @@ type ToolCall struct {
 	Input map[string]any
 	CWD   string
 	Emit  OutputCallback
+	// exec is the built-in tool engine, injected by Executor.Run so built-in
+	// tool runners can reach file/shell behavior and cancellation.
+	exec *Executor
+}
+
+// Call carries the decoded, typed input for a tool defined with Define, plus
+// the runtime handles the handler may need. Emit is only meaningful for specs
+// created with WithStreaming.
+type Call[T any] struct {
+	ID    string
+	Input T
+	CWD   string
+	Emit  func(string)
+}
+
+// Option configures a Spec built by Define.
+type Option func(*Spec)
+
+// WithStreaming marks a tool as emitting incremental output via Call.Emit.
+func WithStreaming() Option {
+	return func(spec *Spec) { spec.StreamsOutput = true }
+}
+
+// Define builds a Spec from a typed handler. The provider input schema is
+// reflected from T; at call time the raw input map is decoded into T before run
+// is invoked. It is the single entry point for custom tools.
+func Define[T any](name, description string, run func(context.Context, Call[T]) Result, opts ...Option) Spec {
+	spec := Spec{
+		Name:        name,
+		Description: description,
+		InputSchema: reflectSchema[T](),
+		Runner: func(ctx context.Context, call ToolCall) Result {
+			input, err := decodeInput[T](call.Input)
+			if err != nil {
+				return invalidInput(err)
+			}
+			return run(ctx, Call[T]{ID: call.ID, Input: input, CWD: call.CWD, Emit: call.Emit})
+		},
+	}
+	for _, opt := range opts {
+		opt(&spec)
+	}
+	return spec
+}
+
+// decodeInput converts a raw tool input map into the typed args struct T.
+func decodeInput[T any](input map[string]any) (T, error) {
+	var out T
+	if len(input) == 0 {
+		return out, nil
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		return out, err
+	}
+	return out, json.Unmarshal(data, &out)
+}
+
+func invalidInput(err error) Result {
+	return Result{Output: "error: invalid tool input: " + err.Error(), IsError: true}
+}
+
+// schemaReflector inlines definitions so tool schemas are flat objects with
+// additionalProperties:false, matching what providers expect.
+var schemaReflector = jsonschema.Reflector{
+	DoNotReference: true,
+	ExpandedStruct: true,
+	Anonymous:      true,
+}
+
+// reflectSchema builds the provider-facing JSON schema for a tool input type,
+// stripping the JSON Schema dialect marker providers do not need.
+func reflectSchema[T any]() map[string]any {
+	var zero T
+	data, err := json.Marshal(schemaReflector.Reflect(zero))
+	if err != nil {
+		panic("tools: marshal reflected schema: " + err.Error())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		panic("tools: decode reflected schema: " + err.Error())
+	}
+	delete(out, "$schema")
+	delete(out, "$id")
+	return out
 }
 
 type (
@@ -97,86 +183,91 @@ type Executor struct {
 	activeCmds         map[*exec.Cmd]struct{}
 }
 
-// DefaultSpecs returns the four built-in tool definitions sent to the model.
-// These descriptions are what the model sees and must match actual behavior.
-func DefaultSpecs() []ToolSpec {
-	return []ToolSpec{
-		{
-			Name:        "read",
-			Description: "Read a UTF-8 text file or supported image file. Returns up to 2000 lines for text files. Use offset/limit for large files. Very long lines are shortened.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path":   map[string]any{"type": "string", "description": "File path (relative or absolute)."},
-					"offset": map[string]any{"type": "integer", "description": "Line number to start from (1-indexed)."},
-					"limit":  map[string]any{"type": "integer", "description": "Maximum number of lines to return."},
-				},
-				"required":             []string{"path"},
-				"additionalProperties": false,
-			},
-		},
-		{
-			Name:        "write",
-			Description: "Write a file (create or overwrite).",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path":    map[string]any{"type": "string", "description": "File path (relative or absolute)."},
-					"content": map[string]any{"type": "string", "description": "File content."},
-				},
-				"required":             []string{"path", "content"},
-				"additionalProperties": false,
-			},
-		},
-		{
-			Name: "edit",
-			Description: "Edit a file by replacing text snippets. " +
-				"Each edits[].oldText must match uniquely in the original file. " +
-				"For multiple disjoint changes in one file, use one call with multiple edits.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path": map[string]any{"type": "string", "description": "File path (relative or absolute)."},
-					"edits": map[string]any{
-						"type": "array",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"oldText": map[string]any{
-									"type":        "string",
-									"description": "Exact text to find (must be unique in the file).",
-								},
-								"newText": map[string]any{
-									"type":        "string",
-									"description": "Replacement text.",
-								},
-							},
-							"required":             []string{"oldText", "newText"},
-							"additionalProperties": false,
-						},
-						"description": "Replacements to apply. All matched against the original file, not incrementally.",
-					},
-				},
-				"required":             []string{"path", "edits"},
-				"additionalProperties": false,
-			},
-		},
-		{
-			Name:          "bash",
-			Description:   "Run a shell command in the session working directory. Large output returns the tail and saves the full log to a file.",
-			StreamsOutput: true,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"command": map[string]any{"type": "string", "description": "Shell command."},
-					"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (optional)."},
-				},
-				"required":             []string{"command"},
-				"additionalProperties": false,
-			},
+// Built-in tool input types. Field tags drive the reflected provider schema:
+// json names the wire key, omitempty marks an optional field, and
+// jsonschema_description carries the field description verbatim.
+type readArgs struct {
+	Path   string `json:"path" jsonschema_description:"File path (relative or absolute)."`
+	Offset int    `json:"offset,omitempty" jsonschema_description:"Line number to start from (1-indexed)."`
+	Limit  int    `json:"limit,omitempty" jsonschema_description:"Maximum number of lines to return."`
+}
+
+type writeArgs struct {
+	Path    string `json:"path" jsonschema_description:"File path (relative or absolute)."`
+	Content string `json:"content" jsonschema_description:"File content."`
+}
+
+type editEntry struct {
+	OldText string `json:"oldText" jsonschema_description:"Exact text to find (must be unique in the file)."`
+	NewText string `json:"newText" jsonschema_description:"Replacement text."`
+}
+
+type editArgs struct {
+	Path  string      `json:"path" jsonschema_description:"File path (relative or absolute)."`
+	Edits []editEntry `json:"edits" jsonschema_description:"Replacements to apply. All matched against the original file, not incrementally."`
+}
+
+type bashArgs struct {
+	Command string `json:"command" jsonschema_description:"Shell command."`
+	Timeout int    `json:"timeout,omitempty" jsonschema_description:"Timeout in seconds (optional)."`
+}
+
+// Built-in tools. List any subset in agent.Config.Tools. Their runners reach
+// the file/shell engine through the executor injected by Executor.Run. The
+// descriptions are what the model sees and must match actual behavior.
+var (
+	Read = Spec{
+		Name:        "read",
+		Description: "Read a UTF-8 text file or supported image file. Returns up to 2000 lines for text files. Use offset/limit for large files. Very long lines are shortened.",
+		InputSchema: reflectSchema[readArgs](),
+		Runner: func(_ context.Context, call ToolCall) Result {
+			args, err := decodeInput[readArgs](call.Input)
+			if err != nil {
+				return invalidInput(err)
+			}
+			return call.exec.read(args.Path, args.Offset, args.Limit)
 		},
 	}
-}
+	Write = Spec{
+		Name:        "write",
+		Description: "Write a file (create or overwrite).",
+		InputSchema: reflectSchema[writeArgs](),
+		Runner: func(_ context.Context, call ToolCall) Result {
+			args, err := decodeInput[writeArgs](call.Input)
+			if err != nil {
+				return invalidInput(err)
+			}
+			return call.exec.write(args.Path, args.Content)
+		},
+	}
+	Edit = Spec{
+		Name: "edit",
+		Description: "Edit a file by replacing text snippets. " +
+			"Each edits[].oldText must match uniquely in the original file. " +
+			"For multiple disjoint changes in one file, use one call with multiple edits.",
+		InputSchema: reflectSchema[editArgs](),
+		Runner: func(_ context.Context, call ToolCall) Result {
+			args, err := decodeInput[editArgs](call.Input)
+			if err != nil {
+				return invalidInput(err)
+			}
+			return call.exec.edit(args.Path, args.Edits)
+		},
+	}
+	Bash = Spec{
+		Name:          "bash",
+		Description:   "Run a shell command in the session working directory. Large output returns the tail and saves the full log to a file.",
+		StreamsOutput: true,
+		InputSchema:   reflectSchema[bashArgs](),
+		Runner: func(_ context.Context, call ToolCall) Result {
+			args, err := decodeInput[bashArgs](call.Input)
+			if err != nil {
+				return invalidInput(err)
+			}
+			return call.exec.bash(call.ID, args.Command, args.Timeout, call.Emit)
+		},
+	}
+)
 
 // NewExecutor roots the executor at cwd. Bash logs spill into
 // sessionDir/tool-output when output exceeds BashMaxInMemoryBytes.
@@ -402,7 +493,13 @@ func TruncateText(text string, maxLines, maxBytes int, tail bool) (string, Trunc
 }
 
 // Read reads a text file or image.
-func (e *Executor) Read(path string, offset, limit int) Result {
+// Run executes spec with this executor injected as the call's runtime context,
+// so built-in tool runners can reach file/shell behavior and cancellation.
+func (e *Executor) Run(ctx context.Context, spec Spec, id string, input map[string]any, emit OutputCallback) Result {
+	return spec.Runner(ctx, ToolCall{ID: id, Name: spec.Name, Input: input, CWD: e.cwd, Emit: emit, exec: e})
+}
+
+func (e *Executor) read(path string, offset, limit int) Result {
 	filePath := ResolvePath(path, e.cwd)
 
 	info, err := os.Stat(filePath)
@@ -519,7 +616,7 @@ func (e *Executor) Read(path string, offset, limit int) Result {
 }
 
 // Write writes a file atomically.
-func (e *Executor) Write(path, content string) Result {
+func (e *Executor) write(path, content string) Result {
 	filePath := ResolvePath(path, e.cwd)
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
 		return errorResult(fmt.Sprintf("error: failed to write file: %v", err))
@@ -545,7 +642,7 @@ type editMatch struct {
 }
 
 // Edit applies one or more replacements against the original file content.
-func (e *Executor) Edit(path string, edits []map[string]string) Result {
+func (e *Executor) edit(path string, edits []editEntry) Result {
 	if len(edits) == 0 {
 		return errorResult("error: edits must not be empty")
 	}
@@ -565,8 +662,8 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 	multi := len(edits) > 1
 	items := make([]editSpec, 0, len(edits))
 	for i, edit := range edits {
-		oldText := edit["oldText"]
-		newText := edit["newText"]
+		oldText := edit.OldText
+		newText := edit.NewText
 		prefix := ""
 		if multi {
 			prefix = fmt.Sprintf("edits[%d]: ", i)
@@ -690,7 +787,7 @@ func (e *Executor) Edit(path string, edits []map[string]string) Result {
 }
 
 // Bash runs a shell command and streams output.
-func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput OutputCallback) Result {
+func (e *Executor) bash(toolCallID, command string, timeoutSeconds int, onOutput OutputCallback) Result {
 	timeout := int(BashTimeout / time.Second)
 	if timeoutSeconds > 0 {
 		timeout = timeoutSeconds

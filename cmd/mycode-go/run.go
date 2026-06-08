@@ -99,7 +99,7 @@ func runCommand(args []string) int {
 		ReasoningEffort:    resolvedProvider.ReasoningEffort,
 		SupportsImageInput: resolvedProvider.SupportsImageInput,
 		SupportsPDFInput:   resolvedProvider.SupportsPDFInput,
-		ToolSpecs:          tools.DefaultSpecs(),
+		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 		Hooks: tools.Hooks{
 			BeforeTool: []tools.BeforeToolHook{
 				permissions.ToolHook(
@@ -137,7 +137,7 @@ func runCommand(args []string) int {
 
 func runNoninteractive(ctx context.Context, agent *agentpkg.Agent, userMessage message.Message, onPersist agentpkg.PersistFunc) (string, string) {
 	var latestAssistant *message.Message
-	persist := func(msg message.Message) error {
+	agent.OnPersist = func(msg message.Message) error {
 		if msg.Role == "assistant" {
 			latestAssistant = new(message.Clone(msg))
 		}
@@ -148,7 +148,7 @@ func runNoninteractive(ctx context.Context, agent *agentpkg.Agent, userMessage m
 	}
 
 	errorMessage := ""
-	for event := range agent.Chat(ctx, userMessage, agentpkg.ChatOptions{OnPersist: persist}) {
+	for event := range agent.ChatMessage(ctx, userMessage) {
 		switch event.Type {
 		case "error":
 			if text, ok := event.Data["message"].(string); ok && text != "" {

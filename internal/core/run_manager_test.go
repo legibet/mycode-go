@@ -158,7 +158,7 @@ func TestRunManagerSnapshotIncludesUserMessageAndPendingEvents(t *testing.T) {
 		message.AssistantMessage([]message.Block{message.TextBlock("Earlier", nil)}, "openai", "gpt-5.4", "", "", 0, nil),
 	}
 
-	run, err := manager.startRun("session-1", userMessage, baseMessages, agent, func(message.Message) error { return nil })
+	run, err := manager.startRun("session-1", userMessage, baseMessages, agent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,13 +191,13 @@ func TestRunManagerSameSessionCannotStartSecondRun(t *testing.T) {
 	})
 	userMessage := message.UserTextMessage("first", nil)
 
-	run, err := manager.startRun("session-1", userMessage, nil, first, func(message.Message) error { return nil })
+	run, err := manager.startRun("session-1", userMessage, nil, first)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	second := newTestAgent(t, &completeAdapter{spec: provider.Spec{ID: "openai"}})
-	if _, err := manager.startRun("session-1", message.UserTextMessage("second", nil), nil, second, func(message.Message) error { return nil }); err == nil {
+	if _, err := manager.startRun("session-1", message.UserTextMessage("second", nil), nil, second); err == nil {
 		t.Fatal("expected ActiveRunError")
 	}
 
@@ -212,11 +212,11 @@ func TestRunManagerCancelOnlyMarksTargetRunCancelled(t *testing.T) {
 	first := newTestAgent(t, firstAdapter)
 	second := newTestAgent(t, secondAdapter)
 
-	firstRun, err := manager.startRun("session-1", message.UserTextMessage("first", nil), nil, first, func(message.Message) error { return nil })
+	firstRun, err := manager.startRun("session-1", message.UserTextMessage("first", nil), nil, first)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondRun, err := manager.startRun("session-2", message.UserTextMessage("second", nil), nil, second, func(message.Message) error { return nil })
+	secondRun, err := manager.startRun("session-2", message.UserTextMessage("second", nil), nil, second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestRunManagerFinishedRunStaysAvailableForReconnectWindow(t *testing.T) {
 	manager := NewRunManager(nil)
 	agent := newTestAgent(t, &completeAdapter{spec: provider.Spec{ID: "openai"}})
 
-	run, err := manager.startRun("session-1", message.UserTextMessage("done", nil), nil, agent, func(message.Message) error { return nil })
+	run, err := manager.startRun("session-1", message.UserTextMessage("done", nil), nil, agent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestRunManagerEventsRespectAfterAndFinish(t *testing.T) {
 	manager := NewRunManager(nil)
 	agent := newTestAgent(t, &completeAdapter{spec: provider.Spec{ID: "openai"}})
 
-	run, err := manager.startRun("session-1", message.UserTextMessage("done", nil), nil, agent, func(message.Message) error { return nil })
+	run, err := manager.startRun("session-1", message.UserTextMessage("done", nil), nil, agent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestRunManagerProviderErrorMarksRunFailedAndReleasesSession(t *testing.T) {
 	manager := NewRunManager(nil)
 	agent := newTestAgent(t, &errorAdapter{spec: provider.Spec{ID: "openai"}})
 
-	run, err := manager.startRun("session-1", message.UserTextMessage("fail", nil), nil, agent, func(message.Message) error { return nil })
+	run, err := manager.startRun("session-1", message.UserTextMessage("fail", nil), nil, agent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestRunManagerPermissionDecision(t *testing.T) {
 		release: make(chan struct{}),
 	}
 	agent := newTestAgent(t, adapter)
-	run, err := manager.startRun("session-1", message.UserTextMessage("hello", nil), nil, agent, func(message.Message) error { return nil })
+	run, err := manager.startRun("session-1", message.UserTextMessage("hello", nil), nil, agent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func TestRunManagerCancelUnblocksPendingDecisionAsDeny(t *testing.T) {
 		release: make(chan struct{}),
 	}
 	agent := newTestAgent(t, adapter)
-	run, err := manager.startRun("session-1", message.UserTextMessage("hello", nil), nil, agent, func(message.Message) error { return nil })
+	run, err := manager.startRun("session-1", message.UserTextMessage("hello", nil), nil, agent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestRunManagerPermissionDenyCancelsRun(t *testing.T) {
 		release: make(chan struct{}),
 	}
 	agent := newTestAgent(t, adapter)
-	run, err := manager.startRun("session-1", message.UserTextMessage("hello", nil), nil, agent, func(message.Message) error { return nil })
+	run, err := manager.startRun("session-1", message.UserTextMessage("hello", nil), nil, agent)
 	if err != nil {
 		t.Fatal(err)
 	}

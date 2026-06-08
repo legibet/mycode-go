@@ -40,7 +40,7 @@ func TestServiceStartChatRejectsActiveSessionBeforeRewind(t *testing.T) {
 		release: make(chan struct{}),
 	}
 	agent := newTestAgent(t, adapter)
-	run, err := manager.startRun(sessionID, message.UserTextMessage("active", nil), nil, agent, nil)
+	run, err := manager.startRun(sessionID, message.UserTextMessage("active", nil), nil, agent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestServiceClearAndDeleteRejectActiveSession(t *testing.T) {
 		release: make(chan struct{}),
 	}
 	agent := newTestAgent(t, adapter)
-	run, err := manager.startRun(sessionID, message.UserTextMessage("active", nil), nil, agent, nil)
+	run, err := manager.startRun(sessionID, message.UserTextMessage("active", nil), nil, agent)
 	if err != nil {
 		t.Fatal(err)
 	}

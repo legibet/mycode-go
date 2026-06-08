@@ -88,12 +88,11 @@ func TestChatPersistsReasoningBlocks(t *testing.T) {
 	}
 
 	persisted := []message.Message{}
-	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), ChatOptions{
-		OnPersist: func(msg message.Message) error {
-			persisted = append(persisted, msg)
-			return nil
-		},
-	}))
+	agent.OnPersist = func(msg message.Message) error {
+		persisted = append(persisted, msg)
+		return nil
+	}
+	events := collectEvents(agent.Chat(t.Context(), "hello"))
 
 	if len(events) != 3 || events[0].Type != "reasoning" || events[1].Type != "reasoning_done" || events[2].Type != "text" {
 		t.Fatalf("unexpected events: %#v", events)
@@ -133,12 +132,11 @@ func TestChatPersistsPartialAssistantOnProviderCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	persisted := []message.Message{}
-	stream := agent.Chat(ctx, message.UserTextMessage("hello", nil), ChatOptions{
-		OnPersist: func(msg message.Message) error {
-			persisted = append(persisted, msg)
-			return nil
-		},
-	})
+	agent.OnPersist = func(msg message.Message) error {
+		persisted = append(persisted, msg)
+		return nil
+	}
+	stream := agent.Chat(ctx, "hello")
 
 	var first Event
 	select {
@@ -209,7 +207,7 @@ func TestChatRespectsExplicitTurnLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), ChatOptions{}))
+	events := collectEvents(agent.Chat(t.Context(), "hello"))
 	last := events[len(events)-1]
 	if last.Type != "error" || last.Data["message"] != "max_turns reached" {
 		t.Fatalf("unexpected events: %#v", events)
@@ -244,7 +242,7 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), ChatOptions{}))
+	collectEvents(agent.Chat(t.Context(), "hello"))
 
 	if len(adapter.requests) != 1 || adapter.requests[0].SessionID != "session-explicit" {
 		t.Fatalf("unexpected requests: %#v", adapter.requests)
@@ -295,7 +293,7 @@ func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), ChatOptions{}))
+	events := collectEvents(agent.Chat(t.Context(), "hello"))
 
 	found := false
 	for _, event := range events {
@@ -322,7 +320,7 @@ func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
 		CompactThreshold:   0.8,
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
-		ToolSpecs:          tools.DefaultSpecs(),
+		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 		Adapter: &fakeAdapter{
 			spec: provider.Spec{ID: "openai"},
 			turns: [][]provider.StreamEvent{{
@@ -343,7 +341,7 @@ func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stream := agent.Chat(ctx, message.UserTextMessage("run bash", nil), ChatOptions{})
+	stream := agent.Chat(ctx, "run bash")
 	events := []Event{}
 	for event := range stream {
 		events = append(events, event)
@@ -384,7 +382,7 @@ func TestChatCancelBetweenToolsKeepsCompletedResults(t *testing.T) {
 		CompactThreshold:   0.8,
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
-		ToolSpecs: []tools.ToolSpec{
+		Tools: []tools.Spec{
 			{
 				Name: "first",
 				Runner: func(context.Context, tools.ToolCall) tools.Result {
@@ -417,12 +415,11 @@ func TestChatCancelBetweenToolsKeepsCompletedResults(t *testing.T) {
 	}
 
 	persisted := []message.Message{}
-	events := collectEvents(agent.Chat(ctx, message.UserTextMessage("hello", nil), ChatOptions{
-		OnPersist: func(msg message.Message) error {
-			persisted = append(persisted, msg)
-			return nil
-		},
-	}))
+	agent.OnPersist = func(msg message.Message) error {
+		persisted = append(persisted, msg)
+		return nil
+	}
+	events := collectEvents(agent.Chat(ctx, "hello"))
 
 	var done []Event
 	for _, event := range events {
@@ -489,7 +486,7 @@ func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events := collectEvents(agent.Chat(t.Context(), message.UserTextMessage("hello", nil), ChatOptions{}))
+	events := collectEvents(agent.Chat(t.Context(), "hello"))
 
 	if len(adapter.requests) != 2 {
 		t.Fatalf("unexpected requests: %#v", adapter.requests)

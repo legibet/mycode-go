@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/legibet/mycode-go/attachment"
 	"github.com/legibet/mycode-go/message"
 	"github.com/legibet/mycode-go/provider"
 	"github.com/legibet/mycode-go/tools"
@@ -24,12 +25,10 @@ type Event struct {
 	Data map[string]any
 }
 
-// PersistFunc stores one canonical message.
+// PersistFunc receives one canonical message. Set Config.OnPersist to persist
+// every message a turn produces (user input, assistant reply, tool results,
+// compact markers) before it is appended to the session log.
 type PersistFunc func(message.Message) error
-
-type ChatOptions struct {
-	OnPersist PersistFunc
-}
 
 // Config describes one agent runtime.
 type Config struct {
@@ -52,15 +51,16 @@ type Config struct {
 	SupportsPDFInput   bool
 	DisableCompact     bool
 	Adapter            provider.Adapter
-	ToolSpecs          []tools.ToolSpec
+	Tools              []tools.Spec
 	Hooks              tools.Hooks
+	OnPersist          PersistFunc
 }
 
 // Agent is the single orchestration loop. Construct via New so derived fields
 // are filled.
 type Agent struct {
 	Config
-	Tools *tools.Executor
+	exec *tools.Executor
 
 	// TranscriptPath is set by New from SessionDir.
 	TranscriptPath string
@@ -95,9 +95,7 @@ func New(cfg Config) (*Agent, error) {
 		a.TranscriptPath = filepath.Join(a.SessionDir, "messages.jsonl")
 	}
 
-	if a.Tools == nil {
-		a.Tools = tools.NewExecutor(a.CWD, toolOutputRoot, a.SupportsImageInput)
-	}
+	a.exec = tools.NewExecutor(a.CWD, toolOutputRoot, a.SupportsImageInput)
 
 	if a.Adapter == nil {
 		if a.Provider == "" {
@@ -139,11 +137,56 @@ func New(cfg Config) (*Agent, error) {
 
 // Cancel stops active tools. Provider cancellation is driven by ctx.
 func (a *Agent) Cancel() {
-	a.Tools.CancelActive()
+	a.exec.CancelActive()
 }
 
-// Chat runs one user turn.
-func (a *Agent) Chat(ctx context.Context, userInput message.Message, opts ChatOptions) <-chan Event {
+// Chat runs one user turn from a prompt string, optionally with attachments
+// resolved against the agent's CWD. It is the convenient entry point; use
+// ChatMessage to pass a fully built message (e.g. multi-modal content).
+func (a *Agent) Chat(ctx context.Context, prompt string, attachments ...attachment.Attachment) <-chan Event {
+	blocks := []message.Block{message.TextBlock(prompt, nil)}
+	if len(attachments) > 0 {
+		attached, err := attachment.Build(attachments, attachment.Options{CWD: a.CWD})
+		if err != nil {
+			out := make(chan Event, 1)
+			a.emitError(out, err.Error())
+			close(out)
+			return out
+		}
+		blocks = append(blocks, attached...)
+	}
+	return a.ChatMessage(ctx, message.BuildMessage("user", blocks, nil))
+}
+
+// Run drives one user turn to completion and collects the streamed result:
+// concatenated text deltas, every event, and the first error message.
+func (a *Agent) Run(ctx context.Context, prompt string, attachments ...attachment.Attachment) RunResult {
+	var result RunResult
+	for event := range a.Chat(ctx, prompt, attachments...) {
+		result.Events = append(result.Events, event)
+		switch event.Type {
+		case "text":
+			if delta, ok := event.Data["delta"].(string); ok {
+				result.Text += delta
+			}
+		case "error":
+			if result.Error == "" {
+				result.Error, _ = event.Data["message"].(string)
+			}
+		}
+	}
+	return result
+}
+
+// RunResult is the collected outcome of Run.
+type RunResult struct {
+	Text   string
+	Events []Event
+	Error  string
+}
+
+// ChatMessage runs one user turn from a fully built user message.
+func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) <-chan Event {
 	out := make(chan Event, 32)
 	go func() {
 		defer close(out)
@@ -157,10 +200,10 @@ func (a *Agent) Chat(ctx context.Context, userInput message.Message, opts ChatOp
 		}
 
 		persist := func(msg message.Message) error {
-			if opts.OnPersist == nil {
+			if a.OnPersist == nil {
 				return nil
 			}
-			return opts.OnPersist(msg)
+			return a.OnPersist(msg)
 		}
 
 		a.Messages = append(a.Messages, message.Clone(userInput))
@@ -405,12 +448,8 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 		call := a.toolCall(toolCall, input, nil)
 		if hookResult, handled := a.runBeforeToolHooks(ctx, call); handled {
 			result = hookResult
-		} else if spec, ok := a.lookupToolSpec(toolCall.Name); ok {
-			if spec.Runner != nil {
-				result = a.runCustomTool(ctx, toolCall, spec, out)
-			} else {
-				result = a.runTool(ctx, toolCall, out)
-			}
+		} else if spec, ok := a.lookupToolSpec(toolCall.Name); ok && spec.Runner != nil {
+			result = a.runToolSpec(ctx, toolCall, spec, out)
 		} else {
 			result = tools.Result{Output: "error: unknown tool: " + toolCall.Name, IsError: true}
 		}
@@ -433,13 +472,13 @@ func randomSessionID() string {
 	return "session-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "")
 }
 
-func (a *Agent) lookupToolSpec(name string) (tools.ToolSpec, bool) {
+func (a *Agent) lookupToolSpec(name string) (tools.Spec, bool) {
 	for _, spec := range a.providerToolSpecs() {
 		if spec.Name == name {
 			return spec, true
 		}
 	}
-	return tools.ToolSpec{}, false
+	return tools.Spec{}, false
 }
 
 func (a *Agent) runBeforeToolHooks(ctx context.Context, call tools.ToolCall) (tools.Result, bool) {
@@ -460,20 +499,28 @@ func (a *Agent) runAfterToolHooks(ctx context.Context, call tools.ToolCall, resu
 	return result
 }
 
-func (a *Agent) runCustomTool(ctx context.Context, toolCall message.Block, spec tools.ToolSpec, out chan<- Event) tools.Result {
-	call := a.toolCall(toolCall, toolCall.Input, nil)
+func (a *Agent) runToolSpec(ctx context.Context, toolCall message.Block, spec tools.Spec, out chan<- Event) tools.Result {
+	var emitted []string
+	var emit tools.OutputCallback
 	if spec.StreamsOutput {
-		call.Emit = func(text string) {
+		emit = func(text string) {
 			if ctx.Err() != nil {
 				return
 			}
+			emitted = append(emitted, text)
 			out <- Event{Type: "tool_output", Data: map[string]any{
 				"tool_use_id": toolCall.ID,
 				"output":      text,
 			}}
 		}
 	}
-	return spec.Runner(ctx, call)
+	result := a.exec.Run(ctx, spec, toolCall.ID, toolCall.Input, emit)
+	// A cancelled streaming tool returns the output emitted so far followed by
+	// the cancellation marker.
+	if spec.StreamsOutput && ctx.Err() != nil && result.Output == "error: cancelled" && len(emitted) > 0 {
+		result.Output = strings.Join(append(emitted, "error: cancelled"), "\n")
+	}
+	return result
 }
 
 func (a *Agent) toolCall(toolCall message.Block, input map[string]any, emit tools.OutputCallback) tools.ToolCall {
@@ -488,35 +535,6 @@ func (a *Agent) toolCall(toolCall message.Block, input map[string]any, emit tool
 
 func (a *Agent) emitError(out chan<- Event, msg string) {
 	out <- Event{Type: "error", Data: map[string]any{"message": msg}}
-}
-
-func (a *Agent) runTool(ctx context.Context, toolCall message.Block, out chan<- Event) tools.Result {
-	switch toolCall.Name {
-	case "read":
-		return a.Tools.Read(asString(toolCall.Input["path"]), asInt(toolCall.Input["offset"]), asInt(toolCall.Input["limit"]))
-	case "write":
-		return a.Tools.Write(asString(toolCall.Input["path"]), asString(toolCall.Input["content"]))
-	case "edit":
-		return a.Tools.Edit(asString(toolCall.Input["path"]), asEdits(toolCall.Input["edits"]))
-	case "bash":
-		var outputParts []string
-		result := a.Tools.Bash(toolCall.ID, asString(toolCall.Input["command"]), asInt(toolCall.Input["timeout"]), func(text string) {
-			if ctx.Err() != nil {
-				return
-			}
-			outputParts = append(outputParts, text)
-			out <- Event{Type: "tool_output", Data: map[string]any{
-				"tool_use_id": toolCall.ID,
-				"output":      text,
-			}}
-		})
-		if ctx.Err() != nil && result.Output == "error: cancelled" && len(outputParts) > 0 {
-			result.Output = strings.Join(append(outputParts, "error: cancelled"), "\n")
-		}
-		return result
-	default:
-		return tools.Result{Output: "error: unknown tool: " + toolCall.Name, IsError: true}
-	}
 }
 
 // compactIfNeeded triggers compaction when the latest turn crosses the
@@ -572,11 +590,11 @@ func (a *Agent) compactIfNeeded(ctx context.Context, persist PersistFunc, out ch
 	return false
 }
 
-func (a *Agent) providerToolSpecs() []tools.ToolSpec {
-	return a.ToolSpecs
+func (a *Agent) providerToolSpecs() []tools.Spec {
+	return a.Tools
 }
 
-func toolSpecs(specs []tools.ToolSpec) []map[string]any {
+func toolSpecs(specs []tools.Spec) []map[string]any {
 	out := make([]map[string]any, 0, len(specs))
 	for _, spec := range specs {
 		out = append(out, map[string]any{
@@ -606,22 +624,6 @@ func asInt(value any) int {
 	default:
 		return 0
 	}
-}
-
-func asEdits(value any) []map[string]string {
-	items, _ := value.([]any)
-	out := make([]map[string]string, 0, len(items))
-	for _, item := range items {
-		entry, _ := item.(map[string]any)
-		if entry == nil {
-			continue
-		}
-		out = append(out, map[string]string{
-			"oldText": asString(entry["oldText"]),
-			"newText": asString(entry["newText"]),
-		})
-	}
-	return out
 }
 
 func resolvePath(path string) string {

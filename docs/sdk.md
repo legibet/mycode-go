@@ -5,7 +5,7 @@ The SDK packages expose the agent runtime without CLI/server policy.
 - `agent` runs one agent loop.
 - `message` defines the canonical message and block format.
 - `attachment` converts file paths, bytes, and text snippets into message blocks.
-- `tools` defines tool specs, tool calls, hooks, and built-in tools.
+- `tools` defines the tool `Spec`, `Define` for custom tools, hooks, and the built-in `Read`/`Write`/`Edit`/`Bash` tools.
 - `session` stores append-only JSONL sessions.
 - `provider` defines provider adapters, requests, events, and built-in provider lookup.
 
@@ -34,19 +34,18 @@ func main() {
     }
 
     a, err := agent.New(agent.Config{
-        Provider:  "openai",
-        Model:     "gpt-5",
-        APIKey:    os.Getenv("OPENAI_API_KEY"),
-        CWD:       cwd,
-        System:    "You are a concise coding assistant.",
-        ToolSpecs: tools.DefaultSpecs(),
+        Provider: "openai",
+        Model:    "gpt-5",
+        APIKey:   os.Getenv("OPENAI_API_KEY"),
+        CWD:      cwd,
+        System:   "You are a concise coding assistant.",
+        Tools:    []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
     })
     if err != nil {
         panic(err)
     }
 
-    user := message.UserTextMessage("Read README.md and summarize it.", nil)
-    for event := range a.Chat(ctx, user, agent.ChatOptions{}) {
+    for event := range a.Chat(ctx, "Read README.md and summarize it.") {
         if event.Type == "text" {
             fmt.Print(event.Data["delta"])
         }
@@ -57,48 +56,39 @@ func main() {
 }
 ```
 
-`a.Chat` runs one user turn and returns a channel of `agent.Event` values. The turn loops provider → tool calls → provider internally until the assistant stops calling tools, then the channel closes. Event types match the SSE contract in `docs/api.md`.
+`a.Chat` takes a prompt string (plus optional attachments) and returns a channel of `agent.Event` values. The turn loops provider → tool calls → provider internally until the assistant stops calling tools, then the channel closes. Event types match the SSE contract in `docs/api.md`. Use `a.Run` to drain the stream into a `RunResult` (text, events, first error), or `a.ChatMessage` to pass a fully built `message.Message` (e.g. multi-modal content).
 
 Config notes:
 
-- `ToolSpecs` is explicit: leave it nil for a runtime with no tools, or pass `tools.DefaultSpecs()` to expose `read`, `write`, `edit`, and `bash`.
+- `Tools` is explicit: leave it nil for a runtime with no tools, or list the built-in `tools.Read`, `tools.Write`, `tools.Edit`, `tools.Bash` values (any subset) together with custom tools.
 - `Provider` may be empty when the model id is recognizable (`claude-*`, `gpt-*`, `gemini-*`, …); `New` infers it via `provider.InferProviderFromModel` and errors when it can't.
 - `Temperature` is an optional `*float64`: nil uses the provider default, otherwise the value (`0`–`1`) is sent.
 - `CompactThreshold` defaults to `agent.DefaultCompactThreshold`; set `DisableCompact` to turn automatic compaction off.
 
 ## Attachments
 
-`attachment.Build` returns canonical `message.Block` values.
+Pass attachments straight to `Chat`/`Run`. They are resolved against the
+agent's CWD and appended to the user message in order.
 
 ```go
-blocks := []message.Block{
-    message.TextBlock("Describe these files.", nil),
-}
-
-attached, err := attachment.Build([]attachment.Attachment{
+res := a.Run(ctx, "Describe these files.",
     attachment.Path("diagram.png"),
     attachment.Text("package main\n", "main.go"),
-}, attachment.Options{CWD: cwd})
-if err != nil {
-    return err
-}
-blocks = append(blocks, attached...)
-
-user := message.BuildMessage("user", blocks, nil)
+)
 ```
 
-`attachment.Build` resolves each item against `Options.CWD` and returns blocks in input order:
+Each item becomes a canonical block:
 
 - A path to PNG/JPEG/GIF/WebP becomes an `image` block; a path to PDF becomes a `document` block.
 - A path to a UTF-8 text file becomes a `<file name="…">…</file>` text block tagged with `meta.attachment`.
 - `attachment.Bytes` carries raw `image/*` or `application/pdf` data without touching disk.
 - `attachment.Text` wraps an inline snippet as the same `<file>` text block and requires a name.
 
-A missing path, a directory, an unsupported binary, or an unsupported media type returns an error before the message is built.
+A missing path, a directory, an unsupported binary, or an unsupported media type surfaces as an `error` event before the provider is called. For full control, build blocks with `attachment.Build` and pass a `message.Message` to `ChatMessage`.
 
 ## Sessions
 
-Session persistence is opt-in. Use `session.Store` and pass `OnPersist`.
+Session persistence is opt-in. Use `session.Store` and set `Config.OnPersist`.
 
 ```go
 store, err := session.NewStore("/tmp/mycode-sessions")
@@ -125,52 +115,47 @@ a, err := agent.New(agent.Config{
     SessionID:  sessionID,
     SessionDir: store.SessionDir(sessionID),
     Messages:   history,
+    OnPersist: func(msg message.Message) error {
+        return store.AppendMessage(sessionID, msg, cwd)
+    },
 })
 if err != nil {
     return err
 }
 
-opts := agent.ChatOptions{
-    OnPersist: func(msg message.Message) error {
-        return store.AppendMessage(sessionID, msg, cwd)
-    },
-}
-
-for event := range a.Chat(ctx, message.UserTextMessage("Continue.", nil), opts) {
+for event := range a.Chat(ctx, "Continue.") {
     _ = event
 }
 ```
 
 ## Custom Tools
 
-Custom tools are plain `tools.ToolSpec` values.
+Build a custom tool with `tools.Define`. The input type's fields drive the
+provider schema by reflection — the `json` tag names the wire key, `omitempty`
+marks an optional field, and `jsonschema_description` carries the description.
+The decoded, typed input arrives in `Call.Input`.
 
 ```go
-echo := tools.ToolSpec{
-    Name:        "echo",
-    Description: "Echo text.",
-    InputSchema: map[string]any{
-        "type": "object",
-        "properties": map[string]any{
-            "text": map[string]any{"type": "string"},
-        },
-        "required":             []string{"text"},
-        "additionalProperties": false,
-    },
-    Runner: func(ctx context.Context, call tools.ToolCall) tools.Result {
-        text, _ := call.Input["text"].(string)
-        return tools.Result{Output: text}
-    },
+type echoArgs struct {
+    Text string `json:"text" jsonschema_description:"Text to echo."`
 }
 
+echo := tools.Define("echo", "Echo text.",
+    func(ctx context.Context, c tools.Call[echoArgs]) tools.Result {
+        return tools.Result{Output: c.Input.Text}
+    })
+
 a, err := agent.New(agent.Config{
-    Provider:  "openai",
-    Model:     "gpt-5",
-    APIKey:    os.Getenv("OPENAI_API_KEY"),
-    CWD:       cwd,
-    ToolSpecs: []tools.ToolSpec{echo},
+    Provider: "openai",
+    Model:    "gpt-5",
+    APIKey:   os.Getenv("OPENAI_API_KEY"),
+    CWD:      cwd,
+    Tools:    []tools.Spec{tools.Bash, echo},
 })
 ```
+
+Built-in and custom tools share one `[]tools.Spec`. Pass `tools.WithStreaming()`
+to `Define` for a tool that emits incremental output through `Call.Emit`.
 
 ## Provider Adapters
 

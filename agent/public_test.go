@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/legibet/mycode-go/agent"
+	"github.com/legibet/mycode-go/attachment"
 	"github.com/legibet/mycode-go/message"
 	"github.com/legibet/mycode-go/provider"
 	"github.com/legibet/mycode-go/tools"
@@ -44,7 +45,7 @@ func TestPublicAgentRuntimeRunsWithoutAppDefaults(t *testing.T) {
 		t.Fatalf("agent.New returned error: %v", err)
 	}
 
-	events := collectEvents(runtime.Chat(t.Context(), message.UserTextMessage("hello", nil), agent.ChatOptions{}))
+	events := collectEvents(runtime.Chat(t.Context(), "hello"))
 
 	if len(events) != 1 || events[0].Type != "text" || events[0].Data["delta"] != "ok" {
 		t.Fatalf("unexpected events: %#v", events)
@@ -84,13 +85,13 @@ func TestPublicAgentUsesTempToolOutputDirWithoutSession(t *testing.T) {
 		CWD:       cwd,
 		SessionID: "memory-session",
 		Adapter:   adapter,
-		ToolSpecs: tools.DefaultSpecs(),
+		Tools:     []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 	})
 	if err != nil {
 		t.Fatalf("agent.New returned error: %v", err)
 	}
 
-	events := collectEvents(runtime.Chat(t.Context(), message.UserTextMessage("run", nil), agent.ChatOptions{}))
+	events := collectEvents(runtime.Chat(t.Context(), "run"))
 
 	output := ""
 	for _, event := range events {
@@ -157,7 +158,7 @@ func TestPublicAgentCompactDefaultAndDisableBehavior(t *testing.T) {
 				t.Fatalf("agent.New returned error: %v", err)
 			}
 
-			events := collectEvents(runtime.Chat(t.Context(), message.UserTextMessage("hello", nil), agent.ChatOptions{}))
+			events := collectEvents(runtime.Chat(t.Context(), "hello"))
 
 			if len(adapter.requests) != tc.wantReqCount {
 				t.Fatalf("request count = %d, want %d", len(adapter.requests), tc.wantReqCount)
@@ -240,7 +241,7 @@ func TestPublicAgentTemperature(t *testing.T) {
 			if err != nil {
 				t.Fatalf("agent.New returned error: %v", err)
 			}
-			collectEvents(runtime.Chat(t.Context(), message.UserTextMessage("hi", nil), agent.ChatOptions{}))
+			collectEvents(runtime.Chat(t.Context(), "hi"))
 			if len(adapter.requests) != 1 {
 				t.Fatalf("captured %d requests, want 1", len(adapter.requests))
 			}
@@ -296,4 +297,54 @@ func collectEvents(events <-chan agent.Event) []agent.Event {
 		out = append(out, event)
 	}
 	return out
+}
+
+func TestPublicAgentRunCollectsText(t *testing.T) {
+	runtime, err := agent.New(agent.Config{
+		Provider: "fake",
+		Model:    "fake-model",
+		CWD:      t.TempDir(),
+		Adapter:  &captureAdapter{},
+	})
+	if err != nil {
+		t.Fatalf("agent.New returned error: %v", err)
+	}
+	result := runtime.Run(t.Context(), "hello")
+	if result.Text != "ok" {
+		t.Fatalf("Run text = %q, want ok", result.Text)
+	}
+	if result.Error != "" {
+		t.Fatalf("Run error = %q, want empty", result.Error)
+	}
+}
+
+func TestPublicAgentChatResolvesAttachments(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "notes.txt"), []byte("hello from file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &captureAdapter{}
+	runtime, err := agent.New(agent.Config{
+		Provider: "fake",
+		Model:    "fake-model",
+		CWD:      cwd,
+		Adapter:  adapter,
+	})
+	if err != nil {
+		t.Fatalf("agent.New returned error: %v", err)
+	}
+
+	collectEvents(runtime.Chat(t.Context(), "summarize", attachment.Path("notes.txt")))
+
+	if len(adapter.requests) != 1 {
+		t.Fatalf("captured %d requests, want 1", len(adapter.requests))
+	}
+	messages := adapter.requests[0].Messages
+	user := messages[len(messages)-1]
+	if len(user.Content) != 2 {
+		t.Fatalf("user content blocks = %d, want prompt + attachment", len(user.Content))
+	}
+	if !strings.Contains(user.Content[1].Text, "hello from file") {
+		t.Fatalf("attachment block missing file content: %#v", user.Content[1])
+	}
 }
