@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"mime"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +25,7 @@ import (
 
 	"github.com/pmezard/go-difflib/difflib"
 
+	"github.com/legibet/mycode-go/attachment"
 	"github.com/legibet/mycode-go/message"
 )
 
@@ -416,7 +416,7 @@ func (e *Executor) Read(path string, offset, limit int) Result {
 		return errorResult("error: not a file: " + path)
 	}
 
-	if imageType := detectImageMIMEType(filePath, readFileHeader(filePath, 16)); imageType != "" {
+	if imageType := attachment.DetectImageMIMEType(filePath); imageType != "" {
 		if !e.supportsImageInput {
 			return errorResult("error: image input is not supported by the current model")
 		}
@@ -880,63 +880,6 @@ func (e *Executor) Bash(toolCallID, command string, timeoutSeconds int, onOutput
 		result += fmt.Sprintf("\n\n[exit code: %d]", cmd.ProcessState.ExitCode())
 	}
 	return Result{Output: result}
-}
-
-// DetectImageMIMEType returns a supported image type.
-func DetectImageMIMEType(path string) string {
-	return detectImageMIMEType(path, readFileHeader(path, 16))
-}
-
-func detectImageMIMEType(path string, header []byte) string {
-	switch {
-	case bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")):
-		return "image/png"
-	case bytes.HasPrefix(header, []byte("\xff\xd8\xff")):
-		return "image/jpeg"
-	case bytes.HasPrefix(header, []byte("GIF87a")), bytes.HasPrefix(header, []byte("GIF89a")):
-		return "image/gif"
-	case len(header) >= 12 && bytes.HasPrefix(header, []byte("RIFF")) && bytes.Equal(header[8:12], []byte("WEBP")):
-		return "image/webp"
-	}
-
-	switch mt := mime.TypeByExtension(filepath.Ext(path)); mt {
-	case "image/png", "image/jpeg", "image/gif", "image/webp":
-		return mt
-	default:
-		return ""
-	}
-}
-
-// DetectDocumentMIMEType returns a supported document type.
-func DetectDocumentMIMEType(path string) string {
-	return detectDocumentMIMEType(path, readFileHeader(path, 5))
-}
-
-func detectDocumentMIMEType(path string, header []byte) string {
-	if bytes.HasPrefix(header, []byte("%PDF-")) {
-		return "application/pdf"
-	}
-	if mime.TypeByExtension(filepath.Ext(path)) == "application/pdf" {
-		return "application/pdf"
-	}
-	return ""
-}
-
-func readFileHeader(path string, size int) []byte {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer func() {
-		_ = file.Close()
-	}()
-
-	header := make([]byte, size)
-	n, err := file.Read(header)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil
-	}
-	return header[:n]
 }
 
 func atomicWriteText(path, content, newline string) error {

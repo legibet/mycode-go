@@ -1,14 +1,18 @@
 package attachment
 
 import (
+	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"os"
 	"path/filepath"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/legibet/mycode-go/message"
-	"github.com/legibet/mycode-go/tools"
 )
 
 type Options struct {
@@ -88,7 +92,15 @@ func buildBytes(item Attachment) (message.Block, error) {
 }
 
 func buildPath(item Attachment, opts Options) (message.Block, error) {
-	resolved := tools.ResolvePath(item.path, opts.CWD)
+	resolved := item.path
+	if resolved == "~" || strings.HasPrefix(resolved, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			resolved = filepath.Join(home, strings.TrimPrefix(resolved, "~"))
+		}
+	}
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(opts.CWD, resolved)
+	}
 	info, err := os.Stat(resolved)
 	if err != nil {
 		return message.Block{}, fmt.Errorf("attachment not found: %s", item.path)
@@ -101,10 +113,10 @@ func buildPath(item Attachment, opts Options) (message.Block, error) {
 	if err != nil {
 		return message.Block{}, fmt.Errorf("failed to read attachment: %w", err)
 	}
-	if mimeType := tools.DetectImageMIMEType(resolved); mimeType != "" {
+	if mimeType := DetectImageMIMEType(resolved); mimeType != "" {
 		return message.ImageBlock(base64.StdEncoding.EncodeToString(data), mimeType, attachmentName(item, resolved), nil), nil
 	}
-	if tools.DetectDocumentMIMEType(resolved) == "application/pdf" {
+	if DetectDocumentMIMEType(resolved) == "application/pdf" {
 		return message.DocumentBlock(base64.StdEncoding.EncodeToString(data), "application/pdf", attachmentName(item, resolved), nil), nil
 	}
 	if !utf8.Valid(data) {
@@ -127,4 +139,55 @@ func textBlock(text, name string) message.Block {
 		fmt.Sprintf("<file name=\"%s\">\n%s\n</file>", message.EscapeXMLAttr(name), text),
 		map[string]any{"attachment": true, "path": name},
 	)
+}
+
+// DetectImageMIMEType returns a supported image type for the file, or "".
+func DetectImageMIMEType(path string) string {
+	header := readFileHeader(path, 16)
+	switch {
+	case bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")):
+		return "image/png"
+	case bytes.HasPrefix(header, []byte("\xff\xd8\xff")):
+		return "image/jpeg"
+	case bytes.HasPrefix(header, []byte("GIF87a")), bytes.HasPrefix(header, []byte("GIF89a")):
+		return "image/gif"
+	case len(header) >= 12 && bytes.HasPrefix(header, []byte("RIFF")) && bytes.Equal(header[8:12], []byte("WEBP")):
+		return "image/webp"
+	}
+
+	switch mt := mime.TypeByExtension(filepath.Ext(path)); mt {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return mt
+	default:
+		return ""
+	}
+}
+
+// DetectDocumentMIMEType returns "application/pdf" for a PDF file, or "".
+func DetectDocumentMIMEType(path string) string {
+	header := readFileHeader(path, 5)
+	if bytes.HasPrefix(header, []byte("%PDF-")) {
+		return "application/pdf"
+	}
+	if mime.TypeByExtension(filepath.Ext(path)) == "application/pdf" {
+		return "application/pdf"
+	}
+	return ""
+}
+
+func readFileHeader(path string, size int) []byte {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+
+	header := make([]byte, size)
+	n, err := file.Read(header)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil
+	}
+	return header[:n]
 }
