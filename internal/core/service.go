@@ -235,7 +235,7 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		Model:              resolved.Model,
 		Provider:           resolved.ProviderType,
 		CWD:                cwd,
-		SessionDir:         s.store.SessionDir(sessionID),
+		Store:              s.store,
 		SessionID:          sessionID,
 		APIKey:             resolved.APIKey,
 		APIBase:            resolved.APIBase,
@@ -249,9 +249,6 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		SupportsImageInput: resolved.SupportsImageInput,
 		SupportsPDFInput:   resolved.SupportsPDFInput,
 		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
-		OnPersist: func(msg message.Message) error {
-			return s.store.AppendMessage(sessionID, msg, cwd)
-		},
 		Hooks: tools.Hooks{
 			BeforeTool: []tools.BeforeToolHook{
 				permissions.ToolHook(

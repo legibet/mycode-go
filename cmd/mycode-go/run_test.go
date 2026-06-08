@@ -2,16 +2,12 @@ package main
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	agentpkg "github.com/legibet/mycode-go/agent"
-	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/permissions"
 	"github.com/legibet/mycode-go/message"
-	"github.com/legibet/mycode-go/provider"
 	"github.com/legibet/mycode-go/session"
-	"github.com/legibet/mycode-go/tools"
 )
 
 func TestResolveSession(t *testing.T) {
@@ -64,53 +60,13 @@ func TestResolveSession(t *testing.T) {
 }
 
 func TestRunNoninteractiveFailsOnPermissionDenied(t *testing.T) {
-	dir := t.TempDir()
-	agent, err := agentpkg.New(agentpkg.Config{
-		Model:              "gpt-5.4",
-		Provider:           "openai",
-		CWD:                dir,
-		SessionDir:         filepath.Join(dir, "session"),
-		SessionID:          "session",
-		MaxTokens:          4096,
-		ContextWindow:      128000,
-		CompactThreshold:   0.8,
-		SupportsImageInput: true,
-		SupportsPDFInput:   true,
-		Hooks: tools.Hooks{
-			BeforeTool: []tools.BeforeToolHook{
-				permissions.ToolHook(config.PermissionConfig{Level: "readonly", Mode: "deny"}, nil, dir, dir, nil),
-			},
-		},
-		Adapter: &runFakeAdapter{
-			turns: [][]provider.StreamEvent{
-				{
-					{
-						Type: "message_done",
-						Msg: new(message.AssistantMessage([]message.Block{
-							message.ToolUseBlock("call-1", "edit", map[string]any{
-								"path": "file.txt",
-								"edits": []map[string]any{{
-									"oldText": "a",
-									"newText": "b",
-								}},
-							}, nil),
-						}, "openai", "gpt-5.4", "", "", 0, nil)),
-					},
-				},
-				{
-					{
-						Type: "message_done",
-						Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("blocked", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
-					},
-				},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	agent := &fakeChatAgent{events: []agentpkg.Event{
+		{Type: "tool_start", Data: map[string]any{"tool_call": map[string]any{"id": "call-1", "name": "edit"}}},
+		{Type: "tool_done", Data: map[string]any{"tool_use_id": "call-1", "output": permissions.DeniedOutput, "is_error": true}},
+		{Type: "text", Data: map[string]any{"delta": "blocked"}},
+	}}
 
-	reply, errorMessage := runNoninteractive(context.Background(), agent, message.UserTextMessage("go", nil), nil)
+	reply, errorMessage := runNoninteractive(context.Background(), agent, message.UserTextMessage("go", nil))
 	if reply != "blocked" {
 		t.Fatalf("unexpected reply: %q", reply)
 	}
@@ -119,44 +75,18 @@ func TestRunNoninteractiveFailsOnPermissionDenied(t *testing.T) {
 	}
 }
 
-func TestRunNoninteractiveKeepsAtReferencesInPrompt(t *testing.T) {
-	dir := t.TempDir()
-	adapter := &runFakeAdapter{
-		turns: [][]provider.StreamEvent{{
-			{
-				Type: "message_done",
-				Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("ok", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
-			},
-		}},
-	}
-	agent, err := agentpkg.New(agentpkg.Config{
-		Model:              "gpt-5.4",
-		Provider:           "openai",
-		CWD:                dir,
-		SessionDir:         filepath.Join(dir, "session"),
-		SessionID:          "session",
-		MaxTokens:          4096,
-		ContextWindow:      128000,
-		CompactThreshold:   0.8,
-		SupportsImageInput: true,
-		SupportsPDFInput:   true,
-		Adapter:            adapter,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestRunNoninteractiveCollectsReplyAndPassesPrompt(t *testing.T) {
+	agent := &fakeChatAgent{events: []agentpkg.Event{
+		{Type: "text", Data: map[string]any{"delta": "ok"}},
+	}}
 
 	prompt := "explain @decorator and @scope/pkg"
-	reply, errorMessage := runNoninteractive(context.Background(), agent, message.UserTextMessage(prompt, nil), nil)
+	reply, errorMessage := runNoninteractive(context.Background(), agent, message.UserTextMessage(prompt, nil))
 	if reply != "ok" || errorMessage != "" {
 		t.Fatalf("unexpected run result: reply=%q error=%q", reply, errorMessage)
 	}
-	if len(adapter.requests) != 1 || len(adapter.requests[0].Messages) != 1 {
-		t.Fatalf("unexpected provider requests: %#v", adapter.requests)
-	}
-	got := adapter.requests[0].Messages[0].Content[0].Text
-	if got != prompt {
-		t.Fatalf("unexpected prompt: %q", got)
+	if agent.received.Content[0].Text != prompt {
+		t.Fatalf("unexpected prompt: %q", agent.received.Content[0].Text)
 	}
 }
 
@@ -169,28 +99,17 @@ func newRunTestStore(t *testing.T) *session.Store {
 	return store
 }
 
-type runFakeAdapter struct {
-	turns    [][]provider.StreamEvent
-	requests []provider.Request
+type fakeChatAgent struct {
+	received message.Message
+	events   []agentpkg.Event
 }
 
-func (f *runFakeAdapter) Spec() provider.Spec {
-	return provider.Spec{ID: "openai"}
-}
-
-func (f *runFakeAdapter) StreamTurn(_ context.Context, req provider.Request) <-chan provider.StreamEvent {
-	out := make(chan provider.StreamEvent, 8)
-	f.requests = append(f.requests, req)
-	events := []provider.StreamEvent{}
-	if len(f.turns) > 0 {
-		events = f.turns[0]
-		f.turns = f.turns[1:]
+func (f *fakeChatAgent) ChatMessage(_ context.Context, msg message.Message) <-chan agentpkg.Event {
+	f.received = msg
+	out := make(chan agentpkg.Event, len(f.events))
+	for _, event := range f.events {
+		out <- event
 	}
-	go func() {
-		defer close(out)
-		for _, event := range events {
-			out <- event
-		}
-	}()
+	close(out)
 	return out
 }

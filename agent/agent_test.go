@@ -2,14 +2,18 @@ package agent
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/legibet/mycode-go/attachment"
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/permissions"
 	"github.com/legibet/mycode-go/message"
 	"github.com/legibet/mycode-go/provider"
+	"github.com/legibet/mycode-go/session"
 	"github.com/legibet/mycode-go/tools"
 )
 
@@ -19,9 +23,7 @@ type fakeAdapter struct {
 	requests []provider.Request
 }
 
-func (f *fakeAdapter) Spec() provider.Spec {
-	return f.spec
-}
+func (f *fakeAdapter) Spec() provider.Spec { return f.spec }
 
 func (f *fakeAdapter) StreamTurn(_ context.Context, req provider.Request) <-chan provider.StreamEvent {
 	out := make(chan provider.StreamEvent, 8)
@@ -44,9 +46,7 @@ type slowProviderAdapter struct {
 	spec provider.Spec
 }
 
-func (a *slowProviderAdapter) Spec() provider.Spec {
-	return a.spec
-}
+func (a *slowProviderAdapter) Spec() provider.Spec { return a.spec }
 
 func (a *slowProviderAdapter) StreamTurn(ctx context.Context, _ provider.Request) <-chan provider.StreamEvent {
 	out := make(chan provider.StreamEvent, 1)
@@ -58,40 +58,75 @@ func (a *slowProviderAdapter) StreamTurn(ctx context.Context, _ provider.Request
 	return out
 }
 
+func openAIAdapter(turns ...[]provider.StreamEvent) *fakeAdapter {
+	return &fakeAdapter{spec: provider.Spec{ID: "openai"}, turns: turns}
+}
+
+func newTestStore(t *testing.T) *session.Store {
+	t.Helper()
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func collectEvents(stream <-chan Event) []Event {
+	events := []Event{}
+	for event := range stream {
+		events = append(events, event)
+	}
+	return events
+}
+
+func hasEvent(events []Event, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func fullOutputPath(output string) string {
+	const marker = "Full output: "
+	start := strings.Index(output, marker)
+	if start < 0 {
+		return ""
+	}
+	start += len(marker)
+	end := strings.Index(output[start:], "]")
+	if end < 0 {
+		return ""
+	}
+	return output[start : start+end]
+}
+
 func TestChatPersistsReasoningBlocks(t *testing.T) {
-	dir := t.TempDir()
-	agent, err := New(Config{
+	store := newTestStore(t)
+	agent, err := newAgent(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
-		CWD:                dir,
-		SessionDir:         filepath.Join(dir, "session"),
+		CWD:                t.TempDir(),
+		Store:              store,
 		SessionID:          "session",
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
-		Adapter: &fakeAdapter{
-			spec: provider.Spec{ID: "openai"},
-			turns: [][]provider.StreamEvent{{
-				{Type: "thinking_delta", Text: "hidden "},
-				{Type: "text_delta", Text: "Visible answer"},
-				{Type: "message_done", Msg: new(message.AssistantMessage([]message.Block{
-					message.ThinkingBlock("hidden ", nil),
-					message.TextBlock("Visible answer", nil),
-				}, "openai", "gpt-5.4", "", "", 0, nil))},
-			}},
-		},
-	})
+	}, openAIAdapter([]provider.StreamEvent{
+		{Type: "thinking_delta", Text: "hidden "},
+		{Type: "text_delta", Text: "Visible answer"},
+		{Type: "message_done", Msg: new(message.AssistantMessage([]message.Block{
+			message.ThinkingBlock("hidden ", nil),
+			message.TextBlock("Visible answer", nil),
+		}, "openai", "gpt-5.4", "", "", 0, nil))},
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	persisted := []message.Message{}
-	agent.OnPersist = func(msg message.Message) error {
-		persisted = append(persisted, msg)
-		return nil
-	}
 	events := collectEvents(agent.Chat(t.Context(), "hello"))
 
 	if len(events) != 3 || events[0].Type != "reasoning" || events[1].Type != "reasoning_done" || events[2].Type != "text" {
@@ -101,41 +136,39 @@ func TestChatPersistsReasoningBlocks(t *testing.T) {
 	if !ok {
 		t.Fatalf("reasoning_done missing duration_ms: %#v", events[1].Data)
 	}
-	if len(persisted) < 2 || len(persisted[1].Content) != 2 || persisted[1].Content[0].Type != "thinking" {
-		t.Fatalf("unexpected persisted messages: %#v", persisted)
+
+	data, err := store.LoadSession("session")
+	if err != nil || data == nil {
+		t.Fatalf("load session: %v", err)
 	}
-	thinkingBlock := persisted[1].Content[0]
-	if thinkingBlock.Meta == nil || thinkingBlock.Meta["duration_ms"] != durationMs {
-		t.Fatalf("thinking block missing duration_ms in meta: %#v", thinkingBlock)
+	if len(data.Messages) < 2 || len(data.Messages[1].Content) != 2 || data.Messages[1].Content[0].Type != "thinking" {
+		t.Fatalf("unexpected persisted messages: %#v", data.Messages)
+	}
+	thinking := data.Messages[1].Content[0]
+	if thinking.Meta == nil || asInt(thinking.Meta["duration_ms"]) != durationMs {
+		t.Fatalf("thinking block missing duration_ms in meta: %#v", thinking)
 	}
 }
 
 func TestChatPersistsPartialAssistantOnProviderCancel(t *testing.T) {
-	dir := t.TempDir()
-	adapter := &slowProviderAdapter{spec: provider.Spec{ID: "openai"}}
-	agent, err := New(Config{
+	store := newTestStore(t)
+	agent, err := newAgent(Config{
 		Model:              "gpt-5.5",
 		Provider:           "openai",
-		CWD:                dir,
-		SessionDir:         filepath.Join(dir, "session"),
+		CWD:                t.TempDir(),
+		Store:              store,
 		SessionID:          "session",
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
-		Adapter:            adapter,
-	})
+	}, &slowProviderAdapter{spec: provider.Spec{ID: "openai"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	persisted := []message.Message{}
-	agent.OnPersist = func(msg message.Message) error {
-		persisted = append(persisted, msg)
-		return nil
-	}
 	stream := agent.Chat(ctx, "hello")
 
 	var first Event
@@ -153,56 +186,55 @@ func TestChatPersistsPartialAssistantOnProviderCancel(t *testing.T) {
 	if len(remaining) != 1 || remaining[0].Type != "error" || remaining[0].Data["message"] != "cancelled" {
 		t.Fatalf("unexpected remaining events: %#v", remaining)
 	}
-	if len(persisted) != 2 {
-		t.Fatalf("unexpected persisted messages: %#v", persisted)
+
+	data, err := store.LoadSession("session")
+	if err != nil || data == nil {
+		t.Fatalf("load session: %v", err)
 	}
-	last := persisted[1]
+	if len(data.Messages) != 2 {
+		t.Fatalf("unexpected persisted messages: %#v", data.Messages)
+	}
+	last := data.Messages[1]
 	if last.Role != "assistant" || len(last.Content) != 1 {
 		t.Fatalf("unexpected partial assistant: %#v", last)
 	}
 	if last.Content[0].Type != "thinking" || last.Content[0].Text != "working" {
 		t.Fatalf("unexpected partial content: %#v", last.Content)
 	}
-	if _, ok := last.Content[0].Meta["duration_ms"].(int); !ok {
+	if last.Content[0].Meta["duration_ms"] == nil {
 		t.Fatalf("missing thinking duration: %#v", last.Content[0].Meta)
 	}
-	if last.Meta["provider"] != "openai" || last.Meta["model"] != "gpt-5.5" || last.Meta["context_window"] != 128000 {
+	if last.Meta["provider"] != "openai" || last.Meta["model"] != "gpt-5.5" || asInt(last.Meta["context_window"]) != 128000 {
 		t.Fatalf("unexpected partial meta: %#v", last.Meta)
 	}
 }
 
 func TestChatRespectsExplicitTurnLimit(t *testing.T) {
-	dir := t.TempDir()
-	agent, err := New(Config{
+	agent, err := newAgent(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
-		CWD:                dir,
-		SessionDir:         filepath.Join(dir, "session"),
-		SessionID:          "session",
+		CWD:                t.TempDir(),
 		MaxTurns:           2,
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
-		Adapter: &fakeAdapter{
-			spec: provider.Spec{ID: "openai"},
-			turns: [][]provider.StreamEvent{
-				{{
-					Type: "message_done",
-					Msg: new(message.AssistantMessage([]message.Block{
-						message.ToolUseBlock("call-1", "read", map[string]any{"path": "missing.txt"}, nil),
-					}, "openai", "gpt-5.4", "", "", 0, nil)),
-				}},
-				{{
-					Type: "message_done",
-					Msg: new(message.AssistantMessage([]message.Block{
-						message.ToolUseBlock("call-2", "read", map[string]any{"path": "missing.txt"}, nil),
-					}, "openai", "gpt-5.4", "", "", 0, nil)),
-				}},
-			},
-		},
-	})
+		Tools:              []tools.Spec{tools.Read},
+	}, openAIAdapter(
+		[]provider.StreamEvent{{
+			Type: "message_done",
+			Msg: new(message.AssistantMessage([]message.Block{
+				message.ToolUseBlock("call-1", "read", map[string]any{"path": "missing.txt"}, nil),
+			}, "openai", "gpt-5.4", "", "", 0, nil)),
+		}},
+		[]provider.StreamEvent{{
+			Type: "message_done",
+			Msg: new(message.AssistantMessage([]message.Block{
+				message.ToolUseBlock("call-2", "read", map[string]any{"path": "missing.txt"}, nil),
+			}, "openai", "gpt-5.4", "", "", 0, nil)),
+		}},
+	))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,29 +247,21 @@ func TestChatRespectsExplicitTurnLimit(t *testing.T) {
 }
 
 func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
-	dir := t.TempDir()
-	adapter := &fakeAdapter{
-		spec: provider.Spec{ID: "openai"},
-		turns: [][]provider.StreamEvent{{
-			{
-				Type: "message_done",
-				Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("ok", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
-			},
-		}},
-	}
-	agent, err := New(Config{
+	adapter := openAIAdapter([]provider.StreamEvent{{
+		Type: "message_done",
+		Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("ok", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
+	}})
+	agent, err := newAgent(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
-		CWD:                dir,
-		SessionDir:         filepath.Join(dir, "session-explicit"),
+		CWD:                t.TempDir(),
 		SessionID:          "session-explicit",
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
-		Adapter:            adapter,
-	})
+	}, adapter)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,44 +275,39 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 
 func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 	dir := t.TempDir()
-	agent, err := New(Config{
+	agent, err := newAgent(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
-		SessionDir:         filepath.Join(dir, "session"),
-		SessionID:          "session",
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
+		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 		Hooks: tools.Hooks{
 			BeforeTool: []tools.BeforeToolHook{
 				permissions.ToolHook(config.PermissionConfig{Level: "readonly", Mode: "deny"}, nil, dir, dir, nil),
 			},
 		},
-		Adapter: &fakeAdapter{
-			spec: provider.Spec{ID: "openai"},
-			turns: [][]provider.StreamEvent{
-				{{
-					Type: "message_done",
-					Msg: new(message.AssistantMessage([]message.Block{
-						message.ToolUseBlock("call-1", "edit", map[string]any{
-							"path": "file.txt",
-							"edits": []map[string]any{{
-								"oldText": "a",
-								"newText": "b",
-							}},
-						}, nil),
-					}, "openai", "gpt-5.4", "", "", 0, nil)),
-				}},
-				{{
-					Type: "message_done",
-					Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("blocked", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
-				}},
-			},
-		},
-	})
+	}, openAIAdapter(
+		[]provider.StreamEvent{{
+			Type: "message_done",
+			Msg: new(message.AssistantMessage([]message.Block{
+				message.ToolUseBlock("call-1", "edit", map[string]any{
+					"path": "file.txt",
+					"edits": []map[string]any{{
+						"oldText": "a",
+						"newText": "b",
+					}},
+				}, nil),
+			}, "openai", "gpt-5.4", "", "", 0, nil)),
+		}},
+		[]provider.StreamEvent{{
+			Type: "message_done",
+			Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("blocked", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
+		}},
+	))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,33 +327,24 @@ func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 }
 
 func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
-	dir := t.TempDir()
-	agent, err := New(Config{
+	agent, err := newAgent(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
-		CWD:                dir,
-		SessionDir:         filepath.Join(dir, "session"),
-		SessionID:          "session",
+		CWD:                t.TempDir(),
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
 		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
-		Adapter: &fakeAdapter{
-			spec: provider.Spec{ID: "openai"},
-			turns: [][]provider.StreamEvent{{
-				{
-					Type: "message_done",
-					Msg: new(message.AssistantMessage([]message.Block{
-						message.ToolUseBlock("call-1", "bash", map[string]any{
-							"command": "printf 'live\\n'; sleep 1",
-						}, nil),
-					}, "openai", "gpt-5.4", "", "", 0, nil)),
-				},
-			}},
-		},
-	})
+	}, openAIAdapter([]provider.StreamEvent{{
+		Type: "message_done",
+		Msg: new(message.AssistantMessage([]message.Block{
+			message.ToolUseBlock("call-1", "bash", map[string]any{
+				"command": "printf 'live\\n'; sleep 1",
+			}, nil),
+		}, "openai", "gpt-5.4", "", "", 0, nil)),
+	}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,13 +379,13 @@ func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
 }
 
 func TestChatCancelBetweenToolsKeepsCompletedResults(t *testing.T) {
-	dir := t.TempDir()
+	store := newTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	agent, err := New(Config{
+	agent, err := newAgent(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
-		CWD:                dir,
-		SessionDir:         filepath.Join(dir, "session"),
+		CWD:                t.TempDir(),
+		Store:              store,
 		SessionID:          "session",
 		MaxTokens:          4096,
 		ContextWindow:      128000,
@@ -397,28 +407,17 @@ func TestChatCancelBetweenToolsKeepsCompletedResults(t *testing.T) {
 				},
 			},
 		},
-		Adapter: &fakeAdapter{
-			spec: provider.Spec{ID: "openai"},
-			turns: [][]provider.StreamEvent{{
-				{
-					Type: "message_done",
-					Msg: new(message.AssistantMessage([]message.Block{
-						message.ToolUseBlock("call-1", "first", nil, nil),
-						message.ToolUseBlock("call-2", "second", nil, nil),
-					}, "openai", "gpt-5.4", "", "", 0, nil)),
-				},
-			}},
-		},
-	})
+	}, openAIAdapter([]provider.StreamEvent{{
+		Type: "message_done",
+		Msg: new(message.AssistantMessage([]message.Block{
+			message.ToolUseBlock("call-1", "first", nil, nil),
+			message.ToolUseBlock("call-2", "second", nil, nil),
+		}, "openai", "gpt-5.4", "", "", 0, nil)),
+	}}))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	persisted := []message.Message{}
-	agent.OnPersist = func(msg message.Message) error {
-		persisted = append(persisted, msg)
-		return nil
-	}
 	events := collectEvents(agent.Chat(ctx, "hello"))
 
 	var done []Event
@@ -437,9 +436,13 @@ func TestChatCancelBetweenToolsKeepsCompletedResults(t *testing.T) {
 		t.Fatalf("unexpected second tool result: %#v", done[1])
 	}
 
-	last := persisted[len(persisted)-1]
+	data, err := store.LoadSession("session")
+	if err != nil || data == nil {
+		t.Fatalf("load session: %v", err)
+	}
+	last := data.Messages[len(data.Messages)-1]
 	if last.Role != "user" || len(last.Content) != 2 {
-		t.Fatalf("unexpected persisted tool message: %#v", persisted)
+		t.Fatalf("unexpected persisted tool message: %#v", data.Messages)
 	}
 	if last.Content[0].ToolUseID != "call-1" || last.Content[0].Output != "first result" {
 		t.Fatalf("missing completed tool result: %#v", last.Content)
@@ -450,38 +453,27 @@ func TestChatCancelBetweenToolsKeepsCompletedResults(t *testing.T) {
 }
 
 func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
-	dir := t.TempDir()
-	adapter := &fakeAdapter{
-		spec: provider.Spec{ID: "openai"},
-		turns: [][]provider.StreamEvent{
-			{{
-				Type: "message_done",
-				Msg: new(message.AssistantMessage([]message.Block{
-					message.TextBlock("answer", nil),
-				}, "openai", "gpt-5.4", "", "", 90, nil)),
-			}},
-			{{
-				Type: "message_done",
-				Msg: new(message.AssistantMessage([]message.Block{
-					message.TextBlock("summary", nil),
-				}, "openai", "gpt-5.4", "", "", 0, nil)),
-			}},
-		},
-	}
-	agent, err := New(Config{
+	adapter := openAIAdapter(
+		[]provider.StreamEvent{{
+			Type: "message_done",
+			Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("answer", nil)}, "openai", "gpt-5.4", "", "", 90, nil)),
+		}},
+		[]provider.StreamEvent{{
+			Type: "message_done",
+			Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("summary", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
+		}},
+	)
+	agent, err := newAgent(Config{
 		Model:              "gpt-5.4",
 		Provider:           "openai",
-		CWD:                dir,
-		SessionDir:         filepath.Join(dir, "session"),
-		SessionID:          "session",
+		CWD:                t.TempDir(),
 		MaxTokens:          4096,
 		ContextWindow:      100,
 		CompactThreshold:   0.8,
 		ReasoningEffort:    "high",
 		SupportsImageInput: true,
 		SupportsPDFInput:   true,
-		Adapter:            adapter,
-	})
+	}, adapter)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,13 +495,11 @@ func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 	}
 }
 
-func TestNewRejectsUnsupportedProviderAdapter(t *testing.T) {
-	dir := t.TempDir()
+func TestNewRejectsUnsupportedProvider(t *testing.T) {
 	agent, err := New(Config{
-		Model:     "gpt-5.4",
-		Provider:  "missing",
-		CWD:       dir,
-		SessionID: "session",
+		Model:    "gpt-5.4",
+		Provider: "missing",
+		CWD:      t.TempDir(),
 	})
 	if err == nil {
 		t.Fatalf("expected error, got agent %#v", agent)
@@ -519,10 +509,189 @@ func TestNewRejectsUnsupportedProviderAdapter(t *testing.T) {
 	}
 }
 
-func collectEvents(stream <-chan Event) []Event {
-	events := []Event{}
-	for event := range stream {
-		events = append(events, event)
+func TestRuntimeRunsWithoutAppDefaults(t *testing.T) {
+	adapter := openAIAdapter([]provider.StreamEvent{
+		{Type: "text_delta", Text: "ok"},
+		{Type: "message_done", Msg: new(message.BuildMessage("assistant", []message.Block{message.TextBlock("ok", nil)}, nil))},
+	})
+	runtime, err := newAgent(Config{Provider: "openai", Model: "gpt-5.4", CWD: t.TempDir()}, adapter)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return events
+
+	events := collectEvents(runtime.Chat(t.Context(), "hello"))
+
+	if len(events) != 1 || events[0].Type != "text" || events[0].Data["delta"] != "ok" {
+		t.Fatalf("unexpected events: %#v", events)
+	}
+	if adapter.requests[0].System != "" {
+		t.Fatalf("system prompt should be empty by default")
+	}
+	if len(adapter.requests[0].Tools) != 0 {
+		t.Fatalf("default tools = %d, want 0", len(adapter.requests[0].Tools))
+	}
+}
+
+func TestToolOutputDirDefaultsToTempWithoutStore(t *testing.T) {
+	cwd := t.TempDir()
+	adapter := openAIAdapter(
+		[]provider.StreamEvent{{
+			Type: "message_done",
+			Msg: new(message.AssistantMessage([]message.Block{
+				message.ToolUseBlock("call-large", "bash", map[string]any{
+					"command": "head -c 5000001 /dev/zero | tr '\\0' x",
+				}, nil),
+			}, "openai", "gpt-5.4", "", "", 0, nil)),
+		}},
+		[]provider.StreamEvent{{
+			Type: "message_done",
+			Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("done", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
+		}},
+	)
+	runtime, err := newAgent(Config{
+		Provider:  "openai",
+		Model:     "gpt-5.4",
+		CWD:       cwd,
+		SessionID: "memory-session",
+		Tools:     []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
+	}, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events := collectEvents(runtime.Chat(t.Context(), "run"))
+
+	output := ""
+	for _, event := range events {
+		if event.Type == "tool_done" {
+			output, _ = event.Data["output"].(string)
+			break
+		}
+	}
+	if output == "" {
+		t.Fatalf("missing tool_done output: %#v", events)
+	}
+	logPath := fullOutputPath(output)
+	if logPath == "" {
+		t.Fatalf("missing spill path in output: %q", output)
+	}
+	if strings.HasPrefix(logPath, cwd+string(os.PathSeparator)) {
+		t.Fatalf("spill path should not be under cwd: %s", logPath)
+	}
+	wantPrefix := filepath.Join(os.TempDir(), "mycode", "memory-session", "tool-output") + string(os.PathSeparator)
+	if !strings.HasPrefix(logPath, wantPrefix) {
+		t.Fatalf("spill path = %s, want prefix %s", logPath, wantPrefix)
+	}
+}
+
+func TestCompactDefaultAndDisableBehavior(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		disable      bool
+		wantCompact  bool
+		wantReqCount int
+	}{
+		{name: "default", wantCompact: true, wantReqCount: 2},
+		{name: "disabled", disable: true, wantCompact: false, wantReqCount: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter := openAIAdapter(
+				[]provider.StreamEvent{{
+					Type: "message_done",
+					Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("answer", nil)}, "openai", "gpt-5.4", "", "", 80, nil)),
+				}},
+				[]provider.StreamEvent{{
+					Type: "message_done",
+					Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("summary", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
+				}},
+			)
+			runtime, err := newAgent(Config{
+				Provider:       "openai",
+				Model:          "gpt-5.4",
+				CWD:            t.TempDir(),
+				ContextWindow:  100,
+				DisableCompact: tc.disable,
+			}, adapter)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			events := collectEvents(runtime.Chat(t.Context(), "hello"))
+
+			if len(adapter.requests) != tc.wantReqCount {
+				t.Fatalf("request count = %d, want %d", len(adapter.requests), tc.wantReqCount)
+			}
+			if got := hasEvent(events, "compact"); got != tc.wantCompact {
+				t.Fatalf("compact event = %v, want %v; events=%#v", got, tc.wantCompact, events)
+			}
+		})
+	}
+}
+
+func TestChatSendsTemperature(t *testing.T) {
+	cases := []struct {
+		name string
+		temp *float64
+		want *float64
+	}{
+		{name: "omitted by default", temp: nil, want: nil},
+		{name: "sent when set", temp: new(0.2), want: new(0.2)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter := openAIAdapter([]provider.StreamEvent{{
+				Type: "message_done",
+				Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("ok", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
+			}})
+			runtime, err := newAgent(Config{
+				Provider:    "openai",
+				Model:       "gpt-5.4",
+				CWD:         t.TempDir(),
+				Temperature: tc.temp,
+			}, adapter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			collectEvents(runtime.Chat(t.Context(), "hi"))
+			if len(adapter.requests) != 1 {
+				t.Fatalf("captured %d requests, want 1", len(adapter.requests))
+			}
+			got := adapter.requests[0].Temperature
+			switch {
+			case tc.want == nil && got != nil:
+				t.Fatalf("temperature = %v, want nil", *got)
+			case tc.want != nil && (got == nil || *got != *tc.want):
+				t.Fatalf("temperature = %v, want %v", got, *tc.want)
+			}
+		})
+	}
+}
+
+func TestChatResolvesAttachments(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "notes.txt"), []byte("hello from file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	adapter := openAIAdapter([]provider.StreamEvent{{
+		Type: "message_done",
+		Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("ok", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
+	}})
+	runtime, err := newAgent(Config{Provider: "openai", Model: "gpt-5.4", CWD: cwd}, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	collectEvents(runtime.Chat(t.Context(), "summarize", attachment.Path("notes.txt")))
+
+	if len(adapter.requests) != 1 {
+		t.Fatalf("captured %d requests, want 1", len(adapter.requests))
+	}
+	messages := adapter.requests[0].Messages
+	user := messages[len(messages)-1]
+	if len(user.Content) != 2 {
+		t.Fatalf("user content blocks = %d, want prompt + attachment", len(user.Content))
+	}
+	if !strings.Contains(user.Content[1].Text, "hello from file") {
+		t.Fatalf("attachment block missing file content: %#v", user.Content[1])
+	}
 }

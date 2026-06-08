@@ -136,7 +136,7 @@ Bash output exceeding 5MB in memory is written to:
 
 The tool result keeps the visible tail in memory and cites the saved log path.
 
-For memory-only SDK agents with no `SessionDir`, bash spill files are written under the system temp directory:
+For memory-only SDK agents with no `Store`, bash spill files are written under the system temp directory:
 
 ```text
 <tmp>/mycode/<session_id>/tool-output/bash-<tool_call_id>.log

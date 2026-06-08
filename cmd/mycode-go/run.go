@@ -85,7 +85,7 @@ func runCommand(args []string) int {
 		Model:              resolvedProvider.Model,
 		Provider:           resolvedProvider.ProviderType,
 		CWD:                cwd,
-		SessionDir:         store.SessionDir(resolvedSession.ID),
+		Store:              store,
 		SessionID:          resolvedSession.ID,
 		APIKey:             resolvedProvider.APIKey,
 		APIBase:            resolvedProvider.APIBase,
@@ -117,12 +117,8 @@ func runCommand(args []string) int {
 		return 1
 	}
 
-	onPersist := func(msg message.Message) error {
-		return store.AppendMessage(resolvedSession.ID, msg, cwd)
-	}
-
 	userMessage := message.UserTextMessage(prompt, nil)
-	reply, errorMessage := runNoninteractive(context.Background(), agent, userMessage, onPersist)
+	reply, errorMessage := runNoninteractive(context.Background(), agent, userMessage)
 	if reply != "" {
 		_, _ = fmt.Fprintln(os.Stdout, reply)
 	}
@@ -135,21 +131,26 @@ func runCommand(args []string) int {
 	return 0
 }
 
-func runNoninteractive(ctx context.Context, agent *agentpkg.Agent, userMessage message.Message, onPersist agentpkg.PersistFunc) (string, string) {
-	var latestAssistant *message.Message
-	agent.OnPersist = func(msg message.Message) error {
-		if msg.Role == "assistant" {
-			latestAssistant = new(message.Clone(msg))
-		}
-		if onPersist == nil {
-			return nil
-		}
-		return onPersist(msg)
-	}
+// chatAgent is the agent behavior runNoninteractive needs.
+type chatAgent interface {
+	ChatMessage(ctx context.Context, msg message.Message) <-chan agentpkg.Event
+}
 
+// runNoninteractive drives one turn and returns the final assistant text plus
+// an error message (empty when none). The agent persists on its own; here we
+// only collect the reply from the event stream.
+func runNoninteractive(ctx context.Context, agent chatAgent, userMessage message.Message) (string, string) {
+	var reply strings.Builder
 	errorMessage := ""
 	for event := range agent.ChatMessage(ctx, userMessage) {
 		switch event.Type {
+		case "text":
+			if delta, ok := event.Data["delta"].(string); ok {
+				reply.WriteString(delta)
+			}
+		case "tool_start":
+			// A turn that calls tools is not the final answer; drop its text.
+			reply.Reset()
 		case "error":
 			if text, ok := event.Data["message"].(string); ok && text != "" {
 				errorMessage = text
@@ -166,7 +167,7 @@ func runNoninteractive(ctx context.Context, agent *agentpkg.Agent, userMessage m
 			}
 		}
 	}
-	return flattenAssistantReply(latestAssistant), errorMessage
+	return strings.TrimSpace(reply.String()), errorMessage
 }
 
 func resolveSession(store *session.Store, cwd, requestedSessionID string, continueLast bool) (resolvedSession, error) {
@@ -200,17 +201,4 @@ func resolveSession(store *session.Store, cwd, requestedSessionID string, contin
 
 	draft := store.DraftSession(cwd)
 	return resolvedSession{ID: draft.Session.ID, Messages: nil}, nil
-}
-
-func flattenAssistantReply(msg *message.Message) string {
-	if msg == nil {
-		return ""
-	}
-	parts := make([]string, 0, len(msg.Content))
-	for _, block := range msg.Content {
-		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-			parts = append(parts, block.Text)
-		}
-	}
-	return strings.TrimSpace(strings.Join(parts, ""))
 }

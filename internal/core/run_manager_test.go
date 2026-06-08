@@ -2,98 +2,62 @@ package core
 
 import (
 	"context"
-	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
 	agentpkg "github.com/legibet/mycode-go/agent"
 	"github.com/legibet/mycode-go/internal/permissions"
 	"github.com/legibet/mycode-go/message"
-	"github.com/legibet/mycode-go/provider"
 )
 
-type blockingAdapter struct {
-	spec    provider.Spec
+// fakeRunAgent drives RunManager without a real provider: it emits `before`
+// events, optionally blocks until `release` (or ctx cancel), then emits `after`.
+type fakeRunAgent struct {
+	before  []agentpkg.Event
 	release chan struct{}
+	after   []agentpkg.Event
 }
 
-func (a *blockingAdapter) Spec() provider.Spec {
-	return a.spec
-}
-
-func (a *blockingAdapter) StreamTurn(ctx context.Context, _ provider.Request) <-chan provider.StreamEvent {
-	out := make(chan provider.StreamEvent, 2)
+func (f *fakeRunAgent) ChatMessage(ctx context.Context, _ message.Message) <-chan agentpkg.Event {
+	out := make(chan agentpkg.Event, 8)
 	go func() {
 		defer close(out)
-		out <- provider.StreamEvent{Type: "text_delta", Text: "reply"}
-		select {
-		case <-ctx.Done():
-			return
-		case <-a.release:
+		for _, event := range f.before {
+			out <- event
 		}
-		out <- provider.StreamEvent{Type: "message_done", Msg: new(message.AssistantMessage([]message.Block{message.TextBlock("reply", nil)}, "openai", "gpt-5.4", "", "", 0, nil))}
+		if f.release != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-f.release:
+			}
+		}
+		for _, event := range f.after {
+			out <- event
+		}
 	}()
 	return out
 }
 
-type completeAdapter struct {
-	spec provider.Spec
+func (f *fakeRunAgent) Cancel() {}
+
+func textEvent(delta string) agentpkg.Event {
+	return agentpkg.Event{Type: "text", Data: map[string]any{"delta": delta}}
 }
 
-func (a *completeAdapter) Spec() provider.Spec {
-	return a.spec
+func blockingAgent() *fakeRunAgent {
+	return &fakeRunAgent{before: []agentpkg.Event{textEvent("reply")}, release: make(chan struct{})}
 }
 
-func (a *completeAdapter) StreamTurn(_ context.Context, _ provider.Request) <-chan provider.StreamEvent {
-	out := make(chan provider.StreamEvent, 2)
-	go func() {
-		defer close(out)
-		out <- provider.StreamEvent{Type: "text_delta", Text: "reply"}
-		out <- provider.StreamEvent{Type: "message_done", Msg: new(message.AssistantMessage([]message.Block{message.TextBlock("reply", nil)}, "openai", "gpt-5.4", "", "", 0, nil))}
-	}()
-	return out
+func completeAgent() *fakeRunAgent {
+	return &fakeRunAgent{before: []agentpkg.Event{textEvent("reply")}}
 }
 
-type errorAdapter struct {
-	spec provider.Spec
-}
-
-func (a *errorAdapter) Spec() provider.Spec {
-	return a.spec
-}
-
-func (a *errorAdapter) StreamTurn(_ context.Context, _ provider.Request) <-chan provider.StreamEvent {
-	out := make(chan provider.StreamEvent, 2)
-	go func() {
-		defer close(out)
-		out <- provider.StreamEvent{Type: "text_delta", Text: "partial"}
-		out <- provider.StreamEvent{Type: "provider_error", Err: errors.New("upstream failed")}
-	}()
-	return out
-}
-
-func newTestAgent(t *testing.T, adapter provider.Adapter) *agentpkg.Agent {
-	t.Helper()
-	dir := t.TempDir()
-	agent, err := agentpkg.New(agentpkg.Config{
-		Model:              "gpt-5.4",
-		Provider:           "openai",
-		CWD:                dir,
-		SessionDir:         filepath.Join(dir, "session"),
-		SessionID:          "session",
-		System:             "system",
-		MaxTokens:          4096,
-		ContextWindow:      128000,
-		CompactThreshold:   0.8,
-		SupportsImageInput: true,
-		SupportsPDFInput:   true,
-		Adapter:            adapter,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return agent
+func errorAgent() *fakeRunAgent {
+	return &fakeRunAgent{before: []agentpkg.Event{
+		textEvent("partial"),
+		{Type: "error", Data: map[string]any{"message": "upstream failed"}},
+	}}
 }
 
 func waitFor(t *testing.T, deadline time.Duration, fn func() bool) {
@@ -148,11 +112,7 @@ func waitRunEvent(t *testing.T, manager *RunManager, runID, eventType string) Ru
 
 func TestRunManagerSnapshotIncludesUserMessageAndPendingEvents(t *testing.T) {
 	manager := NewRunManager(nil)
-	adapter := &blockingAdapter{
-		spec:    provider.Spec{ID: "openai"},
-		release: make(chan struct{}),
-	}
-	agent := newTestAgent(t, adapter)
+	agent := blockingAgent()
 	userMessage := message.UserTextMessage("build feature", nil)
 	baseMessages := []message.Message{
 		message.AssistantMessage([]message.Block{message.TextBlock("Earlier", nil)}, "openai", "gpt-5.4", "", "", 0, nil),
@@ -179,16 +139,13 @@ func TestRunManagerSnapshotIncludesUserMessageAndPendingEvents(t *testing.T) {
 		t.Fatalf("unexpected pending events: %#v", snapshot.PendingEvents)
 	}
 
-	close(adapter.release)
+	close(agent.release)
 	waitRunStatus(t, manager, run["id"].(string), "completed")
 }
 
 func TestRunManagerSameSessionCannotStartSecondRun(t *testing.T) {
 	manager := NewRunManager(nil)
-	first := newTestAgent(t, &blockingAdapter{
-		spec:    provider.Spec{ID: "openai"},
-		release: make(chan struct{}),
-	})
+	first := blockingAgent()
 	userMessage := message.UserTextMessage("first", nil)
 
 	run, err := manager.startRun("session-1", userMessage, nil, first)
@@ -196,21 +153,18 @@ func TestRunManagerSameSessionCannotStartSecondRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	second := newTestAgent(t, &completeAdapter{spec: provider.Spec{ID: "openai"}})
-	if _, err := manager.startRun("session-1", message.UserTextMessage("second", nil), nil, second); err == nil {
+	if _, err := manager.startRun("session-1", message.UserTextMessage("second", nil), nil, completeAgent()); err == nil {
 		t.Fatal("expected ActiveRunError")
 	}
 
-	close(first.Adapter.(*blockingAdapter).release)
+	close(first.release)
 	waitRunStatus(t, manager, run["id"].(string), "completed")
 }
 
 func TestRunManagerCancelOnlyMarksTargetRunCancelled(t *testing.T) {
 	manager := NewRunManager(nil)
-	firstAdapter := &blockingAdapter{spec: provider.Spec{ID: "openai"}, release: make(chan struct{})}
-	secondAdapter := &blockingAdapter{spec: provider.Spec{ID: "openai"}, release: make(chan struct{})}
-	first := newTestAgent(t, firstAdapter)
-	second := newTestAgent(t, secondAdapter)
+	first := blockingAgent()
+	second := blockingAgent()
 
 	firstRun, err := manager.startRun("session-1", message.UserTextMessage("first", nil), nil, first)
 	if err != nil {
@@ -241,15 +195,14 @@ func TestRunManagerCancelOnlyMarksTargetRunCancelled(t *testing.T) {
 		t.Fatalf("unexpected second run: %#v", updatedSecond)
 	}
 
-	close(secondAdapter.release)
+	close(second.release)
 	waitRunStatus(t, manager, secondRun["id"].(string), "completed")
 }
 
 func TestRunManagerFinishedRunStaysAvailableForReconnectWindow(t *testing.T) {
 	manager := NewRunManager(nil)
-	agent := newTestAgent(t, &completeAdapter{spec: provider.Spec{ID: "openai"}})
 
-	run, err := manager.startRun("session-1", message.UserTextMessage("done", nil), nil, agent)
+	run, err := manager.startRun("session-1", message.UserTextMessage("done", nil), nil, completeAgent())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,9 +220,8 @@ func TestRunManagerFinishedRunStaysAvailableForReconnectWindow(t *testing.T) {
 
 func TestRunManagerEventsRespectAfterAndFinish(t *testing.T) {
 	manager := NewRunManager(nil)
-	agent := newTestAgent(t, &completeAdapter{spec: provider.Spec{ID: "openai"}})
 
-	run, err := manager.startRun("session-1", message.UserTextMessage("done", nil), nil, agent)
+	run, err := manager.startRun("session-1", message.UserTextMessage("done", nil), nil, completeAgent())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,9 +247,8 @@ func TestRunManagerEventsRespectAfterAndFinish(t *testing.T) {
 
 func TestRunManagerProviderErrorMarksRunFailedAndReleasesSession(t *testing.T) {
 	manager := NewRunManager(nil)
-	agent := newTestAgent(t, &errorAdapter{spec: provider.Spec{ID: "openai"}})
 
-	run, err := manager.startRun("session-1", message.UserTextMessage("fail", nil), nil, agent)
+	run, err := manager.startRun("session-1", message.UserTextMessage("fail", nil), nil, errorAgent())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,11 +263,7 @@ func TestRunManagerProviderErrorMarksRunFailedAndReleasesSession(t *testing.T) {
 
 func TestRunManagerPermissionDecision(t *testing.T) {
 	manager := NewRunManager(nil)
-	adapter := &blockingAdapter{
-		spec:    provider.Spec{ID: "openai"},
-		release: make(chan struct{}),
-	}
-	agent := newTestAgent(t, adapter)
+	agent := blockingAgent()
 	run, err := manager.startRun("session-1", message.UserTextMessage("hello", nil), nil, agent)
 	if err != nil {
 		t.Fatal(err)
@@ -358,17 +305,12 @@ func TestRunManagerPermissionDecision(t *testing.T) {
 		t.Fatalf("unexpected permission resolution event: %#v", resolvedEvent)
 	}
 
-	close(adapter.release)
+	close(agent.release)
 }
 
 func TestRunManagerCancelUnblocksPendingDecisionAsDeny(t *testing.T) {
 	manager := NewRunManager(nil)
-	adapter := &blockingAdapter{
-		spec:    provider.Spec{ID: "openai"},
-		release: make(chan struct{}),
-	}
-	agent := newTestAgent(t, adapter)
-	run, err := manager.startRun("session-1", message.UserTextMessage("hello", nil), nil, agent)
+	run, err := manager.startRun("session-1", message.UserTextMessage("hello", nil), nil, blockingAgent())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,12 +349,7 @@ func TestRunManagerCancelUnblocksPendingDecisionAsDeny(t *testing.T) {
 
 func TestRunManagerPermissionDenyCancelsRun(t *testing.T) {
 	manager := NewRunManager(nil)
-	adapter := &blockingAdapter{
-		spec:    provider.Spec{ID: "openai"},
-		release: make(chan struct{}),
-	}
-	agent := newTestAgent(t, adapter)
-	run, err := manager.startRun("session-1", message.UserTextMessage("hello", nil), nil, agent)
+	run, err := manager.startRun("session-1", message.UserTextMessage("hello", nil), nil, blockingAgent())
 	if err != nil {
 		t.Fatal(err)
 	}

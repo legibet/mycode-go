@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/legibet/mycode-go/message"
-	"github.com/legibet/mycode-go/provider"
 	"github.com/legibet/mycode-go/session"
 )
 
@@ -35,11 +34,7 @@ func TestServiceStartChatRejectsActiveSessionBeforeRewind(t *testing.T) {
 		}
 	}
 
-	adapter := &blockingAdapter{
-		spec:    provider.Spec{ID: "openai"},
-		release: make(chan struct{}),
-	}
-	agent := newTestAgent(t, adapter)
+	agent := blockingAgent()
 	run, err := manager.startRun(sessionID, message.UserTextMessage("active", nil), nil, agent)
 	if err != nil {
 		t.Fatal(err)
@@ -87,11 +82,7 @@ func TestServiceClearAndDeleteRejectActiveSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	adapter := &blockingAdapter{
-		spec:    provider.Spec{ID: "openai"},
-		release: make(chan struct{}),
-	}
-	agent := newTestAgent(t, adapter)
+	agent := blockingAgent()
 	run, err := manager.startRun(sessionID, message.UserTextMessage("active", nil), nil, agent)
 	if err != nil {
 		t.Fatal(err)

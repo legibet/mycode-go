@@ -81,12 +81,19 @@ type runSnapshot struct {
 	PendingEvents []map[string]any
 }
 
+// runAgent is the agent behavior RunManager drives. *agent.Agent satisfies it;
+// tests provide a fake.
+type runAgent interface {
+	ChatMessage(ctx context.Context, msg message.Message) <-chan agentpkg.Event
+	Cancel()
+}
+
 type runState struct {
 	id           string
 	sessionID    string
 	userMessage  message.Message
 	baseMessages []message.Message
-	agent        *agentpkg.Agent
+	agent        runAgent
 
 	mu         sync.RWMutex
 	status     runStatus
@@ -101,7 +108,7 @@ type runState struct {
 	pendingDecisions map[string]chan permissions.ReviewDecision
 }
 
-func newRunState(id, sessionID string, userMessage message.Message, baseMessages []message.Message, agent *agentpkg.Agent, cancel context.CancelFunc) *runState {
+func newRunState(id, sessionID string, userMessage message.Message, baseMessages []message.Message, agent runAgent, cancel context.CancelFunc) *runState {
 	return &runState{
 		id:               id,
 		sessionID:        sessionID,
@@ -261,7 +268,7 @@ func NewRunManager(sink EventSink) *RunManager {
 }
 
 // startRun returns ActiveRunError if the session already has a run in flight.
-func (m *RunManager) startRun(sessionID string, userMessage message.Message, baseMessages []message.Message, agent *agentpkg.Agent) (map[string]any, error) {
+func (m *RunManager) startRun(sessionID string, userMessage message.Message, baseMessages []message.Message, agent runAgent) (map[string]any, error) {
 	m.pruneFinishedRuns()
 
 	m.mu.Lock()

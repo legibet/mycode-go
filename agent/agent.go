@@ -16,6 +16,7 @@ import (
 	"github.com/legibet/mycode-go/attachment"
 	"github.com/legibet/mycode-go/message"
 	"github.com/legibet/mycode-go/provider"
+	"github.com/legibet/mycode-go/session"
 	"github.com/legibet/mycode-go/tools"
 )
 
@@ -25,50 +26,53 @@ type Event struct {
 	Data map[string]any
 }
 
-// PersistFunc receives one canonical message. Set Config.OnPersist to persist
-// every message a turn produces (user input, assistant reply, tool results,
-// compact markers) before it is appended to the session log.
-type PersistFunc func(message.Message) error
-
 // Config describes one agent runtime.
 type Config struct {
-	Model              string
-	Provider           string
+	// Provider
+	Model    string
+	Provider string // optional; inferred from Model when empty
+	APIKey   string
+	APIBase  string
+
+	// Runtime
 	CWD                string
-	SessionDir         string
-	SessionID          string
-	APIKey             string
-	APIBase            string
 	System             string
-	Messages           []message.Message
+	Tools              []tools.Spec
+	Hooks              tools.Hooks
 	MaxTurns           int
 	MaxTokens          int
 	Temperature        *float64
 	ContextWindow      int
-	CompactThreshold   float64
 	ReasoningEffort    string
+	CompactThreshold   float64
+	DisableCompact     bool
 	SupportsImageInput bool
 	SupportsPDFInput   bool
-	DisableCompact     bool
-	Adapter            provider.Adapter
-	Tools              []tools.Spec
-	Hooks              tools.Hooks
-	OnPersist          PersistFunc
+
+	// Session persistence (optional)
+	Store     *session.Store    // nil keeps the run in memory
+	SessionID string            // empty generates a random id
+	Messages  []message.Message // explicit history; nil auto-resumes from Store
 }
 
 // Agent is the single orchestration loop. Construct via New so derived fields
 // are filled.
 type Agent struct {
 	Config
-	exec *tools.Executor
-
-	// TranscriptPath is set by New from SessionDir.
-	TranscriptPath string
+	exec           *tools.Executor
+	adapter        provider.Adapter
+	transcriptPath string
 }
 
 // New fills defaults and returns a runnable Agent.
 func New(cfg Config) (*Agent, error) {
-	a := &Agent{Config: cfg}
+	return newAgent(cfg, nil)
+}
+
+// newAgent builds an Agent, optionally with an injected provider adapter so
+// tests can drive the loop without a real provider.
+func newAgent(cfg Config, adapter provider.Adapter) (*Agent, error) {
+	a := &Agent{Config: cfg, adapter: adapter}
 	if a.CWD == "" {
 		if wd, err := os.Getwd(); err == nil {
 			a.CWD = wd
@@ -78,36 +82,36 @@ func New(cfg Config) (*Agent, error) {
 	}
 	a.CWD = resolvePath(a.CWD)
 
-	// Only persisted sessions have a stable transcript path to include in the
-	// compact continuation prompt.
 	if a.SessionID == "" {
-		if a.SessionDir != "" {
-			a.SessionID = filepath.Base(a.SessionDir)
-		} else {
-			a.SessionID = randomSessionID()
+		a.SessionID = randomSessionID()
+	}
+
+	// A configured Store turns on persistence: history auto-resumes, every
+	// message is appended, and the transcript path feeds the compact prompt.
+	toolOutputRoot := filepath.Join(os.TempDir(), "mycode", a.SessionID)
+	if a.Store != nil {
+		if a.Messages == nil {
+			if data, err := a.Store.LoadSession(a.SessionID); err == nil && data != nil {
+				a.Messages = data.Messages
+			}
 		}
-	}
-	toolOutputRoot := a.SessionDir
-	if toolOutputRoot == "" {
-		toolOutputRoot = filepath.Join(os.TempDir(), "mycode", a.SessionID)
-	}
-	if a.TranscriptPath == "" && a.SessionDir != "" {
-		a.TranscriptPath = filepath.Join(a.SessionDir, "messages.jsonl")
+		a.transcriptPath = a.Store.MessagesPath(a.SessionID)
+		toolOutputRoot = a.Store.SessionDir(a.SessionID)
 	}
 
 	a.exec = tools.NewExecutor(a.CWD, toolOutputRoot, a.SupportsImageInput)
 
-	if a.Adapter == nil {
+	if a.adapter == nil {
 		if a.Provider == "" {
 			if inferred, ok := provider.InferProviderFromModel(a.Model); ok {
 				a.Provider = inferred
 			}
 		}
-		adapter, ok := provider.LookupAdapter(a.Provider)
+		found, ok := provider.LookupAdapter(a.Provider)
 		if !ok {
 			return nil, errors.New("unsupported provider adapter: " + a.Provider)
 		}
-		a.Adapter = adapter
+		a.adapter = found
 	}
 
 	if a.ContextWindow == 0 {
@@ -140,6 +144,14 @@ func (a *Agent) Cancel() {
 	a.exec.CancelActive()
 }
 
+// persist appends one message to the configured store, if any.
+func (a *Agent) persist(msg message.Message) error {
+	if a.Store == nil {
+		return nil
+	}
+	return a.Store.AppendMessage(a.SessionID, msg, a.CWD)
+}
+
 // Chat runs one user turn from a prompt string, optionally with attachments
 // resolved against the agent's CWD. It is the convenient entry point; use
 // ChatMessage to pass a fully built message (e.g. multi-modal content).
@@ -158,33 +170,6 @@ func (a *Agent) Chat(ctx context.Context, prompt string, attachments ...attachme
 	return a.ChatMessage(ctx, message.BuildMessage("user", blocks, nil))
 }
 
-// Run drives one user turn to completion and collects the streamed result:
-// concatenated text deltas, every event, and the first error message.
-func (a *Agent) Run(ctx context.Context, prompt string, attachments ...attachment.Attachment) RunResult {
-	var result RunResult
-	for event := range a.Chat(ctx, prompt, attachments...) {
-		result.Events = append(result.Events, event)
-		switch event.Type {
-		case "text":
-			if delta, ok := event.Data["delta"].(string); ok {
-				result.Text += delta
-			}
-		case "error":
-			if result.Error == "" {
-				result.Error, _ = event.Data["message"].(string)
-			}
-		}
-	}
-	return result
-}
-
-// RunResult is the collected outcome of Run.
-type RunResult struct {
-	Text   string
-	Events []Event
-	Error  string
-}
-
 // ChatMessage runs one user turn from a fully built user message.
 func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) <-chan Event {
 	out := make(chan Event, 32)
@@ -199,15 +184,8 @@ func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) <-ch
 			return
 		}
 
-		persist := func(msg message.Message) error {
-			if a.OnPersist == nil {
-				return nil
-			}
-			return a.OnPersist(msg)
-		}
-
 		a.Messages = append(a.Messages, message.Clone(userInput))
-		if err := persist(userInput); err != nil {
+		if err := a.persist(userInput); err != nil {
 			a.emitError(out, err.Error())
 			return
 		}
@@ -221,7 +199,7 @@ func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) <-ch
 			if cancelled {
 				if assistant != nil {
 					a.Messages = append(a.Messages, message.Clone(*assistant))
-					if err := persist(*assistant); err != nil {
+					if err := a.persist(*assistant); err != nil {
 						a.emitError(out, err.Error())
 						return
 					}
@@ -241,7 +219,7 @@ func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) <-ch
 			totalTokens := asInt(assistant.Meta["total_tokens"])
 
 			a.Messages = append(a.Messages, message.Clone(*assistant))
-			if err := persist(*assistant); err != nil {
+			if err := a.persist(*assistant); err != nil {
 				a.emitError(out, err.Error())
 				return
 			}
@@ -264,7 +242,7 @@ func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) <-ch
 				toolMessage, cancelled := a.executeToolCalls(ctx, toolCalls, out)
 				if len(toolMessage.Content) > 0 {
 					a.Messages = append(a.Messages, toolMessage)
-					if err := persist(toolMessage); err != nil {
+					if err := a.persist(toolMessage); err != nil {
 						a.emitError(out, err.Error())
 						return
 					}
@@ -279,7 +257,7 @@ func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) <-ch
 			if ctx.Err() != nil {
 				return
 			}
-			if a.compactIfNeeded(ctx, persist, out, totalTokens) {
+			if a.compactIfNeeded(ctx, out, totalTokens) {
 				return
 			}
 			if len(toolCalls) == 0 {
@@ -297,7 +275,7 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 		Provider:           a.Provider,
 		Model:              a.Model,
 		SessionID:          a.SessionID,
-		Messages:           ApplyCompactReplay(a.Messages, a.TranscriptPath),
+		Messages:           ApplyCompactReplay(a.Messages, a.transcriptPath),
 		System:             a.System,
 		Tools:              toolSpecs(a.providerToolSpecs()),
 		MaxTokens:          a.MaxTokens,
@@ -313,7 +291,7 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 	var partialContent []message.Block
 	var thinkingStartedAt time.Time
 	thinkingDurationMs := -1
-	for event := range a.Adapter.StreamTurn(ctx, req) {
+	for event := range a.adapter.StreamTurn(ctx, req) {
 		switch event.Type {
 		case "thinking_delta":
 			if event.Text != "" {
@@ -541,13 +519,13 @@ func (a *Agent) emitError(out chan<- Event, msg string) {
 // threshold. Returns true to stop the agent loop (cancellation). Provider
 // failures during compaction are swallowed — the next turn either retries or
 // surfaces the error from phase 1.
-func (a *Agent) compactIfNeeded(ctx context.Context, persist PersistFunc, out chan<- Event, totalTokens int) bool {
+func (a *Agent) compactIfNeeded(ctx context.Context, out chan<- Event, totalTokens int) bool {
 	if !ShouldCompact(totalTokens, a.ContextWindow, a.CompactThreshold) {
 		return false
 	}
 
 	compactMessages := slices.Concat(
-		ApplyCompactReplay(a.Messages, a.TranscriptPath),
+		ApplyCompactReplay(a.Messages, a.transcriptPath),
 		[]message.Message{message.UserTextMessage(CompactSummaryPrompt, nil)},
 	)
 	req := provider.Request{
@@ -565,7 +543,7 @@ func (a *Agent) compactIfNeeded(ctx context.Context, persist PersistFunc, out ch
 	}
 
 	var summary *message.Message
-	for event := range a.Adapter.StreamTurn(ctx, req) {
+	for event := range a.adapter.StreamTurn(ctx, req) {
 		if event.Type == "message_done" {
 			summary = event.Msg
 		}
@@ -582,7 +560,7 @@ func (a *Agent) compactIfNeeded(ctx context.Context, persist PersistFunc, out ch
 		return false
 	}
 	compactEvent := BuildCompactEvent(summaryText, a.Provider, a.Model, asInt(summary.Meta["total_tokens"]))
-	if err := persist(compactEvent); err != nil {
+	if err := a.persist(compactEvent); err != nil {
 		return false
 	}
 	a.Messages = append(a.Messages, compactEvent)

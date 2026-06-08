@@ -134,7 +134,7 @@ func (s *Store) CreateSession(sessionID, cwd string) (Data, error) {
 		return Data{}, err
 	}
 	// Touch messages.jsonl so readers always see both files.
-	file, err := os.OpenFile(s.messagesPath(data.Session.ID), os.O_RDONLY|os.O_CREATE, 0o644)
+	file, err := os.OpenFile(s.MessagesPath(data.Session.ID), os.O_RDONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		return Data{}, err
 	}
@@ -235,7 +235,7 @@ func (s *Store) ClearSession(sessionID string) error {
 	if err := s.writeMeta(sessionID, meta); err != nil {
 		return err
 	}
-	return os.WriteFile(s.messagesPath(sessionID), nil, 0o644)
+	return os.WriteFile(s.MessagesPath(sessionID), nil, 0o644)
 }
 
 func (s *Store) AppendRewind(sessionID string, rewindTo int) error {
@@ -253,7 +253,7 @@ func (s *Store) AppendRewind(sessionID string, rewindTo int) error {
 	if err := s.ensureSessionDir(sessionID); err != nil {
 		return err
 	}
-	if err := appendJSONL(s.messagesPath(sessionID), BuildRewindEvent(rewindTo)); err != nil {
+	if err := appendJSONL(s.MessagesPath(sessionID), BuildRewindEvent(rewindTo)); err != nil {
 		return err
 	}
 	meta.UpdatedAt = now()
@@ -285,7 +285,7 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string)
 		}
 	}
 
-	if err := appendJSONL(s.messagesPath(sessionID), msg); err != nil {
+	if err := appendJSONL(s.MessagesPath(sessionID), msg); err != nil {
 		return err
 	}
 
@@ -303,7 +303,7 @@ func (s *Store) AppendMessage(sessionID string, msg message.Message, cwd string)
 }
 
 func (s *Store) readMessages(sessionID string) ([]message.Message, error) {
-	file, err := os.Open(s.messagesPath(sessionID))
+	file, err := os.Open(s.MessagesPath(sessionID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -433,7 +433,8 @@ func (s *Store) indexPath() string {
 	return filepath.Join(s.dataDir, "index.json")
 }
 
-func (s *Store) messagesPath(sessionID string) string {
+// MessagesPath returns the JSONL transcript path for a session.
+func (s *Store) MessagesPath(sessionID string) string {
 	return filepath.Join(s.SessionDir(sessionID), "messages.jsonl")
 }
 
