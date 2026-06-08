@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/legibet/mycode-go/attachment"
 	"github.com/legibet/mycode-go/internal/config"
 	"github.com/legibet/mycode-go/internal/prompt"
 	"github.com/legibet/mycode-go/tools"
@@ -148,7 +149,7 @@ func ClassifyTool(toolName string, input map[string]any, cwd, project string, sk
 		return Check{Tier: classifyBash(command), Preview: command}
 	case "read", "write", "edit":
 		raw := asString(input["path"])
-		path := config.ResolveSymlinks(tools.ResolvePath(raw, cwd))
+		path := config.ResolveSymlinks(attachment.ResolvePath(raw, cwd))
 		preview := raw
 		if strings.TrimSpace(preview) == "" {
 			preview = path

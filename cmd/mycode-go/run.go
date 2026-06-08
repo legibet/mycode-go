@@ -18,8 +18,7 @@ import (
 )
 
 type resolvedSession struct {
-	ID       string
-	Messages []message.Message
+	ID string
 }
 
 func runCommand(args []string) int {
@@ -90,7 +89,6 @@ func runCommand(args []string) int {
 		APIKey:             resolvedProvider.APIKey,
 		APIBase:            resolvedProvider.APIBase,
 		System:             promptpkg.Build(cwd, settings.Project, config.ResolveHome()),
-		Messages:           resolvedSession.Messages,
 		MaxTurns:           *maxTurns,
 		MaxTokens:          resolvedProvider.MaxTokens,
 		ContextWindow:      resolvedProvider.ContextWindow,
@@ -179,7 +177,7 @@ func resolveSession(store *session.Store, cwd, requestedSessionID string, contin
 		if data == nil {
 			return resolvedSession{}, fmt.Errorf("unknown session: %s", requestedSessionID)
 		}
-		return resolvedSession{ID: requestedSessionID, Messages: data.Messages}, nil
+		return resolvedSession{ID: requestedSessionID}, nil
 	}
 
 	if continueLast {
@@ -195,10 +193,10 @@ func resolveSession(store *session.Store, cwd, requestedSessionID string, contin
 			if data == nil {
 				return resolvedSession{}, fmt.Errorf("unknown session: %s", latest.ID)
 			}
-			return resolvedSession{ID: latest.ID, Messages: data.Messages}, nil
+			return resolvedSession{ID: latest.ID}, nil
 		}
 	}
 
 	draft := store.DraftSession(cwd)
-	return resolvedSession{ID: draft.Session.ID, Messages: nil}, nil
+	return resolvedSession{ID: draft.Session.ID}, nil
 }

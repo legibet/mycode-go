@@ -289,72 +289,6 @@ func NewExecutor(cwd, sessionDir string, supportsImageInput bool) *Executor {
 	}
 }
 
-// ResolvePath resolves path relative to cwd, expanding "~" and resolving
-// symlinks in existing path components.
-func ResolvePath(path, cwd string) string {
-	expanded := path
-	if expanded == "~" || strings.HasPrefix(expanded, "~/") {
-		expanded = expandAbs(expanded)
-	}
-	if filepath.IsAbs(expanded) {
-		return resolveSymlinks(expanded)
-	}
-	return resolveSymlinks(filepath.Join(cwd, expanded))
-}
-
-func expandAbs(path string) string {
-	if path == "" {
-		return ""
-	}
-	if path == "~" {
-		if home, err := os.UserHomeDir(); err == nil {
-			path = home
-		}
-	} else if rest, ok := strings.CutPrefix(path, "~/"); ok {
-		if home, err := os.UserHomeDir(); err == nil {
-			path = filepath.Join(home, rest)
-		}
-	}
-	absolute, err := filepath.Abs(path)
-	if err != nil {
-		return filepath.Clean(path)
-	}
-	return filepath.Clean(absolute)
-}
-
-func resolveSymlinks(path string) string {
-	path = expandAbs(path)
-	if path == "" {
-		return ""
-	}
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		return filepath.Clean(resolved)
-	}
-
-	sep := string(filepath.Separator)
-	volume := filepath.VolumeName(path)
-	rest := strings.TrimPrefix(path, volume)
-	current := volume
-	if strings.HasPrefix(rest, sep) {
-		current += sep
-		rest = strings.TrimLeft(rest, sep)
-	}
-
-	parts := strings.Split(rest, sep)
-	for i, part := range parts {
-		if part == "" || part == "." {
-			continue
-		}
-		next := filepath.Join(current, part)
-		resolved, err := filepath.EvalSymlinks(next)
-		if err != nil {
-			return filepath.Clean(filepath.Join(append([]string{current}, parts[i:]...)...))
-		}
-		current = resolved
-	}
-	return filepath.Clean(current)
-}
-
 // CancelActive kills all bash commands started by this executor.
 func (e *Executor) CancelActive() {
 	e.mu.Lock()
@@ -500,7 +434,7 @@ func (e *Executor) Run(ctx context.Context, spec Spec, id string, input map[stri
 }
 
 func (e *Executor) read(path string, offset, limit int) Result {
-	filePath := ResolvePath(path, e.cwd)
+	filePath := attachment.ResolvePath(path, e.cwd)
 
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -617,7 +551,7 @@ func (e *Executor) read(path string, offset, limit int) Result {
 
 // Write writes a file atomically.
 func (e *Executor) write(path, content string) Result {
-	filePath := ResolvePath(path, e.cwd)
+	filePath := attachment.ResolvePath(path, e.cwd)
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
 		return errorResult(fmt.Sprintf("error: failed to write file: %v", err))
 	}
@@ -647,7 +581,7 @@ func (e *Executor) edit(path string, edits []editEntry) Result {
 		return errorResult("error: edits must not be empty")
 	}
 
-	filePath := ResolvePath(path, e.cwd)
+	filePath := attachment.ResolvePath(path, e.cwd)
 	info, err := os.Stat(filePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

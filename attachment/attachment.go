@@ -92,15 +92,7 @@ func buildBytes(item Attachment) (message.Block, error) {
 }
 
 func buildPath(item Attachment, opts Options) (message.Block, error) {
-	resolved := item.path
-	if resolved == "~" || strings.HasPrefix(resolved, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			resolved = filepath.Join(home, strings.TrimPrefix(resolved, "~"))
-		}
-	}
-	if !filepath.IsAbs(resolved) {
-		resolved = filepath.Join(opts.CWD, resolved)
-	}
+	resolved := ResolvePath(item.path, opts.CWD)
 	info, err := os.Stat(resolved)
 	if err != nil {
 		return message.Block{}, fmt.Errorf("attachment not found: %s", item.path)
@@ -132,6 +124,72 @@ func attachmentName(item Attachment, resolved string) string {
 		return item.name
 	}
 	return filepath.Base(resolved)
+}
+
+// ResolvePath resolves path relative to cwd, expanding "~" and resolving
+// symlinks in existing path components.
+func ResolvePath(path, cwd string) string {
+	expanded := path
+	if expanded == "~" || strings.HasPrefix(expanded, "~/") {
+		expanded = expandAbs(expanded)
+	}
+	if filepath.IsAbs(expanded) {
+		return resolveSymlinks(expanded)
+	}
+	return resolveSymlinks(filepath.Join(cwd, expanded))
+}
+
+func expandAbs(path string) string {
+	if path == "" {
+		return ""
+	}
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = home
+		}
+	} else if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, rest)
+		}
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(absolute)
+}
+
+func resolveSymlinks(path string) string {
+	path = expandAbs(path)
+	if path == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+
+	sep := string(filepath.Separator)
+	volume := filepath.VolumeName(path)
+	rest := strings.TrimPrefix(path, volume)
+	current := volume
+	if strings.HasPrefix(rest, sep) {
+		current += sep
+		rest = strings.TrimLeft(rest, sep)
+	}
+
+	parts := strings.Split(rest, sep)
+	for i, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		next := filepath.Join(current, part)
+		resolved, err := filepath.EvalSymlinks(next)
+		if err != nil {
+			return filepath.Clean(filepath.Join(append([]string{current}, parts[i:]...)...))
+		}
+		current = resolved
+	}
+	return filepath.Clean(current)
 }
 
 func textBlock(text, name string) message.Block {

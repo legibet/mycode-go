@@ -52,7 +52,7 @@ type Config struct {
 	// Session persistence (optional)
 	Store     *session.Store    // nil keeps the run in memory
 	SessionID string            // empty generates a random id
-	Messages  []message.Message // explicit history; nil auto-resumes from Store
+	Messages  []message.Message // explicit history; nil auto-resumes from Store; rejected when SessionID already exists
 }
 
 // Agent is the single orchestration loop. Construct via New so derived fields
@@ -91,9 +91,15 @@ func newAgent(cfg Config, adapter provider.Adapter) (*Agent, error) {
 	toolOutputRoot := filepath.Join(os.TempDir(), "mycode", a.SessionID)
 	if a.Store != nil {
 		if a.Messages == nil {
-			if data, err := a.Store.LoadSession(a.SessionID); err == nil && data != nil {
+			data, err := a.Store.LoadSession(a.SessionID)
+			if err != nil {
+				return nil, err
+			}
+			if data != nil {
 				a.Messages = data.Messages
 			}
+		} else if a.Store.SessionExists(a.SessionID) {
+			return nil, errors.New("session " + a.SessionID + " already exists on disk; leave Messages nil to resume or choose a different SessionID")
 		}
 		a.transcriptPath = a.Store.MessagesPath(a.SessionID)
 		toolOutputRoot = a.Store.SessionDir(a.SessionID)

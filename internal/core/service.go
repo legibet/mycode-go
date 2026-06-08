@@ -240,7 +240,6 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		APIKey:             resolved.APIKey,
 		APIBase:            resolved.APIBase,
 		System:             prompt.Build(cwd, settings.Project, config.ResolveHome()),
-		Messages:           baseMessages,
 		MaxTokens:          resolved.MaxTokens,
 		ContextWindow:      resolved.ContextWindow,
 		CompactThreshold:   settings.CompactThreshold,

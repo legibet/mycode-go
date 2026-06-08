@@ -11,37 +11,6 @@ import (
 
 var png1x1 = mustBase64Decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1X8AAAAASUVORK5CYII=")
 
-func TestResolvePathExpandsHomeAndResolvesSymlinks(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("home unavailable: %v", err)
-	}
-	resolvedHome, err := filepath.EvalSymlinks(home)
-	if err != nil {
-		resolvedHome = filepath.Clean(home)
-	}
-	if got := ResolvePath("~", "/"); got != resolvedHome {
-		t.Fatalf("unexpected home path: %q, want %q", got, resolvedHome)
-	}
-
-	dir := t.TempDir()
-	realDir := filepath.Join(dir, "real")
-	linkDir := filepath.Join(dir, "link")
-	if err := os.MkdirAll(realDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(realDir, linkDir); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	resolvedRealDir, err := filepath.EvalSymlinks(realDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := ResolvePath("link/new.txt", dir), filepath.Join(resolvedRealDir, "new.txt"); got != want {
-		t.Fatalf("unexpected symlink path: %q, want %q", got, want)
-	}
-}
-
 func TestRead(t *testing.T) {
 	t.Run("directory", func(t *testing.T) {
 		dir := t.TempDir()

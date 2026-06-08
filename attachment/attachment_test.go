@@ -9,6 +9,37 @@ import (
 	"github.com/legibet/mycode-go/attachment"
 )
 
+func TestResolvePathExpandsHomeAndResolvesSymlinks(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("home unavailable: %v", err)
+	}
+	resolvedHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		resolvedHome = filepath.Clean(home)
+	}
+	if got := attachment.ResolvePath("~", "/"); got != resolvedHome {
+		t.Fatalf("unexpected home path: %q, want %q", got, resolvedHome)
+	}
+
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	linkDir := filepath.Join(dir, "link")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	resolvedRealDir, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := attachment.ResolvePath("link/new.txt", dir), filepath.Join(resolvedRealDir, "new.txt"); got != want {
+		t.Fatalf("unexpected symlink path: %q, want %q", got, want)
+	}
+}
+
 func TestBuildPathTextAttachment(t *testing.T) {
 	cwd := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, `report <"draft">.txt`), []byte("hello\n"), 0o644); err != nil {

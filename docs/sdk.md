@@ -112,8 +112,9 @@ for event := range a.Chat(ctx, "Continue.") {
 }
 ```
 
-Leave `Store` nil to keep the run in memory. Set `Messages` explicitly only to
-override the resumed history (for example, after a rewind).
+Leave `Store` nil to keep the run in memory. With a `Store`, leave `Messages`
+nil to resume an existing session. Passing `Messages` is accepted only for a new
+session id, so an existing transcript cannot be mixed with a different history.
 
 ## Custom Tools
 

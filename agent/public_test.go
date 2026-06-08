@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/legibet/mycode-go/agent"
+	"github.com/legibet/mycode-go/message"
+	"github.com/legibet/mycode-go/session"
 )
 
 func TestPublicAgentTemperatureValidation(t *testing.T) {
@@ -37,5 +39,27 @@ func TestPublicAgentInfersProviderFromModel(t *testing.T) {
 	}
 	if runtime.Provider != "anthropic" {
 		t.Fatalf("inferred provider = %q, want anthropic", runtime.Provider)
+	}
+}
+
+func TestPublicAgentRefusesExplicitMessagesForExistingSession(t *testing.T) {
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSession("session", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = agent.New(agent.Config{
+		Provider:  "openai",
+		Model:     "gpt-5.4",
+		CWD:       t.TempDir(),
+		Store:     store,
+		SessionID: "session",
+		Messages:  []message.Message{message.UserTextMessage("replacement", nil)},
+	})
+	if err == nil {
+		t.Fatal("expected existing session error")
 	}
 }

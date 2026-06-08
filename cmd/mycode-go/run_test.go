@@ -17,7 +17,7 @@ func TestResolveSession(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resolved.ID == "" || len(resolved.Messages) != 0 {
+		if resolved.ID == "" {
 			t.Fatalf("unexpected session: %#v", resolved)
 		}
 		sessions, err := store.ListSessions("")
@@ -46,7 +46,7 @@ func TestResolveSession(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resolved.ID != "second" || len(resolved.Messages) != 1 || resolved.Messages[0].Content[0].Text != "hello" {
+		if resolved.ID != "second" {
 			t.Fatalf("unexpected session: %#v", resolved)
 		}
 	})
