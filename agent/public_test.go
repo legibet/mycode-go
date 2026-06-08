@@ -218,6 +218,78 @@ func hasEvent(events []agent.Event, eventType string) bool {
 	return false
 }
 
+func TestPublicAgentTemperature(t *testing.T) {
+	cases := []struct {
+		name string
+		temp *float64
+		want *float64
+	}{
+		{name: "omitted by default", temp: nil, want: nil},
+		{name: "sent when set", temp: new(0.2), want: new(0.2)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter := &captureAdapter{}
+			runtime, err := agent.New(agent.Config{
+				Provider:    "fake",
+				Model:       "fake-model",
+				CWD:         t.TempDir(),
+				Adapter:     adapter,
+				Temperature: tc.temp,
+			})
+			if err != nil {
+				t.Fatalf("agent.New returned error: %v", err)
+			}
+			collectEvents(runtime.Chat(t.Context(), message.UserTextMessage("hi", nil), agent.ChatOptions{}))
+			if len(adapter.requests) != 1 {
+				t.Fatalf("captured %d requests, want 1", len(adapter.requests))
+			}
+			got := adapter.requests[0].Temperature
+			switch {
+			case tc.want == nil && got != nil:
+				t.Fatalf("temperature = %v, want nil", *got)
+			case tc.want != nil && (got == nil || *got != *tc.want):
+				t.Fatalf("temperature = %v, want %v", got, *tc.want)
+			}
+		})
+	}
+}
+
+func TestPublicAgentTemperatureValidation(t *testing.T) {
+	if _, err := agent.New(agent.Config{
+		Provider:    "fake",
+		Model:       "fake-model",
+		CWD:         t.TempDir(),
+		Adapter:     &captureAdapter{},
+		Temperature: new(1.5),
+	}); err == nil {
+		t.Fatal("expected out-of-range temperature error")
+	}
+
+	if _, err := agent.New(agent.Config{
+		Provider:        "anthropic",
+		Model:           "claude-opus-4-7",
+		CWD:             t.TempDir(),
+		ReasoningEffort: "high",
+		Temperature:     new(0.5),
+	}); err == nil {
+		t.Fatal("expected thinking+temperature error")
+	}
+}
+
+func TestPublicAgentInfersProviderFromModel(t *testing.T) {
+	runtime, err := agent.New(agent.Config{
+		Model: "claude-opus-4-7",
+		CWD:   t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("agent.New returned error: %v", err)
+	}
+	if runtime.Provider != "anthropic" {
+		t.Fatalf("inferred provider = %q, want anthropic", runtime.Provider)
+	}
+}
+
 func collectEvents(events <-chan agent.Event) []agent.Event {
 	var out []agent.Event
 	for event := range events {

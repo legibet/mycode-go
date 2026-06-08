@@ -44,6 +44,7 @@ type Config struct {
 	Messages           []message.Message
 	MaxTurns           int
 	MaxTokens          int
+	Temperature        *float64
 	ContextWindow      int
 	CompactThreshold   float64
 	ReasoningEffort    string
@@ -99,6 +100,11 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	if a.Adapter == nil {
+		if a.Provider == "" {
+			if inferred, ok := provider.InferProviderFromModel(a.Model); ok {
+				a.Provider = inferred
+			}
+		}
 		adapter, ok := provider.LookupAdapter(a.Provider)
 		if !ok {
 			return nil, errors.New("unsupported provider adapter: " + a.Provider)
@@ -113,6 +119,18 @@ func New(cfg Config) (*Agent, error) {
 		a.CompactThreshold = 0
 	} else if a.CompactThreshold == 0 {
 		a.CompactThreshold = DefaultCompactThreshold
+	}
+	if a.Temperature != nil {
+		if *a.Temperature < 0 || *a.Temperature > 1 {
+			return nil, errors.New("temperature must be between 0 and 1")
+		}
+		// Anthropic-family providers reject a custom temperature while thinking.
+		if *a.Temperature != 1 && a.ReasoningEffort != "" && a.ReasoningEffort != "none" {
+			switch a.Provider {
+			case "anthropic", "moonshotai", "minimax":
+				return nil, errors.New(a.Provider + " does not support custom temperature when thinking is enabled")
+			}
+		}
 	}
 
 	a.Messages = message.CloneMessages(a.Messages)
@@ -240,6 +258,7 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 		System:             a.System,
 		Tools:              toolSpecs(a.providerToolSpecs()),
 		MaxTokens:          a.MaxTokens,
+		Temperature:        a.Temperature,
 		APIKey:             a.APIKey,
 		APIBase:            a.APIBase,
 		ReasoningEffort:    a.ReasoningEffort,
@@ -520,6 +539,7 @@ func (a *Agent) compactIfNeeded(ctx context.Context, persist PersistFunc, out ch
 		Messages:           compactMessages,
 		System:             a.System,
 		MaxTokens:          min(a.MaxTokens, 8192),
+		Temperature:        a.Temperature,
 		APIKey:             a.APIKey,
 		APIBase:            a.APIBase,
 		SupportsImageInput: a.SupportsImageInput,

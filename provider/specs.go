@@ -1,5 +1,7 @@
 package provider
 
+import "strings"
+
 // Spec is the static metadata for one built-in provider type.
 type Spec struct {
 	ID                      string
@@ -131,4 +133,32 @@ var adapters = map[string]Adapter{
 func LookupAdapter(id string) (Adapter, bool) {
 	adapter, ok := adapters[id]
 	return adapter, ok
+}
+
+// InferProviderFromModel returns the built-in provider id for a known model id.
+// A leading "vendor/" prefix is dropped before matching, so both "claude-..."
+// and "anthropic/claude-..." resolve to "anthropic".
+func InferProviderFromModel(model string) (string, bool) {
+	bare := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.Index(bare, "/"); i >= 0 {
+		bare = bare[i+1:]
+	}
+	switch {
+	case strings.HasPrefix(bare, "claude-"):
+		return "anthropic", true
+	case strings.HasPrefix(bare, "deepseek-"):
+		return "deepseek", true
+	case strings.HasPrefix(bare, "gemini-"):
+		return "google", true
+	case strings.HasPrefix(bare, "glm-"):
+		return "zai", true
+	case strings.HasPrefix(bare, "gpt-"), strings.HasPrefix(bare, "o1"), strings.HasPrefix(bare, "o3"), strings.HasPrefix(bare, "o4"):
+		return "openai", true
+	case strings.HasPrefix(bare, "kimi-"):
+		return "moonshotai", true
+	case strings.HasPrefix(bare, "minimax-"):
+		return "minimax", true
+	default:
+		return "", false
+	}
 }

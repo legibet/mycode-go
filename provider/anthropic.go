@@ -105,6 +105,9 @@ func (a anthropicAdapter) buildPayload(req Request) (map[string]any, error) {
 		"max_tokens": req.MaxTokens,
 		"messages":   messages,
 	}
+	if req.Temperature != nil {
+		payload["temperature"] = *req.Temperature
+	}
 	if strings.TrimSpace(req.System) != "" {
 		payload["system"] = []map[string]any{{
 			"type":          "text",

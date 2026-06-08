@@ -1273,3 +1273,29 @@ func mustUnmarshalOutputItems(t *testing.T, raw string) []responses.ResponseOutp
 	}
 	return items
 }
+
+func TestInferProviderFromModel(t *testing.T) {
+	cases := map[string]string{
+		"claude-opus-4-7":         "anthropic",
+		"anthropic/claude-opus-4": "anthropic",
+		"deepseek-v4-pro":         "deepseek",
+		"gemini-3.5-flash":        "google",
+		"glm-5.1":                 "zai",
+		"gpt-5.5":                 "openai",
+		"o3":                      "openai",
+		"kimi-k2.6":               "moonshotai",
+		"MiniMax-M2.7":            "minimax",
+	}
+	for model, want := range cases {
+		got, ok := InferProviderFromModel(model)
+		if !ok || got != want {
+			t.Fatalf("InferProviderFromModel(%q) = %q, %v; want %q, true", model, got, ok, want)
+		}
+	}
+
+	for _, model := range []string{"", "mystery-model", "llama-3"} {
+		if got, ok := InferProviderFromModel(model); ok {
+			t.Fatalf("InferProviderFromModel(%q) = %q, true; want \"\", false", model, got)
+		}
+	}
+}

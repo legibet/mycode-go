@@ -57,9 +57,14 @@ func main() {
 }
 ```
 
-`ToolSpecs` is explicit. Leave it nil for a runtime with no tools. Pass `tools.DefaultSpecs()` to expose `read`, `write`, `edit`, and `bash`.
+`a.Chat` runs one user turn and returns a channel of `agent.Event` values. The turn loops provider → tool calls → provider internally until the assistant stops calling tools, then the channel closes. Event types match the SSE contract in `docs/api.md`.
 
-`CompactThreshold` defaults to `agent.DefaultCompactThreshold`. Set `DisableCompact` to disable automatic compaction.
+Config notes:
+
+- `ToolSpecs` is explicit: leave it nil for a runtime with no tools, or pass `tools.DefaultSpecs()` to expose `read`, `write`, `edit`, and `bash`.
+- `Provider` may be empty when the model id is recognizable (`claude-*`, `gpt-*`, `gemini-*`, …); `New` infers it via `provider.InferProviderFromModel` and errors when it can't.
+- `Temperature` is an optional `*float64`: nil uses the provider default, otherwise the value (`0`–`1`) is sent.
+- `CompactThreshold` defaults to `agent.DefaultCompactThreshold`; set `DisableCompact` to turn automatic compaction off.
 
 ## Attachments
 
@@ -82,7 +87,14 @@ blocks = append(blocks, attached...)
 user := message.BuildMessage("user", blocks, nil)
 ```
 
-Supported media path and byte attachments are PNG, JPEG, GIF, WebP, and PDF. Other UTF-8 files become named `<file>` text blocks. Other binary files return an error.
+`attachment.Build` resolves each item against `Options.CWD` and returns blocks in input order:
+
+- A path to PNG/JPEG/GIF/WebP becomes an `image` block; a path to PDF becomes a `document` block.
+- A path to a UTF-8 text file becomes a `<file name="…">…</file>` text block tagged with `meta.attachment`.
+- `attachment.Bytes` carries raw `image/*` or `application/pdf` data without touching disk.
+- `attachment.Text` wraps an inline snippet as the same `<file>` text block and requires a name.
+
+A missing path, a directory, an unsupported binary, or an unsupported media type returns an error before the message is built.
 
 ## Sessions
 

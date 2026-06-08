@@ -24,6 +24,7 @@ type Request struct {
 	System             string
 	Tools              []map[string]any
 	MaxTokens          int
+	Temperature        *float64
 	APIKey             string
 	APIBase            string
 	ReasoningEffort    string

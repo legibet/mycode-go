@@ -175,6 +175,9 @@ func (a openAIChatAdapter) buildPayload(req Request) (map[string]any, error) {
 		"max_tokens":     req.MaxTokens,
 		"stream_options": map[string]any{"include_usage": true},
 	}
+	if req.Temperature != nil {
+		payload["temperature"] = *req.Temperature
+	}
 	if len(req.Tools) > 0 {
 		toolsPayload := make([]any, 0, len(req.Tools))
 		for _, tool := range req.Tools {

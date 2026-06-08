@@ -143,6 +143,9 @@ func (a openAIResponsesAdapter) buildPayload(req Request) (map[string]any, error
 		"include":           []string{"reasoning.encrypted_content"},
 		"max_output_tokens": req.MaxTokens,
 	}
+	if req.Temperature != nil {
+		payload["temperature"] = *req.Temperature
+	}
 	if req.System != "" {
 		payload["instructions"] = req.System
 	}

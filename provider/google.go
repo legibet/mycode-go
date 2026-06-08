@@ -196,6 +196,10 @@ func (a googleAdapter) buildConfig(req Request) *genai.GenerateContentConfig {
 	if strings.TrimSpace(req.System) != "" {
 		config.SystemInstruction = genai.NewContentFromText(req.System, genai.RoleUser)
 	}
+	if req.Temperature != nil {
+		temperature := float32(*req.Temperature)
+		config.Temperature = &temperature
+	}
 	if level := googleThinkingLevel(req.Model, req.ReasoningEffort); level != genai.ThinkingLevelUnspecified {
 		config.ThinkingConfig.ThinkingLevel = level
 	}
