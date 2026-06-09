@@ -355,7 +355,7 @@ func TestResolveProviderDeepSeekDefaultsToV4(t *testing.T) {
 	if resolved.ProviderName != "deepseek" || resolved.ProviderType != "deepseek" {
 		t.Fatalf("unexpected provider: %#v", resolved)
 	}
-	if resolved.Model != "deepseek-v4-pro" || !resolved.SupportsEffortToggle {
+	if resolved.Model != "deepseek-v4-pro" {
 		t.Fatalf("unexpected DeepSeek defaults: %#v", resolved)
 	}
 }
@@ -617,8 +617,9 @@ func TestResolveProviderUsesMetadataOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.ContextWindow != 500000 || resolved.MaxTokens != 64000 || resolved.SupportsReasoning || !resolved.SupportsImageInput {
-		t.Fatalf("unexpected resolved provider: %#v", resolved)
+	meta := provider.ResolveModel(resolved.ProviderType, resolved.Model, resolved.Override)
+	if meta.ContextWindow != 500000 || meta.MaxOutputTokens != 64000 || meta.SupportsReasoning || !meta.SupportsImageInput {
+		t.Fatalf("unexpected resolved metadata: %#v", meta)
 	}
 }
 

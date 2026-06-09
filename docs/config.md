@@ -136,7 +136,7 @@ The shell checks are intentionally simple and conservative. Project commands suc
 
 ## Model Metadata
 
-`internal/models/catalog.go` reads the bundled `internal/models/models_catalog.json` catalog to look up:
+`provider/models.go` reads the bundled `provider/models_catalog.json` catalog to look up:
 
 - `supports_reasoning` — whether the model supports extended thinking
 - `supports_image_input` — whether the model accepts image input

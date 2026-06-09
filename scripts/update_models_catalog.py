@@ -10,8 +10,7 @@ from urllib.request import Request, urlopen
 MODELS_DEV_URL = "https://models.dev/api.json"
 TARGET_PATH = (
     Path(__file__).resolve().parents[1]
-    / "internal"
-    / "models"
+    / "provider"
     / "models_catalog.json"
 )
 PROVIDERS = (

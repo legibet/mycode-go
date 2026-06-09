@@ -90,13 +90,13 @@ func runCommand(args []string) int {
 		APIBase:            resolvedProvider.APIBase,
 		System:             promptpkg.Build(cwd, settings.Project, config.ResolveHome()),
 		MaxTurns:           *maxTurns,
-		MaxTokens:          resolvedProvider.MaxTokens,
-		ContextWindow:      resolvedProvider.ContextWindow,
+		MaxTokens:          resolvedProvider.Override.MaxOutputTokens,
+		ContextWindow:      resolvedProvider.Override.ContextWindow,
 		CompactThreshold:   settings.CompactThreshold,
 		DisableCompact:     settings.CompactThreshold <= 0,
 		ReasoningEffort:    resolvedProvider.ReasoningEffort,
-		SupportsImageInput: resolvedProvider.SupportsImageInput,
-		SupportsPDFInput:   resolvedProvider.SupportsPDFInput,
+		SupportsImageInput: resolvedProvider.Override.SupportsImageInput,
+		SupportsPDFInput:   resolvedProvider.Override.SupportsPDFInput,
 		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 		Hooks: tools.Hooks{
 			BeforeTool: []tools.BeforeToolHook{

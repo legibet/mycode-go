@@ -24,12 +24,12 @@ Always-loaded context for agent runs on this branch. Detailed specs live in `doc
     google.go               # google
     openai_responses.go     # openai
     openai_chat.go          # openai_chat, deepseek, zai, openrouter
+    models.go               # bundled model metadata catalog and resolution
 
   cmd/mycode-go/              # CLI: run, web, session list, --version
   internal/core/              # transport-agnostic service layer, RunManager, workspace browser
   internal/permissions/       # CLI/web tool permission policy
   internal/config/            # layered config loading and provider resolution
-  internal/models/            # bundled model metadata lookup
   internal/prompt/            # system prompt, AGENTS discovery, skills discovery
   internal/server/            # HTTP adapter and SSE framing
 
@@ -38,7 +38,7 @@ web/src/                      # shared React + Vite UI from Python main
   utils/messages.ts           # canonical blocks -> UI messages
 
 scripts/
-  update_models_catalog.py    # regenerates internal/models/models_catalog.json
+  update_models_catalog.py    # regenerates provider/models_catalog.json
   sync_web_dist.sh            # copies web/dist into Go's embedded webdist directory
 ```
 

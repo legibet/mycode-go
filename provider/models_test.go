@@ -1,32 +1,29 @@
-package models
+package provider
 
 import (
 	"slices"
 	"testing"
 )
 
-func TestLookupPrefersCurrentProviderFamily(t *testing.T) {
+func TestLookupPrefersExactProviderEntry(t *testing.T) {
 	withCatalog(t, `{
 		"openai": {"gpt-5": {"max_output_tokens": 128000, "supports_reasoning": true, "supports_image_input": true}},
 		"openrouter": {"openai/gpt-5": {"max_output_tokens": 64000, "supports_reasoning": true}}
 	}`, func() {
-		meta := Lookup("openrouter", "openai/gpt-5")
-		if meta == nil || meta.Provider != "openrouter" || meta.MaxOutputTokens != 64000 {
+		meta := lookupModel("openrouter", "openai/gpt-5")
+		if meta.MaxOutputTokens != 64000 {
 			t.Fatalf("unexpected metadata: %#v", meta)
 		}
 	})
 }
 
-func TestLookupFallsBackToCanonicalProvider(t *testing.T) {
+func TestLookupFallsBackToInferredProvider(t *testing.T) {
 	withCatalog(t, `{
 		"openai": {"gpt-5": {"max_output_tokens": 128000, "supports_reasoning": true, "supports_image_input": true}},
 		"other": {}
 	}`, func() {
-		meta := Lookup("openai_chat", "openai/gpt-5")
-		if meta == nil || meta.Provider != "openai_chat" || meta.Model != "openai/gpt-5" {
-			t.Fatalf("unexpected metadata: %#v", meta)
-		}
-		if meta.SupportsImageInput == nil || !*meta.SupportsImageInput {
+		meta := lookupModel("openai_chat", "openai/gpt-5")
+		if !meta.SupportsImageInput || meta.MaxOutputTokens != 128000 {
 			t.Fatalf("unexpected metadata: %#v", meta)
 		}
 	})
@@ -37,11 +34,8 @@ func TestLookupFallsBackToOpenRouterSuffix(t *testing.T) {
 		"moonshotai": {},
 		"openrouter": {"moonshotai/kimi-k2.6": {"max_output_tokens": 262144, "supports_reasoning": true}}
 	}`, func() {
-		meta := Lookup("moonshotai", "kimi-k2.6")
-		if meta == nil || meta.Provider != "moonshotai" || meta.Model != "kimi-k2.6" || meta.MaxOutputTokens != 262144 {
-			t.Fatalf("unexpected metadata: %#v", meta)
-		}
-		if meta.SupportsReasoning == nil || !*meta.SupportsReasoning {
+		meta := lookupModel("moonshotai", "kimi-k2.6")
+		if meta.MaxOutputTokens != 262144 || !meta.SupportsReasoning {
 			t.Fatalf("unexpected metadata: %#v", meta)
 		}
 	})
@@ -54,7 +48,7 @@ func TestLookupOpenRouterSuffixRejectsAmbiguousMatches(t *testing.T) {
 			"second/shared-model": {"max_output_tokens": 128000}
 		}
 	}`, func() {
-		if meta := Lookup("moonshotai", "shared-model"); meta != nil {
+		if meta := lookupModel("moonshotai", "shared-model"); meta != (ModelMetadata{}) {
 			t.Fatalf("unexpected metadata: %#v", meta)
 		}
 	})
@@ -65,32 +59,32 @@ func TestLookupRequiresProvider(t *testing.T) {
 		"openai": {"gpt-5": {"max_output_tokens": 128000}},
 		"openrouter": {"some-provider/some-niche-model": {"max_output_tokens": 64000}}
 	}`, func() {
-		if meta := Lookup("", "some-niche-model"); meta != nil {
+		if meta := lookupModel("", "some-niche-model"); meta != (ModelMetadata{}) {
 			t.Fatalf("unexpected metadata: %#v", meta)
 		}
-		if meta := Lookup("", "gpt-5"); meta != nil {
+		if meta := lookupModel("", "gpt-5"); meta != (ModelMetadata{}) {
 			t.Fatalf("unexpected metadata: %#v", meta)
 		}
 	})
 }
 
-func TestLookupReadsImageAndPDFSupport(t *testing.T) {
+func TestResolveModelLayersOverrides(t *testing.T) {
 	withCatalog(t, `{
-		"openai": {
-			"gpt-5.4": {
-				"max_output_tokens": 128000,
-				"supports_reasoning": true,
-				"supports_image_input": true,
-				"supports_pdf_input": true
-			}
-		}
+		"openai": {"gpt-5.4": {"context_window": 400000, "max_output_tokens": 128000, "supports_image_input": true}}
 	}`, func() {
-		meta := Lookup("openai", "gpt-5.4")
-		if meta == nil || meta.SupportsImageInput == nil || meta.SupportsPDFInput == nil {
-			t.Fatalf("unexpected metadata: %#v", meta)
+		disabled := false
+		meta := ResolveModel("openai", "gpt-5.4", ModelOverride{
+			MaxOutputTokens:    32000,
+			SupportsImageInput: &disabled,
+		})
+		if meta.MaxOutputTokens != 32000 {
+			t.Fatalf("override did not win: %#v", meta)
 		}
-		if !*meta.SupportsImageInput || !*meta.SupportsPDFInput {
-			t.Fatalf("unexpected metadata: %#v", meta)
+		if meta.ContextWindow != 400000 {
+			t.Fatalf("catalog fallback lost: %#v", meta)
+		}
+		if meta.SupportsImageInput {
+			t.Fatalf("override should disable image input: %#v", meta)
 		}
 	})
 }

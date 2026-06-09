@@ -13,15 +13,12 @@ import (
 	"strconv"
 	"strings"
 
-	M "github.com/legibet/mycode-go/internal/models"
 	"github.com/legibet/mycode-go/provider"
 )
 
 const (
 	defaultHome             = "~/.mycode"
 	defaultPort             = 8000
-	defaultContextWindow    = 128000
-	defaultMaxOutputTokens  = 16384
 	defaultCompactThreshold = 0.8
 )
 
@@ -31,29 +28,18 @@ var (
 	validPermissionModes  = []string{"ask", "deny"}
 )
 
-var lookupModelMetadata = M.Lookup
-
 var ErrUnsupportedReasoningEffort = errors.New("unsupported reasoning_effort")
-
-// ModelConfig overrides bundled metadata for one model.
-type ModelConfig struct {
-	ContextWindow      int   `json:"context_window"`
-	MaxOutputTokens    int   `json:"max_output_tokens"`
-	SupportsReasoning  *bool `json:"supports_reasoning,omitempty"`
-	SupportsImageInput *bool `json:"supports_image_input,omitempty"`
-	SupportsPDFInput   *bool `json:"supports_pdf_input,omitempty"`
-}
 
 // ProviderConfig defines one configured provider alias.
 type ProviderConfig struct {
-	Name            string                 `json:"-"`
-	Type            string                 `json:"type"`
-	Models          map[string]ModelConfig `json:"models"`
-	ModelOrder      []string               `json:"-"`
-	APIKey          string                 `json:"-"`
-	APIKeyEnvVar    string                 `json:"-"`
-	BaseURL         string                 `json:"base_url"`
-	ReasoningEffort string                 `json:"reasoning_effort"`
+	Name            string                            `json:"-"`
+	Type            string                            `json:"type"`
+	Models          map[string]provider.ModelOverride `json:"models"`
+	ModelOrder      []string                          `json:"-"`
+	APIKey          string                            `json:"-"`
+	APIKeyEnvVar    string                            `json:"-"`
+	BaseURL         string                            `json:"base_url"`
+	ReasoningEffort string                            `json:"reasoning_effort"`
 }
 
 // PermissionConfig controls automatic tool execution.
@@ -78,20 +64,17 @@ type Settings struct {
 	providerOrder []string
 }
 
-// ResolvedProvider is the runnable provider config.
+// ResolvedProvider is the runnable provider config. Capability values are not
+// carried here: the agent resolves them from the catalog using Override, and
+// callers that need them (model listing, media checks) call provider.ResolveModel.
 type ResolvedProvider struct {
-	ProviderName         string
-	ProviderType         string
-	Model                string
-	APIKey               string
-	APIBase              string
-	ReasoningEffort      string
-	MaxTokens            int
-	ContextWindow        int
-	SupportsReasoning    bool
-	SupportsImageInput   bool
-	SupportsPDFInput     bool
-	SupportsEffortToggle bool
+	ProviderName    string
+	ProviderType    string
+	Model           string
+	APIKey          string
+	APIBase         string
+	ReasoningEffort string
+	Override        provider.ModelOverride
 }
 
 type loadedConfig struct {
@@ -640,20 +623,11 @@ func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiB
 		return ResolvedProvider{}, fmt.Errorf("provider %q does not define any default models", selectedName)
 	}
 
-	meta := resolveMetadata(providerType, resolvedModel, hasConfig, configured)
-	supportsReasoning := meta != nil && meta.SupportsReasoning != nil && *meta.SupportsReasoning
-	supportsImageInput := meta != nil && meta.SupportsImageInput != nil && *meta.SupportsImageInput
-	supportsPDFInput := meta != nil && meta.SupportsPDFInput != nil && *meta.SupportsPDFInput
+	override := configured.Models[resolvedModel]
+	meta := provider.ResolveModel(providerType, resolvedModel, override)
 
-	reasoningEffort := ""
-	if supportsReasoning && spec.SupportsReasoningEffort {
-		switch {
-		case hasConfig && configured.ReasoningEffort != "":
-			reasoningEffort = configured.ReasoningEffort
-		case settings.DefaultReasoningEffort != "":
-			reasoningEffort = settings.DefaultReasoningEffort
-		}
-	}
+	configuredEffort := cmp.Or(configured.ReasoningEffort, settings.DefaultReasoningEffort)
+	reasoningEffort := GateReasoningEffort(configuredEffort, meta.SupportsReasoning, spec.SupportsReasoningEffort)
 
 	resolvedAPIBase := cmp.Or(
 		strings.TrimSpace(apiBase),
@@ -681,55 +655,24 @@ func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiB
 		return ResolvedProvider{}, fmt.Errorf("provider %q is selected but no API key is available; checked: %s", selectedName, checked)
 	}
 
-	maxTokens, contextWindow := defaultMaxOutputTokens, defaultContextWindow
-	if meta != nil {
-		maxTokens = defaultInt(meta.MaxOutputTokens, defaultMaxOutputTokens)
-		contextWindow = defaultInt(meta.ContextWindow, defaultContextWindow)
-	}
 	return ResolvedProvider{
-		ProviderName:         selectedName,
-		ProviderType:         providerType,
-		Model:                resolvedModel,
-		APIKey:               resolvedAPIKey,
-		APIBase:              resolvedAPIBase,
-		ReasoningEffort:      reasoningEffort,
-		MaxTokens:            maxTokens,
-		ContextWindow:        contextWindow,
-		SupportsReasoning:    supportsReasoning,
-		SupportsImageInput:   supportsImageInput,
-		SupportsPDFInput:     supportsPDFInput,
-		SupportsEffortToggle: spec.SupportsReasoningEffort,
+		ProviderName:    selectedName,
+		ProviderType:    providerType,
+		Model:           resolvedModel,
+		APIKey:          resolvedAPIKey,
+		APIBase:         resolvedAPIBase,
+		ReasoningEffort: reasoningEffort,
+		Override:        override,
 	}, nil
 }
 
-func resolveMetadata(providerType, model string, hasConfig bool, configured ProviderConfig) *M.Metadata {
-	meta := lookupModelMetadata(providerType, model)
-	if !hasConfig {
-		return meta
+// GateReasoningEffort returns effort only when the model supports reasoning and
+// the adapter exposes the effort knob; otherwise it returns "".
+func GateReasoningEffort(effort string, supportsReasoning, adapterSupportsEffort bool) string {
+	if effort == "" || !supportsReasoning || !adapterSupportsEffort {
+		return ""
 	}
-	override, ok := configured.Models[model]
-	if !ok {
-		return meta
-	}
-	if meta == nil {
-		meta = &M.Metadata{Provider: providerType, Model: model}
-	}
-	if override.ContextWindow > 0 {
-		meta.ContextWindow = override.ContextWindow
-	}
-	if override.MaxOutputTokens > 0 {
-		meta.MaxOutputTokens = override.MaxOutputTokens
-	}
-	if override.SupportsReasoning != nil {
-		meta.SupportsReasoning = override.SupportsReasoning
-	}
-	if override.SupportsImageInput != nil {
-		meta.SupportsImageInput = override.SupportsImageInput
-	}
-	if override.SupportsPDFInput != nil {
-		meta.SupportsPDFInput = override.SupportsPDFInput
-	}
-	return meta
+	return effort
 }
 
 func providerHasAPIKey(providerConfig ProviderConfig) bool {
@@ -770,9 +713,9 @@ func buildProviders(rawProviders map[string]map[string]any, order []string, mode
 		modelsMap, orderedModels := normalizeModels(raw["models"], modelOrder[name])
 		if len(modelsMap) == 0 {
 			spec, _ := provider.LookupSpec(providerType)
-			modelsMap = make(map[string]ModelConfig, len(spec.DefaultModels))
+			modelsMap = make(map[string]provider.ModelOverride, len(spec.DefaultModels))
 			for _, model := range spec.DefaultModels {
-				modelsMap[model] = ModelConfig{}
+				modelsMap[model] = provider.ModelOverride{}
 			}
 			orderedModels = slices.Clone(spec.DefaultModels)
 		}
@@ -807,12 +750,12 @@ func buildProviders(rawProviders map[string]map[string]any, order []string, mode
 	return providers, nil
 }
 
-func normalizeModels(raw any, order []string) (map[string]ModelConfig, []string) {
+func normalizeModels(raw any, order []string) (map[string]provider.ModelOverride, []string) {
 	modelMap, _ := raw.(map[string]any)
 	if len(modelMap) == 0 {
 		return nil, nil
 	}
-	out := make(map[string]ModelConfig, len(modelMap))
+	out := make(map[string]provider.ModelOverride, len(modelMap))
 	keys := make([]string, 0, len(modelMap))
 	seen := map[string]struct{}{}
 	for _, name := range order {
@@ -831,7 +774,7 @@ func normalizeModels(raw any, order []string) (map[string]ModelConfig, []string)
 	keys = append(keys, extra...)
 	for _, name := range keys {
 		rawConfig, _ := modelMap[name].(map[string]any)
-		cfg := ModelConfig{}
+		cfg := provider.ModelOverride{}
 		if rawConfig != nil {
 			cfg.ContextWindow = asInt(rawConfig["context_window"])
 			cfg.MaxOutputTokens = asInt(rawConfig["max_output_tokens"])
@@ -1237,13 +1180,6 @@ func cleanStringOrder(values []string) []string {
 		out = append(out, value)
 	}
 	return out
-}
-
-func defaultInt(value, fallback int) int {
-	if value > 0 {
-		return value
-	}
-	return fallback
 }
 
 func asString(value any) string {

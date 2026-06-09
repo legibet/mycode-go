@@ -113,8 +113,8 @@ func TestChatPersistsReasoningBlocks(t *testing.T) {
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
-		SupportsImageInput: true,
-		SupportsPDFInput:   true,
+		SupportsImageInput: new(true),
+		SupportsPDFInput:   new(true),
 	}, openAIAdapter([]provider.StreamEvent{
 		{Type: "thinking_delta", Text: "hidden "},
 		{Type: "text_delta", Text: "Visible answer"},
@@ -161,8 +161,8 @@ func TestChatPersistsPartialAssistantOnProviderCancel(t *testing.T) {
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
-		SupportsImageInput: true,
-		SupportsPDFInput:   true,
+		SupportsImageInput: new(true),
+		SupportsPDFInput:   new(true),
 	}, &slowProviderAdapter{spec: provider.Spec{ID: "openai"}})
 	if err != nil {
 		t.Fatal(err)
@@ -218,8 +218,8 @@ func TestChatRespectsExplicitTurnLimit(t *testing.T) {
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
-		SupportsImageInput: true,
-		SupportsPDFInput:   true,
+		SupportsImageInput: new(true),
+		SupportsPDFInput:   new(true),
 		Tools:              []tools.Spec{tools.Read},
 	}, openAIAdapter(
 		[]provider.StreamEvent{{
@@ -259,8 +259,8 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
-		SupportsImageInput: true,
-		SupportsPDFInput:   true,
+		SupportsImageInput: new(true),
+		SupportsPDFInput:   new(true),
 	}, adapter)
 	if err != nil {
 		t.Fatal(err)
@@ -282,8 +282,8 @@ func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
-		SupportsImageInput: true,
-		SupportsPDFInput:   true,
+		SupportsImageInput: new(true),
+		SupportsPDFInput:   new(true),
 		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 		Hooks: tools.Hooks{
 			BeforeTool: []tools.BeforeToolHook{
@@ -334,8 +334,8 @@ func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
-		SupportsImageInput: true,
-		SupportsPDFInput:   true,
+		SupportsImageInput: new(true),
+		SupportsPDFInput:   new(true),
 		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 	}, openAIAdapter([]provider.StreamEvent{{
 		Type: "message_done",
@@ -390,8 +390,8 @@ func TestChatCancelBetweenToolsKeepsCompletedResults(t *testing.T) {
 		MaxTokens:          4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
-		SupportsImageInput: true,
-		SupportsPDFInput:   true,
+		SupportsImageInput: new(true),
+		SupportsPDFInput:   new(true),
 		Tools: []tools.Spec{
 			{
 				Name: "first",
@@ -471,8 +471,8 @@ func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 		ContextWindow:      100,
 		CompactThreshold:   0.8,
 		ReasoningEffort:    "high",
-		SupportsImageInput: true,
-		SupportsPDFInput:   true,
+		SupportsImageInput: new(true),
+		SupportsPDFInput:   new(true),
 	}, adapter)
 	if err != nil {
 		t.Fatal(err)

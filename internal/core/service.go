@@ -162,16 +162,19 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		}
 		return ChatResponse{}, statusError(http.StatusInternalServerError, err.Error())
 	}
-	if strings.TrimSpace(req.ReasoningEffort) != "" {
-		effort, err := config.NormalizeReasoningEffort(req.ReasoningEffort)
+	meta := provider.ResolveModel(resolved.ProviderType, resolved.Model, resolved.Override)
+	spec, _ := provider.LookupSpec(resolved.ProviderType)
+
+	if effort := strings.TrimSpace(req.ReasoningEffort); effort != "" {
+		normalized, err := config.NormalizeReasoningEffort(effort)
 		if err != nil {
 			return ChatResponse{}, statusError(http.StatusBadRequest, err.Error())
 		}
 		// Per-request overrides honor the same gate as configured defaults:
 		// only send reasoning_effort when the model supports reasoning and the
 		// adapter exposes the effort knob.
-		if effort != "" && resolved.SupportsReasoning && resolved.SupportsEffortToggle {
-			resolved.ReasoningEffort = effort
+		if gated := config.GateReasoningEffort(normalized, meta.SupportsReasoning, spec.SupportsReasoningEffort); gated != "" {
+			resolved.ReasoningEffort = gated
 		}
 	}
 
@@ -179,7 +182,7 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 	if err != nil {
 		return ChatResponse{}, statusError(http.StatusBadRequest, err.Error())
 	}
-	if err := message.ValidateMediaSupport(userMessage, resolved.SupportsImageInput, resolved.SupportsPDFInput); err != nil {
+	if err := message.ValidateMediaSupport(userMessage, meta.SupportsImageInput, meta.SupportsPDFInput); err != nil {
 		return ChatResponse{}, statusError(http.StatusBadRequest, err.Error())
 	}
 
@@ -240,13 +243,13 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		APIKey:             resolved.APIKey,
 		APIBase:            resolved.APIBase,
 		System:             prompt.Build(cwd, settings.Project, config.ResolveHome()),
-		MaxTokens:          resolved.MaxTokens,
-		ContextWindow:      resolved.ContextWindow,
+		MaxTokens:          resolved.Override.MaxOutputTokens,
+		ContextWindow:      resolved.Override.ContextWindow,
 		CompactThreshold:   settings.CompactThreshold,
 		DisableCompact:     settings.CompactThreshold <= 0,
 		ReasoningEffort:    resolved.ReasoningEffort,
-		SupportsImageInput: resolved.SupportsImageInput,
-		SupportsPDFInput:   resolved.SupportsPDFInput,
+		SupportsImageInput: resolved.Override.SupportsImageInput,
+		SupportsPDFInput:   resolved.Override.SupportsPDFInput,
 		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 		Hooks: tools.Hooks{
 			BeforeTool: []tools.BeforeToolHook{
@@ -342,23 +345,14 @@ func (s *Service) Config(cwd string) (map[string]any, error) {
 		pdfModels := make([]string, 0, len(models))
 
 		for _, model := range models {
-			resolvedModel, err := config.ResolveProvider(
-				settings,
-				choice.ProviderName,
-				model,
-				"",
-				choice.APIBase,
-			)
-			if err != nil {
-				continue
-			}
-			if resolvedModel.SupportsReasoning {
+			meta := provider.ResolveModel(choice.ProviderType, model, settings.Providers[choice.ProviderName].Models[model])
+			if meta.SupportsReasoning {
 				reasoningModels = append(reasoningModels, model)
 			}
-			if resolvedModel.SupportsImageInput {
+			if meta.SupportsImageInput {
 				imageModels = append(imageModels, model)
 			}
-			if resolvedModel.SupportsPDFInput {
+			if meta.SupportsPDFInput {
 				pdfModels = append(pdfModels, model)
 			}
 		}

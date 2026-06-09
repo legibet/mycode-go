@@ -35,19 +35,21 @@ type Config struct {
 	APIBase  string
 
 	// Runtime
-	CWD                string
-	System             string
-	Tools              []tools.Spec
-	Hooks              tools.Hooks
-	MaxTurns           int
+	CWD              string
+	System           string
+	Tools            []tools.Spec
+	Hooks            tools.Hooks
+	MaxTurns         int
+	Temperature      *float64
+	ReasoningEffort  string
+	CompactThreshold float64
+	DisableCompact   bool
+
+	// Model capability overrides. Zero/nil resolves from the bundled catalog.
 	MaxTokens          int
-	Temperature        *float64
 	ContextWindow      int
-	ReasoningEffort    string
-	CompactThreshold   float64
-	DisableCompact     bool
-	SupportsImageInput bool
-	SupportsPDFInput   bool
+	SupportsImageInput *bool
+	SupportsPDFInput   *bool
 
 	// Session persistence (optional)
 	Store     *session.Store    // nil keeps the run in memory
@@ -59,9 +61,11 @@ type Config struct {
 // are filled.
 type Agent struct {
 	Config
-	exec           *tools.Executor
-	adapter        provider.Adapter
-	transcriptPath string
+	exec               *tools.Executor
+	adapter            provider.Adapter
+	transcriptPath     string
+	supportsImageInput bool
+	supportsPDFInput   bool
 }
 
 // New fills defaults and returns a runnable Agent.
@@ -105,8 +109,6 @@ func newAgent(cfg Config, adapter provider.Adapter) (*Agent, error) {
 		toolOutputRoot = a.Store.SessionDir(a.SessionID)
 	}
 
-	a.exec = tools.NewExecutor(a.CWD, toolOutputRoot, a.SupportsImageInput)
-
 	if a.adapter == nil {
 		if a.Provider == "" {
 			if inferred, ok := provider.InferProviderFromModel(a.Model); ok {
@@ -120,9 +122,20 @@ func newAgent(cfg Config, adapter provider.Adapter) (*Agent, error) {
 		a.adapter = found
 	}
 
-	if a.ContextWindow == 0 {
-		a.ContextWindow = 128000
-	}
+	// Resolve capabilities from the bundled catalog; Config fields override it.
+	meta := provider.ResolveModel(a.Provider, a.Model, provider.ModelOverride{
+		MaxOutputTokens:    a.MaxTokens,
+		ContextWindow:      a.ContextWindow,
+		SupportsImageInput: a.SupportsImageInput,
+		SupportsPDFInput:   a.SupportsPDFInput,
+	})
+	a.MaxTokens = cmp.Or(meta.MaxOutputTokens, 16384)
+	a.ContextWindow = cmp.Or(meta.ContextWindow, 128000)
+	a.supportsImageInput = meta.SupportsImageInput
+	a.supportsPDFInput = meta.SupportsPDFInput
+
+	a.exec = tools.NewExecutor(a.CWD, toolOutputRoot, a.supportsImageInput)
+
 	if a.DisableCompact {
 		a.CompactThreshold = 0
 	} else if a.CompactThreshold == 0 {
@@ -185,7 +198,7 @@ func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) <-ch
 			a.emitError(out, "user input must be a user message")
 			return
 		}
-		if err := message.ValidateMediaSupport(userInput, a.SupportsImageInput, a.SupportsPDFInput); err != nil {
+		if err := message.ValidateMediaSupport(userInput, a.supportsImageInput, a.supportsPDFInput); err != nil {
 			a.emitError(out, err.Error())
 			return
 		}
@@ -289,8 +302,8 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 		APIKey:             a.APIKey,
 		APIBase:            a.APIBase,
 		ReasoningEffort:    a.ReasoningEffort,
-		SupportsImageInput: a.SupportsImageInput,
-		SupportsPDFInput:   a.SupportsPDFInput,
+		SupportsImageInput: a.supportsImageInput,
+		SupportsPDFInput:   a.supportsPDFInput,
 	}
 
 	var assistant *message.Message
@@ -544,8 +557,8 @@ func (a *Agent) compactIfNeeded(ctx context.Context, out chan<- Event, totalToke
 		Temperature:        a.Temperature,
 		APIKey:             a.APIKey,
 		APIBase:            a.APIBase,
-		SupportsImageInput: a.SupportsImageInput,
-		SupportsPDFInput:   a.SupportsPDFInput,
+		SupportsImageInput: a.supportsImageInput,
+		SupportsPDFInput:   a.supportsPDFInput,
 	}
 
 	var summary *message.Message

@@ -56,6 +56,7 @@ Config notes:
 
 - `Tools` is explicit: leave it nil for a runtime with no tools, or list the built-in `tools.Read`, `tools.Write`, `tools.Edit`, `tools.Bash` values (any subset) together with custom tools.
 - `Provider` may be empty when the model id is recognizable (`claude-*`, `gpt-*`, `gemini-*`, …); `New` infers it via `provider.InferProviderFromModel` and errors when it can't.
+- Model capabilities resolve from the bundled catalog: leave `MaxTokens`/`ContextWindow` zero and `SupportsImageInput`/`SupportsPDFInput` nil to use the catalog values (falling back to `16384`/`128000`), or set them to override. `New` resolves them via `provider.ResolveModel`.
 - `Temperature` is an optional `*float64`: nil uses the provider default, otherwise the value (`0`–`1`) is sent.
 - `CompactThreshold` defaults to `agent.DefaultCompactThreshold`; set `DisableCompact` to turn automatic compaction off.
 
