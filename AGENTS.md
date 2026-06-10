@@ -57,7 +57,7 @@ Full schema, JSONL record types, replay rules, compact, and rewind behavior live
 Per user turn (`agent/agent.go`):
 
 1. Append the user message.
-2. Stream one provider turn through `ApplyCompactReplay`.
+2. Stream one provider turn through `applyCompactReplay`.
 3. Persist the assistant message. If the provider stream is cancelled after deltas arrive, persist a partial assistant message before emitting `error: cancelled`.
 4. Execute local tool calls.
 5. Append a `user` tool-result message. If a streaming bash tool is cancelled, the final tool result includes already emitted output followed by `error: cancelled`.
@@ -80,6 +80,7 @@ Read the relevant doc before related changes.
 
 | Area                                                                 | Doc                                                |
 | -------------------------------------------------------------------- | -------------------------------------------------- |
+| Public SDK API (`agent.Config`, `Chat`, model capabilities)          | `docs/sdk.md`                                      |
 | `agent`, `attachment`, `message`, `tools`, `session`                 | `docs/sessions.md`                                 |
 | `provider/*`                                                         | `docs/providers.md`                                |
 | `internal/core`, `internal/server`, SSE events, or routes            | `docs/api.md`                                      |

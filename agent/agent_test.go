@@ -71,6 +71,15 @@ func newTestStore(t *testing.T) *session.Store {
 	return store
 }
 
+func testMetadata(contextWindow int) *provider.ModelMetadata {
+	return &provider.ModelMetadata{
+		MaxOutputTokens:    4096,
+		ContextWindow:      contextWindow,
+		SupportsImageInput: true,
+		SupportsPDFInput:   true,
+	}
+}
+
 func collectEvents(stream iter.Seq[Event]) []Event {
 	events := []Event{}
 	for event := range stream {
@@ -105,16 +114,13 @@ func fullOutputPath(output string) string {
 func TestChatPersistsReasoningBlocks(t *testing.T) {
 	store := newTestStore(t)
 	agent, err := newAgent(Config{
-		Model:              "gpt-5.4",
-		Provider:           "openai",
-		CWD:                t.TempDir(),
-		Store:              store,
-		SessionID:          "session",
-		MaxOutputTokens:    4096,
-		ContextWindow:      128000,
-		CompactThreshold:   0.8,
-		SupportsImageInput: new(true),
-		SupportsPDFInput:   new(true),
+		Model:            "gpt-5.4",
+		Provider:         "openai",
+		CWD:              t.TempDir(),
+		Store:            store,
+		SessionID:        "session",
+		Metadata:         testMetadata(128000),
+		CompactThreshold: 0.8,
 	}, openAIAdapter([]provider.StreamEvent{
 		{Type: "thinking_delta", Text: "hidden "},
 		{Type: "text_delta", Text: "Visible answer"},
@@ -153,16 +159,13 @@ func TestChatPersistsReasoningBlocks(t *testing.T) {
 func TestChatPersistsPartialAssistantOnProviderCancel(t *testing.T) {
 	store := newTestStore(t)
 	agent, err := newAgent(Config{
-		Model:              "gpt-5.5",
-		Provider:           "openai",
-		CWD:                t.TempDir(),
-		Store:              store,
-		SessionID:          "session",
-		MaxOutputTokens:    4096,
-		ContextWindow:      128000,
-		CompactThreshold:   0.8,
-		SupportsImageInput: new(true),
-		SupportsPDFInput:   new(true),
+		Model:            "gpt-5.5",
+		Provider:         "openai",
+		CWD:              t.TempDir(),
+		Store:            store,
+		SessionID:        "session",
+		Metadata:         testMetadata(128000),
+		CompactThreshold: 0.8,
 	}, &slowProviderAdapter{spec: provider.Spec{ID: "openai"}})
 	if err != nil {
 		t.Fatal(err)
@@ -217,16 +220,13 @@ func TestChatPersistsPartialAssistantOnProviderCancel(t *testing.T) {
 
 func TestChatRespectsExplicitTurnLimit(t *testing.T) {
 	agent, err := newAgent(Config{
-		Model:              "gpt-5.4",
-		Provider:           "openai",
-		CWD:                t.TempDir(),
-		MaxTurns:           2,
-		MaxOutputTokens:    4096,
-		ContextWindow:      128000,
-		CompactThreshold:   0.8,
-		SupportsImageInput: new(true),
-		SupportsPDFInput:   new(true),
-		Tools:              []tools.Spec{tools.Read},
+		Model:            "gpt-5.4",
+		Provider:         "openai",
+		CWD:              t.TempDir(),
+		MaxTurns:         2,
+		Metadata:         testMetadata(128000),
+		CompactThreshold: 0.8,
+		Tools:            []tools.Spec{tools.Read},
 	}, openAIAdapter(
 		[]provider.StreamEvent{{
 			Type: "message_done",
@@ -258,15 +258,12 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 		Msg:  new(message.AssistantMessage([]message.Block{message.TextBlock("ok", nil)}, "openai", "gpt-5.4", "", "", 0, nil)),
 	}})
 	agent, err := newAgent(Config{
-		Model:              "gpt-5.4",
-		Provider:           "openai",
-		CWD:                t.TempDir(),
-		SessionID:          "session-explicit",
-		MaxOutputTokens:    4096,
-		ContextWindow:      128000,
-		CompactThreshold:   0.8,
-		SupportsImageInput: new(true),
-		SupportsPDFInput:   new(true),
+		Model:            "gpt-5.4",
+		Provider:         "openai",
+		CWD:              t.TempDir(),
+		SessionID:        "session-explicit",
+		Metadata:         testMetadata(128000),
+		CompactThreshold: 0.8,
 	}, adapter)
 	if err != nil {
 		t.Fatal(err)
@@ -282,15 +279,12 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 	dir := t.TempDir()
 	agent, err := newAgent(Config{
-		Model:              "gpt-5.4",
-		Provider:           "openai",
-		CWD:                dir,
-		MaxOutputTokens:    4096,
-		ContextWindow:      128000,
-		CompactThreshold:   0.8,
-		SupportsImageInput: new(true),
-		SupportsPDFInput:   new(true),
-		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
+		Model:            "gpt-5.4",
+		Provider:         "openai",
+		CWD:              dir,
+		Metadata:         testMetadata(128000),
+		CompactThreshold: 0.8,
+		Tools:            []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 		Hooks: tools.Hooks{
 			BeforeTool: []tools.BeforeToolHook{
 				permissions.ToolHook(config.PermissionConfig{Level: "readonly", Mode: "deny"}, nil, dir, dir, nil),
@@ -334,15 +328,12 @@ func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 
 func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
 	agent, err := newAgent(Config{
-		Model:              "gpt-5.4",
-		Provider:           "openai",
-		CWD:                t.TempDir(),
-		MaxOutputTokens:    4096,
-		ContextWindow:      128000,
-		CompactThreshold:   0.8,
-		SupportsImageInput: new(true),
-		SupportsPDFInput:   new(true),
-		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
+		Model:            "gpt-5.4",
+		Provider:         "openai",
+		CWD:              t.TempDir(),
+		Metadata:         testMetadata(128000),
+		CompactThreshold: 0.8,
+		Tools:            []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 	}, openAIAdapter([]provider.StreamEvent{{
 		Type: "message_done",
 		Msg: new(message.AssistantMessage([]message.Block{
@@ -385,16 +376,13 @@ func TestChatCancelBetweenToolsKeepsCompletedResults(t *testing.T) {
 	store := newTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	agent, err := newAgent(Config{
-		Model:              "gpt-5.4",
-		Provider:           "openai",
-		CWD:                t.TempDir(),
-		Store:              store,
-		SessionID:          "session",
-		MaxOutputTokens:    4096,
-		ContextWindow:      128000,
-		CompactThreshold:   0.8,
-		SupportsImageInput: new(true),
-		SupportsPDFInput:   new(true),
+		Model:            "gpt-5.4",
+		Provider:         "openai",
+		CWD:              t.TempDir(),
+		Store:            store,
+		SessionID:        "session",
+		Metadata:         testMetadata(128000),
+		CompactThreshold: 0.8,
 		Tools: []tools.Spec{
 			{
 				Name: "first",
@@ -467,15 +455,12 @@ func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 		}},
 	)
 	agent, err := newAgent(Config{
-		Model:              "gpt-5.4",
-		Provider:           "openai",
-		CWD:                t.TempDir(),
-		MaxOutputTokens:    4096,
-		ContextWindow:      100,
-		CompactThreshold:   0.8,
-		ReasoningEffort:    "high",
-		SupportsImageInput: new(true),
-		SupportsPDFInput:   new(true),
+		Model:            "gpt-5.4",
+		Provider:         "openai",
+		CWD:              t.TempDir(),
+		Metadata:         testMetadata(100),
+		CompactThreshold: 0.8,
+		ReasoningEffort:  "high",
 	}, adapter)
 	if err != nil {
 		t.Fatal(err)
@@ -612,7 +597,7 @@ func TestCompactDefaultAndDisableBehavior(t *testing.T) {
 				Provider:       "openai",
 				Model:          "gpt-5.4",
 				CWD:            t.TempDir(),
-				ContextWindow:  100,
+				Metadata:       &provider.ModelMetadata{ContextWindow: 100},
 				DisableCompact: tc.disable,
 			}, adapter)
 			if err != nil {

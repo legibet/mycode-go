@@ -64,9 +64,9 @@ type Settings struct {
 	providerOrder []string
 }
 
-// ResolvedProvider is the runnable provider config. Capability values are not
-// carried here: the agent resolves them from the catalog using Override, and
-// callers that need them (model listing, media checks) call provider.ResolveModel.
+// ResolvedProvider is the runnable provider config. Metadata is the model
+// capability set already resolved from the bundled catalog plus any per-model
+// config overrides.
 type ResolvedProvider struct {
 	ProviderName    string
 	ProviderType    string
@@ -74,7 +74,7 @@ type ResolvedProvider struct {
 	APIKey          string
 	APIBase         string
 	ReasoningEffort string
-	Override        provider.ModelOverride
+	Metadata        provider.ModelMetadata
 }
 
 type loadedConfig struct {
@@ -662,7 +662,7 @@ func resolveProviderRuntime(settings Settings, selectedName, model, apiKey, apiB
 		APIKey:          resolvedAPIKey,
 		APIBase:         resolvedAPIBase,
 		ReasoningEffort: reasoningEffort,
-		Override:        override,
+		Metadata:        meta,
 	}, nil
 }
 

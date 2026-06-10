@@ -162,7 +162,6 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		}
 		return ChatResponse{}, statusError(http.StatusInternalServerError, err.Error())
 	}
-	meta := provider.ResolveModel(resolved.ProviderType, resolved.Model, resolved.Override)
 	spec, _ := provider.LookupSpec(resolved.ProviderType)
 
 	if effort := strings.TrimSpace(req.ReasoningEffort); effort != "" {
@@ -173,7 +172,7 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		// Per-request overrides honor the same gate as configured defaults:
 		// only send reasoning_effort when the model supports reasoning and the
 		// adapter exposes the effort knob.
-		if gated := config.GateReasoningEffort(normalized, meta.SupportsReasoning, spec.SupportsReasoningEffort); gated != "" {
+		if gated := config.GateReasoningEffort(normalized, resolved.Metadata.SupportsReasoning, spec.SupportsReasoningEffort); gated != "" {
 			resolved.ReasoningEffort = gated
 		}
 	}
@@ -182,7 +181,7 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 	if err != nil {
 		return ChatResponse{}, statusError(http.StatusBadRequest, err.Error())
 	}
-	if err := message.ValidateMediaSupport(userMessage, meta.SupportsImageInput, meta.SupportsPDFInput); err != nil {
+	if err := message.ValidateMediaSupport(userMessage, resolved.Metadata.SupportsImageInput, resolved.Metadata.SupportsPDFInput); err != nil {
 		return ChatResponse{}, statusError(http.StatusBadRequest, err.Error())
 	}
 
@@ -235,22 +234,19 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 	}
 
 	agent, err := agentpkg.New(agentpkg.Config{
-		Model:              resolved.Model,
-		Provider:           resolved.ProviderType,
-		CWD:                cwd,
-		Store:              s.store,
-		SessionID:          sessionID,
-		APIKey:             resolved.APIKey,
-		APIBase:            resolved.APIBase,
-		System:             prompt.Build(cwd, settings.Project, config.ResolveHome()),
-		MaxOutputTokens:    resolved.Override.MaxOutputTokens,
-		ContextWindow:      resolved.Override.ContextWindow,
-		CompactThreshold:   settings.CompactThreshold,
-		DisableCompact:     settings.CompactThreshold <= 0,
-		ReasoningEffort:    resolved.ReasoningEffort,
-		SupportsImageInput: resolved.Override.SupportsImageInput,
-		SupportsPDFInput:   resolved.Override.SupportsPDFInput,
-		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
+		Model:            resolved.Model,
+		Provider:         resolved.ProviderType,
+		CWD:              cwd,
+		Store:            s.store,
+		SessionID:        sessionID,
+		APIKey:           resolved.APIKey,
+		APIBase:          resolved.APIBase,
+		System:           prompt.Build(cwd, settings.Project, config.ResolveHome()),
+		Metadata:         &resolved.Metadata,
+		CompactThreshold: settings.CompactThreshold,
+		DisableCompact:   settings.CompactThreshold <= 0,
+		ReasoningEffort:  resolved.ReasoningEffort,
+		Tools:            []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 		Hooks: tools.Hooks{
 			BeforeTool: []tools.BeforeToolHook{
 				permissions.ToolHook(

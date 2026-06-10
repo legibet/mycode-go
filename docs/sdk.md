@@ -56,9 +56,44 @@ Config notes:
 
 - `Tools` is explicit: leave it nil for a runtime with no tools, or list the built-in `tools.Read`, `tools.Write`, `tools.Edit`, `tools.Bash` values (any subset) together with custom tools.
 - `Provider` may be empty when the model id is recognizable (`claude-*`, `gpt-*`, `gemini-*`, …); `New` infers it via `provider.InferProviderFromModel` and errors when it can't.
-- Model capabilities resolve from the bundled catalog: leave `MaxOutputTokens`/`ContextWindow` zero and `SupportsImageInput`/`SupportsPDFInput` nil to use the catalog values (falling back to `16384`/`128000`), or set them to override. `New` resolves them via `provider.ResolveModel`.
+- `Metadata` is the model capability set; see [Model Capabilities](#model-capabilities).
 - `Temperature` is an optional `*float64`: nil uses the provider default, otherwise the value (`0`–`1`) is sent.
 - `CompactThreshold` defaults to `agent.DefaultCompactThreshold`; set `DisableCompact` to turn automatic compaction off.
+
+## Model Capabilities
+
+`provider.ModelMetadata` carries what a model can do: `ContextWindow`, `MaxOutputTokens`, `SupportsReasoning`, `SupportsImageInput`, `SupportsPDFInput`. The agent uses it for the provider output limit, compaction thresholds, and image/PDF input validation.
+
+Leave `Config.Metadata` nil for a known model — `New` resolves it from the bundled catalog, falling back to `16384` output tokens and a `128000` context window when the catalog has no match:
+
+```go
+a, err := agent.New(agent.Config{Model: "gpt-5", APIKey: key})
+```
+
+For a custom model or gateway, set it to use exactly these values (plain ints and bools; unset capabilities stay off):
+
+```go
+a, err := agent.New(agent.Config{
+    Provider: "openai_chat",
+    Model:    "my-model",
+    APIBase:  "http://localhost:8080/v1",
+    APIKey:   key,
+    Metadata: &provider.ModelMetadata{
+        ContextWindow:      200000,
+        MaxOutputTokens:    32000,
+        SupportsImageInput: true,
+    },
+})
+```
+
+To tweak a catalog entry, resolve it first and modify fields:
+
+```go
+meta := provider.ResolveModel("openai", "gpt-5", provider.ModelOverride{})
+meta.SupportsPDFInput = false
+
+a, err := agent.New(agent.Config{Model: "gpt-5", APIKey: key, Metadata: &meta})
+```
 
 ## Attachments
 

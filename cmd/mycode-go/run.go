@@ -82,23 +82,20 @@ func runCommand(args []string) int {
 	}
 
 	agent, err := agentpkg.New(agentpkg.Config{
-		Model:              resolvedProvider.Model,
-		Provider:           resolvedProvider.ProviderType,
-		CWD:                cwd,
-		Store:              store,
-		SessionID:          resolvedSession.ID,
-		APIKey:             resolvedProvider.APIKey,
-		APIBase:            resolvedProvider.APIBase,
-		System:             promptpkg.Build(cwd, settings.Project, config.ResolveHome()),
-		MaxTurns:           *maxTurns,
-		MaxOutputTokens:    resolvedProvider.Override.MaxOutputTokens,
-		ContextWindow:      resolvedProvider.Override.ContextWindow,
-		CompactThreshold:   settings.CompactThreshold,
-		DisableCompact:     settings.CompactThreshold <= 0,
-		ReasoningEffort:    resolvedProvider.ReasoningEffort,
-		SupportsImageInput: resolvedProvider.Override.SupportsImageInput,
-		SupportsPDFInput:   resolvedProvider.Override.SupportsPDFInput,
-		Tools:              []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
+		Model:            resolvedProvider.Model,
+		Provider:         resolvedProvider.ProviderType,
+		CWD:              cwd,
+		Store:            store,
+		SessionID:        resolvedSession.ID,
+		APIKey:           resolvedProvider.APIKey,
+		APIBase:          resolvedProvider.APIBase,
+		System:           promptpkg.Build(cwd, settings.Project, config.ResolveHome()),
+		MaxTurns:         *maxTurns,
+		Metadata:         &resolvedProvider.Metadata,
+		CompactThreshold: settings.CompactThreshold,
+		DisableCompact:   settings.CompactThreshold <= 0,
+		ReasoningEffort:  resolvedProvider.ReasoningEffort,
+		Tools:            []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 		Hooks: tools.Hooks{
 			BeforeTool: []tools.BeforeToolHook{
 				permissions.ToolHook(

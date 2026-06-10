@@ -46,11 +46,9 @@ type Config struct {
 	CompactThreshold float64
 	DisableCompact   bool
 
-	// Model capability overrides. Zero/nil resolves from the bundled catalog.
-	MaxOutputTokens    int
-	ContextWindow      int
-	SupportsImageInput *bool
-	SupportsPDFInput   *bool
+	// Model capabilities. Nil resolves from the bundled catalog (falling back
+	// to 16384 output tokens / 128000 context); set to use exactly these values.
+	Metadata *provider.ModelMetadata
 
 	// Session persistence (optional)
 	Store     *session.Store    // nil keeps the run in memory
@@ -62,12 +60,12 @@ type Config struct {
 type Agent struct {
 	// cfg is a private copy; newAgent fills defaults and resolved values into
 	// it, so callers never observe field rewrites.
-	cfg                Config
-	exec               *tools.Executor
-	adapter            provider.Adapter
-	transcriptPath     string
-	supportsImageInput bool
-	supportsPDFInput   bool
+	cfg            Config
+	exec           *tools.Executor
+	adapter        provider.Adapter
+	transcriptPath string
+	// meta is the resolved capability set with output/context defaults applied.
+	meta provider.ModelMetadata
 }
 
 // New fills defaults and returns a runnable Agent.
@@ -124,19 +122,16 @@ func newAgent(cfg Config, adapter provider.Adapter) (*Agent, error) {
 		a.adapter = found
 	}
 
-	// Resolve capabilities from the bundled catalog; Config fields override it.
-	meta := provider.ResolveModel(a.cfg.Provider, a.cfg.Model, provider.ModelOverride{
-		MaxOutputTokens:    a.cfg.MaxOutputTokens,
-		ContextWindow:      a.cfg.ContextWindow,
-		SupportsImageInput: a.cfg.SupportsImageInput,
-		SupportsPDFInput:   a.cfg.SupportsPDFInput,
-	})
-	a.cfg.MaxOutputTokens = cmp.Or(meta.MaxOutputTokens, 16384)
-	a.cfg.ContextWindow = cmp.Or(meta.ContextWindow, 128000)
-	a.supportsImageInput = meta.SupportsImageInput
-	a.supportsPDFInput = meta.SupportsPDFInput
+	// Capabilities: take Config.Metadata as-is, or resolve from the catalog.
+	if a.cfg.Metadata != nil {
+		a.meta = *a.cfg.Metadata
+	} else {
+		a.meta = provider.ResolveModel(a.cfg.Provider, a.cfg.Model, provider.ModelOverride{})
+	}
+	a.meta.MaxOutputTokens = cmp.Or(a.meta.MaxOutputTokens, 16384)
+	a.meta.ContextWindow = cmp.Or(a.meta.ContextWindow, 128000)
 
-	a.exec = tools.NewExecutor(a.cfg.CWD, toolOutputRoot, a.supportsImageInput)
+	a.exec = tools.NewExecutor(a.cfg.CWD, toolOutputRoot, a.meta.SupportsImageInput)
 
 	if a.cfg.DisableCompact {
 		a.cfg.CompactThreshold = 0
@@ -229,7 +224,7 @@ func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) iter
 			out.sendError("user input must be a user message")
 			return
 		}
-		if err := message.ValidateMediaSupport(userInput, a.supportsImageInput, a.supportsPDFInput); err != nil {
+		if err := message.ValidateMediaSupport(userInput, a.meta.SupportsImageInput, a.meta.SupportsPDFInput); err != nil {
 			out.sendError(err.Error())
 			return
 		}
@@ -265,7 +260,7 @@ func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) iter
 			if assistant.Meta == nil {
 				assistant.Meta = map[string]any{}
 			}
-			assistant.Meta["context_window"] = a.cfg.ContextWindow
+			assistant.Meta["context_window"] = a.meta.ContextWindow
 			totalTokens := asInt(assistant.Meta["total_tokens"])
 
 			a.cfg.Messages = append(a.cfg.Messages, message.Clone(*assistant))
@@ -278,7 +273,7 @@ func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) iter
 					"total_tokens":   totalTokens,
 					"model":          cmp.Or(asString(assistant.Meta["model"]), a.cfg.Model),
 					"provider":       cmp.Or(asString(assistant.Meta["provider"]), a.cfg.Provider),
-					"context_window": a.cfg.ContextWindow,
+					"context_window": a.meta.ContextWindow,
 				}})
 			}
 			if out.stopped {
@@ -330,13 +325,13 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out *emitter) (*message
 		Messages:           applyCompactReplay(a.cfg.Messages, a.transcriptPath),
 		System:             a.cfg.System,
 		Tools:              providerTools(a.cfg.Tools),
-		MaxTokens:          a.cfg.MaxOutputTokens,
+		MaxTokens:          a.meta.MaxOutputTokens,
 		Temperature:        a.cfg.Temperature,
 		APIKey:             a.cfg.APIKey,
 		APIBase:            a.cfg.APIBase,
 		ReasoningEffort:    a.cfg.ReasoningEffort,
-		SupportsImageInput: a.supportsImageInput,
-		SupportsPDFInput:   a.supportsPDFInput,
+		SupportsImageInput: a.meta.SupportsImageInput,
+		SupportsPDFInput:   a.meta.SupportsPDFInput,
 	}
 
 	var assistant *message.Message
@@ -409,7 +404,7 @@ func (a *Agent) cancelledAssistantMessage(blocks []message.Block, thinkingStarte
 	return new(message.BuildMessage("assistant", blocks, map[string]any{
 		"provider":       a.cfg.Provider,
 		"model":          a.cfg.Model,
-		"context_window": a.cfg.ContextWindow,
+		"context_window": a.meta.ContextWindow,
 	}))
 }
 
@@ -568,7 +563,7 @@ func (a *Agent) toolCall(toolCall message.Block, input map[string]any, emit tool
 // failures during compaction are swallowed — the next turn either retries or
 // surfaces the error from phase 1.
 func (a *Agent) compactIfNeeded(ctx context.Context, out *emitter, totalTokens int) bool {
-	if !shouldCompact(totalTokens, a.cfg.ContextWindow, a.cfg.CompactThreshold) {
+	if !shouldCompact(totalTokens, a.meta.ContextWindow, a.cfg.CompactThreshold) {
 		return false
 	}
 
@@ -582,12 +577,12 @@ func (a *Agent) compactIfNeeded(ctx context.Context, out *emitter, totalTokens i
 		SessionID:          a.cfg.SessionID,
 		Messages:           compactMessages,
 		System:             a.cfg.System,
-		MaxTokens:          min(a.cfg.MaxOutputTokens, 8192),
+		MaxTokens:          min(a.meta.MaxOutputTokens, 8192),
 		Temperature:        a.cfg.Temperature,
 		APIKey:             a.cfg.APIKey,
 		APIBase:            a.cfg.APIBase,
-		SupportsImageInput: a.supportsImageInput,
-		SupportsPDFInput:   a.supportsPDFInput,
+		SupportsImageInput: a.meta.SupportsImageInput,
+		SupportsPDFInput:   a.meta.SupportsPDFInput,
 	}
 
 	var summary *message.Message

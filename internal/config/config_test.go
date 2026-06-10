@@ -617,7 +617,7 @@ func TestResolveProviderUsesMetadataOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := provider.ResolveModel(resolved.ProviderType, resolved.Model, resolved.Override)
+	meta := resolved.Metadata
 	if meta.ContextWindow != 500000 || meta.MaxOutputTokens != 64000 || meta.SupportsReasoning || !meta.SupportsImageInput {
 		t.Fatalf("unexpected resolved metadata: %#v", meta)
 	}
