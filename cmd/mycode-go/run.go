@@ -93,7 +93,6 @@ func runCommand(args []string) int {
 		MaxTurns:         *maxTurns,
 		Metadata:         &resolvedProvider.Metadata,
 		CompactThreshold: settings.CompactThreshold,
-		DisableCompact:   settings.CompactThreshold <= 0,
 		ReasoningEffort:  resolvedProvider.ReasoningEffort,
 		Tools:            []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 		Hooks: tools.Hooks{

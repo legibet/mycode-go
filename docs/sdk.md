@@ -58,7 +58,7 @@ Config notes:
 - `Provider` may be empty when the model id is recognizable (`claude-*`, `gpt-*`, `gemini-*`, …); `New` infers it via `provider.InferProviderFromModel` and errors when it can't.
 - `Metadata` is the model capability set; see [Model Capabilities](#model-capabilities).
 - `Temperature` is an optional `*float64`: nil uses the provider default, otherwise the value (`0`–`1`) is sent.
-- `CompactThreshold` defaults to `agent.DefaultCompactThreshold`; set `DisableCompact` to turn automatic compaction off.
+- `CompactThreshold` is the fraction of the context window that triggers automatic compaction; `0` (the default) disables it.
 
 ## Model Capabilities
 

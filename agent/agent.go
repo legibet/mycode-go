@@ -43,8 +43,7 @@ type Config struct {
 	MaxTurns         int
 	Temperature      *float64
 	ReasoningEffort  string
-	CompactThreshold float64
-	DisableCompact   bool
+	CompactThreshold float64 // fraction of the context window that triggers compaction; 0 (default) disables it
 
 	// Model capabilities. Nil resolves from the bundled catalog (falling back
 	// to 16384 output tokens / 128000 context); set to use exactly these values.
@@ -133,11 +132,6 @@ func newAgent(cfg Config, adapter provider.Adapter) (*Agent, error) {
 
 	a.exec = tools.NewExecutor(a.cfg.CWD, toolOutputRoot, a.meta.SupportsImageInput)
 
-	if a.cfg.DisableCompact {
-		a.cfg.CompactThreshold = 0
-	} else if a.cfg.CompactThreshold == 0 {
-		a.cfg.CompactThreshold = DefaultCompactThreshold
-	}
 	if a.cfg.Temperature != nil {
 		if *a.cfg.Temperature < 0 || *a.cfg.Temperature > 1 {
 			return nil, errors.New("temperature must be between 0 and 1")

@@ -572,15 +572,15 @@ func TestToolOutputDirDefaultsToTempWithoutStore(t *testing.T) {
 	}
 }
 
-func TestCompactDefaultAndDisableBehavior(t *testing.T) {
+func TestCompactThresholdBehavior(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
-		disable      bool
+		threshold    float64
 		wantCompact  bool
 		wantReqCount int
 	}{
-		{name: "default", wantCompact: true, wantReqCount: 2},
-		{name: "disabled", disable: true, wantCompact: false, wantReqCount: 1},
+		{name: "explicit threshold compacts", threshold: 0.8, wantCompact: true, wantReqCount: 2},
+		{name: "zero default disables", wantCompact: false, wantReqCount: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			adapter := openAIAdapter(
@@ -594,11 +594,11 @@ func TestCompactDefaultAndDisableBehavior(t *testing.T) {
 				}},
 			)
 			runtime, err := newAgent(Config{
-				Provider:       "openai",
-				Model:          "gpt-5.4",
-				CWD:            t.TempDir(),
-				Metadata:       &provider.ModelMetadata{ContextWindow: 100},
-				DisableCompact: tc.disable,
+				Provider:         "openai",
+				Model:            "gpt-5.4",
+				CWD:              t.TempDir(),
+				Metadata:         &provider.ModelMetadata{ContextWindow: 100},
+				CompactThreshold: tc.threshold,
 			}, adapter)
 			if err != nil {
 				t.Fatal(err)

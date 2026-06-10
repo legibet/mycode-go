@@ -244,7 +244,6 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		System:           prompt.Build(cwd, settings.Project, config.ResolveHome()),
 		Metadata:         &resolved.Metadata,
 		CompactThreshold: settings.CompactThreshold,
-		DisableCompact:   settings.CompactThreshold <= 0,
 		ReasoningEffort:  resolved.ReasoningEffort,
 		Tools:            []tools.Spec{tools.Read, tools.Write, tools.Edit, tools.Bash},
 		Hooks: tools.Hooks{
