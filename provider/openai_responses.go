@@ -308,20 +308,18 @@ func (a openAIResponsesAdapter) serializeFallbackAssistantMessage(msg message.Me
 	return items
 }
 
-func (a openAIResponsesAdapter) serializeTool(tool map[string]any) (map[string]any, error) {
-	parameters := dumpJSONMap(tool["input_schema"])
+func (a openAIResponsesAdapter) serializeTool(tool ToolSpec) (map[string]any, error) {
+	parameters := dumpJSONMap(tool.InputSchema)
 	if parameters == nil {
 		parameters = map[string]any{"type": "object", "properties": map[string]any{}}
 	}
 	if err := normalizeStrictSchema(parameters); err != nil {
 		return nil, err
 	}
-	name, _ := tool["name"].(string)
-	description, _ := tool["description"].(string)
 	return map[string]any{
 		"type":        "function",
-		"name":        name,
-		"description": description,
+		"name":        tool.Name,
+		"description": tool.Description,
 		"parameters":  parameters,
 		"strict":      true,
 	}, nil

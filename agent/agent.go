@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"iter"
 	"maps"
 	"os"
 	"path/filepath"
@@ -46,7 +47,7 @@ type Config struct {
 	DisableCompact   bool
 
 	// Model capability overrides. Zero/nil resolves from the bundled catalog.
-	MaxTokens          int
+	MaxOutputTokens    int
 	ContextWindow      int
 	SupportsImageInput *bool
 	SupportsPDFInput   *bool
@@ -57,10 +58,11 @@ type Config struct {
 	Messages  []message.Message // explicit history; nil auto-resumes from Store; rejected when SessionID already exists
 }
 
-// Agent is the single orchestration loop. Construct via New so derived fields
-// are filled.
+// Agent is the single orchestration loop. Construct via New.
 type Agent struct {
-	Config
+	// cfg is a private copy; newAgent fills defaults and resolved values into
+	// it, so callers never observe field rewrites.
+	cfg                Config
 	exec               *tools.Executor
 	adapter            provider.Adapter
 	transcriptPath     string
@@ -76,86 +78,96 @@ func New(cfg Config) (*Agent, error) {
 // newAgent builds an Agent, optionally with an injected provider adapter so
 // tests can drive the loop without a real provider.
 func newAgent(cfg Config, adapter provider.Adapter) (*Agent, error) {
-	a := &Agent{Config: cfg, adapter: adapter}
-	if a.CWD == "" {
+	a := &Agent{cfg: cfg, adapter: adapter}
+	if a.cfg.CWD == "" {
 		if wd, err := os.Getwd(); err == nil {
-			a.CWD = wd
+			a.cfg.CWD = wd
 		} else {
-			a.CWD = "."
+			a.cfg.CWD = "."
 		}
 	}
-	a.CWD = resolvePath(a.CWD)
+	a.cfg.CWD = resolvePath(a.cfg.CWD)
 
-	if a.SessionID == "" {
-		a.SessionID = randomSessionID()
+	if a.cfg.SessionID == "" {
+		a.cfg.SessionID = randomSessionID()
 	}
 
 	// A configured Store turns on persistence: history auto-resumes, every
 	// message is appended, and the transcript path feeds the compact prompt.
-	toolOutputRoot := filepath.Join(os.TempDir(), "mycode", a.SessionID)
-	if a.Store != nil {
-		if a.Messages == nil {
-			data, err := a.Store.LoadSession(a.SessionID)
+	toolOutputRoot := filepath.Join(os.TempDir(), "mycode", a.cfg.SessionID)
+	if a.cfg.Store != nil {
+		if a.cfg.Messages == nil {
+			data, err := a.cfg.Store.LoadSession(a.cfg.SessionID)
 			if err != nil {
 				return nil, err
 			}
 			if data != nil {
-				a.Messages = data.Messages
+				a.cfg.Messages = data.Messages
 			}
-		} else if a.Store.SessionExists(a.SessionID) {
-			return nil, errors.New("session " + a.SessionID + " already exists on disk; leave Messages nil to resume or choose a different SessionID")
+		} else if a.cfg.Store.SessionExists(a.cfg.SessionID) {
+			return nil, errors.New("session " + a.cfg.SessionID + " already exists on disk; leave Messages nil to resume or choose a different SessionID")
 		}
-		a.transcriptPath = a.Store.MessagesPath(a.SessionID)
-		toolOutputRoot = a.Store.SessionDir(a.SessionID)
+		a.transcriptPath = a.cfg.Store.MessagesPath(a.cfg.SessionID)
+		toolOutputRoot = a.cfg.Store.SessionDir(a.cfg.SessionID)
 	}
 
 	if a.adapter == nil {
-		if a.Provider == "" {
-			if inferred, ok := provider.InferProviderFromModel(a.Model); ok {
-				a.Provider = inferred
+		if a.cfg.Provider == "" {
+			if inferred, ok := provider.InferProviderFromModel(a.cfg.Model); ok {
+				a.cfg.Provider = inferred
 			}
 		}
-		found, ok := provider.LookupAdapter(a.Provider)
+		found, ok := provider.LookupAdapter(a.cfg.Provider)
 		if !ok {
-			return nil, errors.New("unsupported provider adapter: " + a.Provider)
+			return nil, errors.New("unsupported provider adapter: " + a.cfg.Provider)
 		}
 		a.adapter = found
 	}
 
 	// Resolve capabilities from the bundled catalog; Config fields override it.
-	meta := provider.ResolveModel(a.Provider, a.Model, provider.ModelOverride{
-		MaxOutputTokens:    a.MaxTokens,
-		ContextWindow:      a.ContextWindow,
-		SupportsImageInput: a.SupportsImageInput,
-		SupportsPDFInput:   a.SupportsPDFInput,
+	meta := provider.ResolveModel(a.cfg.Provider, a.cfg.Model, provider.ModelOverride{
+		MaxOutputTokens:    a.cfg.MaxOutputTokens,
+		ContextWindow:      a.cfg.ContextWindow,
+		SupportsImageInput: a.cfg.SupportsImageInput,
+		SupportsPDFInput:   a.cfg.SupportsPDFInput,
 	})
-	a.MaxTokens = cmp.Or(meta.MaxOutputTokens, 16384)
-	a.ContextWindow = cmp.Or(meta.ContextWindow, 128000)
+	a.cfg.MaxOutputTokens = cmp.Or(meta.MaxOutputTokens, 16384)
+	a.cfg.ContextWindow = cmp.Or(meta.ContextWindow, 128000)
 	a.supportsImageInput = meta.SupportsImageInput
 	a.supportsPDFInput = meta.SupportsPDFInput
 
-	a.exec = tools.NewExecutor(a.CWD, toolOutputRoot, a.supportsImageInput)
+	a.exec = tools.NewExecutor(a.cfg.CWD, toolOutputRoot, a.supportsImageInput)
 
-	if a.DisableCompact {
-		a.CompactThreshold = 0
-	} else if a.CompactThreshold == 0 {
-		a.CompactThreshold = DefaultCompactThreshold
+	if a.cfg.DisableCompact {
+		a.cfg.CompactThreshold = 0
+	} else if a.cfg.CompactThreshold == 0 {
+		a.cfg.CompactThreshold = DefaultCompactThreshold
 	}
-	if a.Temperature != nil {
-		if *a.Temperature < 0 || *a.Temperature > 1 {
+	if a.cfg.Temperature != nil {
+		if *a.cfg.Temperature < 0 || *a.cfg.Temperature > 1 {
 			return nil, errors.New("temperature must be between 0 and 1")
 		}
 		// Anthropic-family providers reject a custom temperature while thinking.
-		if *a.Temperature != 1 && a.ReasoningEffort != "" && a.ReasoningEffort != "none" {
-			switch a.Provider {
+		if *a.cfg.Temperature != 1 && a.cfg.ReasoningEffort != "" && a.cfg.ReasoningEffort != "none" {
+			switch a.cfg.Provider {
 			case "anthropic", "moonshotai", "minimax":
-				return nil, errors.New(a.Provider + " does not support custom temperature when thinking is enabled")
+				return nil, errors.New(a.cfg.Provider + " does not support custom temperature when thinking is enabled")
 			}
 		}
 	}
 
-	a.Messages = message.CloneMessages(a.Messages)
+	a.cfg.Messages = message.CloneMessages(a.cfg.Messages)
 	return a, nil
+}
+
+// SessionID returns the session id, generated when Config left it empty.
+func (a *Agent) SessionID() string {
+	return a.cfg.SessionID
+}
+
+// Messages returns a copy of the conversation history accumulated so far.
+func (a *Agent) Messages() []message.Message {
+	return message.CloneMessages(a.cfg.Messages)
 }
 
 // Cancel stops active tools. Provider cancellation is driven by ctx.
@@ -165,90 +177,112 @@ func (a *Agent) Cancel() {
 
 // persist appends one message to the configured store, if any.
 func (a *Agent) persist(msg message.Message) error {
-	if a.Store == nil {
+	if a.cfg.Store == nil {
 		return nil
 	}
-	return a.Store.AppendMessage(a.SessionID, msg, a.CWD)
+	return a.cfg.Store.AppendMessage(a.cfg.SessionID, msg, a.cfg.CWD)
+}
+
+// emitter bridges the loop's event pushes to the consumer's pull. Once the
+// consumer stops iterating, send drops further events and stopped stays true
+// so the loop can unwind without calling yield again.
+type emitter struct {
+	yield   func(Event) bool
+	stopped bool
+}
+
+func (e *emitter) send(event Event) {
+	if !e.stopped {
+		e.stopped = !e.yield(event)
+	}
+}
+
+func (e *emitter) sendError(msg string) {
+	e.send(Event{Type: "error", Data: map[string]any{"message": msg}})
 }
 
 // Chat runs one user turn from a prompt string, optionally with attachments
 // resolved against the agent's CWD. It is the convenient entry point; use
 // ChatMessage to pass a fully built message (e.g. multi-modal content).
-func (a *Agent) Chat(ctx context.Context, prompt string, attachments ...attachment.Attachment) <-chan Event {
+func (a *Agent) Chat(ctx context.Context, prompt string, attachments ...attachment.Attachment) iter.Seq[Event] {
 	blocks := []message.Block{message.TextBlock(prompt, nil)}
 	if len(attachments) > 0 {
-		attached, err := attachment.Build(attachments, attachment.Options{CWD: a.CWD})
+		attached, err := attachment.Build(attachments, attachment.Options{CWD: a.cfg.CWD})
 		if err != nil {
-			out := make(chan Event, 1)
-			a.emitError(out, err.Error())
-			close(out)
-			return out
+			return func(yield func(Event) bool) {
+				yield(Event{Type: "error", Data: map[string]any{"message": err.Error()}})
+			}
 		}
 		blocks = append(blocks, attached...)
 	}
 	return a.ChatMessage(ctx, message.BuildMessage("user", blocks, nil))
 }
 
-// ChatMessage runs one user turn from a fully built user message.
-func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) <-chan Event {
-	out := make(chan Event, 32)
-	go func() {
-		defer close(out)
+// ChatMessage runs one user turn from a fully built user message. The turn
+// loops provider → tool calls → provider until the assistant stops calling
+// tools. Breaking out of the iteration stops the loop at the next phase
+// boundary; cancel ctx to interrupt a provider stream or running tool.
+func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) iter.Seq[Event] {
+	return func(yield func(Event) bool) {
+		out := &emitter{yield: yield}
 		if userInput.Role != "user" {
-			a.emitError(out, "user input must be a user message")
+			out.sendError("user input must be a user message")
 			return
 		}
 		if err := message.ValidateMediaSupport(userInput, a.supportsImageInput, a.supportsPDFInput); err != nil {
-			a.emitError(out, err.Error())
+			out.sendError(err.Error())
 			return
 		}
 
-		a.Messages = append(a.Messages, message.Clone(userInput))
+		a.cfg.Messages = append(a.cfg.Messages, message.Clone(userInput))
 		if err := a.persist(userInput); err != nil {
-			a.emitError(out, err.Error())
+			out.sendError(err.Error())
 			return
 		}
 
-		for turn := 0; a.MaxTurns <= 0 || turn < a.MaxTurns; turn++ {
+		for turn := 0; a.cfg.MaxTurns <= 0 || turn < a.cfg.MaxTurns; turn++ {
 			assistant, cancelled, err := a.streamAssistantTurn(ctx, out)
 			if err != nil {
-				a.emitError(out, err.Error())
+				out.sendError(err.Error())
 				return
 			}
 			if cancelled {
 				if assistant != nil {
-					a.Messages = append(a.Messages, message.Clone(*assistant))
+					a.cfg.Messages = append(a.cfg.Messages, message.Clone(*assistant))
 					if err := a.persist(*assistant); err != nil {
-						a.emitError(out, err.Error())
+						out.sendError(err.Error())
 						return
 					}
 				}
-				a.emitError(out, "cancelled")
+				out.sendError("cancelled")
 				return
 			}
 			if assistant == nil {
-				a.emitError(out, "provider produced no assistant message")
+				out.sendError("provider produced no assistant message")
 				return
 			}
 
 			if assistant.Meta == nil {
 				assistant.Meta = map[string]any{}
 			}
-			assistant.Meta["context_window"] = a.ContextWindow
+			assistant.Meta["context_window"] = a.cfg.ContextWindow
 			totalTokens := asInt(assistant.Meta["total_tokens"])
 
-			a.Messages = append(a.Messages, message.Clone(*assistant))
+			a.cfg.Messages = append(a.cfg.Messages, message.Clone(*assistant))
 			if err := a.persist(*assistant); err != nil {
-				a.emitError(out, err.Error())
+				out.sendError(err.Error())
 				return
 			}
 			if totalTokens > 0 {
-				out <- Event{Type: "usage", Data: map[string]any{
+				out.send(Event{Type: "usage", Data: map[string]any{
 					"total_tokens":   totalTokens,
-					"model":          cmp.Or(asString(assistant.Meta["model"]), a.Model),
-					"provider":       cmp.Or(asString(assistant.Meta["provider"]), a.Provider),
-					"context_window": a.ContextWindow,
-				}}
+					"model":          cmp.Or(asString(assistant.Meta["model"]), a.cfg.Model),
+					"provider":       cmp.Or(asString(assistant.Meta["provider"]), a.cfg.Provider),
+					"context_window": a.cfg.ContextWindow,
+				}})
+			}
+			if out.stopped {
+				return
 			}
 
 			toolCalls := make([]message.Block, 0, len(assistant.Content))
@@ -260,20 +294,20 @@ func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) <-ch
 			if len(toolCalls) > 0 {
 				toolMessage, cancelled := a.executeToolCalls(ctx, toolCalls, out)
 				if len(toolMessage.Content) > 0 {
-					a.Messages = append(a.Messages, toolMessage)
+					a.cfg.Messages = append(a.cfg.Messages, toolMessage)
 					if err := a.persist(toolMessage); err != nil {
-						a.emitError(out, err.Error())
+						out.sendError(err.Error())
 						return
 					}
 				}
 				if cancelled {
 					if len(toolMessage.Content) == 0 {
-						a.emitError(out, "cancelled")
+						out.sendError("cancelled")
 					}
 					return
 				}
 			}
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || out.stopped {
 				return
 			}
 			if a.compactIfNeeded(ctx, out, totalTokens) {
@@ -284,24 +318,23 @@ func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) <-ch
 			}
 		}
 
-		a.emitError(out, "max_turns reached")
-	}()
-	return out
+		out.sendError("max_turns reached")
+	}
 }
 
-func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*message.Message, bool, error) {
+func (a *Agent) streamAssistantTurn(ctx context.Context, out *emitter) (*message.Message, bool, error) {
 	req := provider.Request{
-		Provider:           a.Provider,
-		Model:              a.Model,
-		SessionID:          a.SessionID,
-		Messages:           ApplyCompactReplay(a.Messages, a.transcriptPath),
-		System:             a.System,
-		Tools:              toolSpecs(a.providerToolSpecs()),
-		MaxTokens:          a.MaxTokens,
-		Temperature:        a.Temperature,
-		APIKey:             a.APIKey,
-		APIBase:            a.APIBase,
-		ReasoningEffort:    a.ReasoningEffort,
+		Provider:           a.cfg.Provider,
+		Model:              a.cfg.Model,
+		SessionID:          a.cfg.SessionID,
+		Messages:           applyCompactReplay(a.cfg.Messages, a.transcriptPath),
+		System:             a.cfg.System,
+		Tools:              providerTools(a.cfg.Tools),
+		MaxTokens:          a.cfg.MaxOutputTokens,
+		Temperature:        a.cfg.Temperature,
+		APIKey:             a.cfg.APIKey,
+		APIBase:            a.cfg.APIBase,
+		ReasoningEffort:    a.cfg.ReasoningEffort,
 		SupportsImageInput: a.supportsImageInput,
 		SupportsPDFInput:   a.supportsPDFInput,
 	}
@@ -322,25 +355,25 @@ func (a *Agent) streamAssistantTurn(ctx context.Context, out chan<- Event) (*mes
 				} else {
 					partialContent = append(partialContent, message.ThinkingBlock(event.Text, nil))
 				}
-				out <- Event{Type: "reasoning", Data: map[string]any{"delta": event.Text}}
+				out.send(Event{Type: "reasoning", Data: map[string]any{"delta": event.Text}})
 			}
 		case "text_delta":
 			if event.Text != "" {
 				if !thinkingStartedAt.IsZero() && thinkingDurationMs < 0 {
 					thinkingDurationMs = max(0, int(time.Since(thinkingStartedAt).Milliseconds()))
-					out <- Event{Type: "reasoning_done", Data: map[string]any{"duration_ms": thinkingDurationMs}}
+					out.send(Event{Type: "reasoning_done", Data: map[string]any{"duration_ms": thinkingDurationMs}})
 				}
 				if len(partialContent) > 0 && partialContent[len(partialContent)-1].Type == "text" {
 					partialContent[len(partialContent)-1].Text += event.Text
 				} else {
 					partialContent = append(partialContent, message.TextBlock(event.Text, nil))
 				}
-				out <- Event{Type: "text", Data: map[string]any{"delta": event.Text}}
+				out.send(Event{Type: "text", Data: map[string]any{"delta": event.Text}})
 			}
 		case "message_done":
 			if !thinkingStartedAt.IsZero() && thinkingDurationMs < 0 {
 				thinkingDurationMs = max(0, int(time.Since(thinkingStartedAt).Milliseconds()))
-				out <- Event{Type: "reasoning_done", Data: map[string]any{"duration_ms": thinkingDurationMs}}
+				out.send(Event{Type: "reasoning_done", Data: map[string]any{"duration_ms": thinkingDurationMs}})
 			}
 			assistant = event.Msg
 		case "provider_error":
@@ -374,9 +407,9 @@ func (a *Agent) cancelledAssistantMessage(blocks []message.Block, thinkingStarte
 	applyThinkingDuration(blocks, thinkingDurationMs)
 
 	return new(message.BuildMessage("assistant", blocks, map[string]any{
-		"provider":       a.Provider,
-		"model":          a.Model,
-		"context_window": a.ContextWindow,
+		"provider":       a.cfg.Provider,
+		"model":          a.cfg.Model,
+		"context_window": a.cfg.ContextWindow,
 	}))
 }
 
@@ -396,7 +429,7 @@ func applyThinkingDuration(blocks []message.Block, durationMs int) {
 	}
 }
 
-func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block, out chan<- Event) (message.Message, bool) {
+func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block, out *emitter) (message.Message, bool) {
 	toolResults := make([]message.Block, 0, len(toolCalls))
 	appendResult := func(toolCall message.Block, result tools.Result) {
 		toolResults = append(toolResults, message.ToolResultBlock(
@@ -419,7 +452,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 		if len(result.Content) > 0 {
 			data["content"] = result.Content
 		}
-		out <- Event{Type: "tool_done", Data: data}
+		out.send(Event{Type: "tool_done", Data: data})
 	}
 
 	for _, toolCall := range toolCalls {
@@ -427,16 +460,16 @@ func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []message.Block,
 		if input == nil {
 			input = map[string]any{}
 		}
-		out <- Event{Type: "tool_start", Data: map[string]any{
+		out.send(Event{Type: "tool_start", Data: map[string]any{
 			"tool_call": map[string]any{
 				"id":    toolCall.ID,
 				"name":  toolCall.Name,
 				"input": input,
 			},
-		}}
+		}})
 
 		toolCall.Input = input
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || out.stopped {
 			appendResult(toolCall, tools.Result{Output: "error: cancelled", IsError: true})
 			return message.BuildMessage("user", toolResults, nil), true
 		}
@@ -470,7 +503,7 @@ func randomSessionID() string {
 }
 
 func (a *Agent) lookupToolSpec(name string) (tools.Spec, bool) {
-	for _, spec := range a.providerToolSpecs() {
+	for _, spec := range a.cfg.Tools {
 		if spec.Name == name {
 			return spec, true
 		}
@@ -479,7 +512,7 @@ func (a *Agent) lookupToolSpec(name string) (tools.Spec, bool) {
 }
 
 func (a *Agent) runBeforeToolHooks(ctx context.Context, call tools.ToolCall) (tools.Result, bool) {
-	for _, hook := range a.Hooks.BeforeTool {
+	for _, hook := range a.cfg.Hooks.BeforeTool {
 		if result, handled := hook(ctx, call); handled {
 			return result, true
 		}
@@ -488,7 +521,7 @@ func (a *Agent) runBeforeToolHooks(ctx context.Context, call tools.ToolCall) (to
 }
 
 func (a *Agent) runAfterToolHooks(ctx context.Context, call tools.ToolCall, result tools.Result) tools.Result {
-	for _, hook := range a.Hooks.AfterTool {
+	for _, hook := range a.cfg.Hooks.AfterTool {
 		if next, replaced := hook(ctx, call, result); replaced {
 			result = next
 		}
@@ -496,7 +529,7 @@ func (a *Agent) runAfterToolHooks(ctx context.Context, call tools.ToolCall, resu
 	return result
 }
 
-func (a *Agent) runToolSpec(ctx context.Context, toolCall message.Block, spec tools.Spec, out chan<- Event) tools.Result {
+func (a *Agent) runToolSpec(ctx context.Context, toolCall message.Block, spec tools.Spec, out *emitter) tools.Result {
 	var emitted []string
 	var emit tools.OutputCallback
 	if spec.StreamsOutput {
@@ -505,10 +538,10 @@ func (a *Agent) runToolSpec(ctx context.Context, toolCall message.Block, spec to
 				return
 			}
 			emitted = append(emitted, text)
-			out <- Event{Type: "tool_output", Data: map[string]any{
+			out.send(Event{Type: "tool_output", Data: map[string]any{
 				"tool_use_id": toolCall.ID,
 				"output":      text,
-			}}
+			}})
 		}
 	}
 	result := a.exec.Run(ctx, spec, toolCall.ID, toolCall.Input, emit)
@@ -525,38 +558,34 @@ func (a *Agent) toolCall(toolCall message.Block, input map[string]any, emit tool
 		ID:    toolCall.ID,
 		Name:  toolCall.Name,
 		Input: maps.Clone(input),
-		CWD:   a.CWD,
+		CWD:   a.cfg.CWD,
 		Emit:  emit,
 	}
-}
-
-func (a *Agent) emitError(out chan<- Event, msg string) {
-	out <- Event{Type: "error", Data: map[string]any{"message": msg}}
 }
 
 // compactIfNeeded triggers compaction when the latest turn crosses the
 // threshold. Returns true to stop the agent loop (cancellation). Provider
 // failures during compaction are swallowed — the next turn either retries or
 // surfaces the error from phase 1.
-func (a *Agent) compactIfNeeded(ctx context.Context, out chan<- Event, totalTokens int) bool {
-	if !ShouldCompact(totalTokens, a.ContextWindow, a.CompactThreshold) {
+func (a *Agent) compactIfNeeded(ctx context.Context, out *emitter, totalTokens int) bool {
+	if !shouldCompact(totalTokens, a.cfg.ContextWindow, a.cfg.CompactThreshold) {
 		return false
 	}
 
 	compactMessages := slices.Concat(
-		ApplyCompactReplay(a.Messages, a.transcriptPath),
-		[]message.Message{message.UserTextMessage(CompactSummaryPrompt, nil)},
+		applyCompactReplay(a.cfg.Messages, a.transcriptPath),
+		[]message.Message{message.UserTextMessage(compactSummaryPrompt, nil)},
 	)
 	req := provider.Request{
-		Provider:           a.Provider,
-		Model:              a.Model,
-		SessionID:          a.SessionID,
+		Provider:           a.cfg.Provider,
+		Model:              a.cfg.Model,
+		SessionID:          a.cfg.SessionID,
 		Messages:           compactMessages,
-		System:             a.System,
-		MaxTokens:          min(a.MaxTokens, 8192),
-		Temperature:        a.Temperature,
-		APIKey:             a.APIKey,
-		APIBase:            a.APIBase,
+		System:             a.cfg.System,
+		MaxTokens:          min(a.cfg.MaxOutputTokens, 8192),
+		Temperature:        a.cfg.Temperature,
+		APIKey:             a.cfg.APIKey,
+		APIBase:            a.cfg.APIBase,
 		SupportsImageInput: a.supportsImageInput,
 		SupportsPDFInput:   a.supportsPDFInput,
 	}
@@ -568,7 +597,7 @@ func (a *Agent) compactIfNeeded(ctx context.Context, out chan<- Event, totalToke
 		}
 	}
 	if ctx.Err() != nil {
-		a.emitError(out, "cancelled")
+		out.sendError("cancelled")
 		return true
 	}
 	if summary == nil {
@@ -578,26 +607,22 @@ func (a *Agent) compactIfNeeded(ctx context.Context, out chan<- Event, totalToke
 	if summaryText == "" {
 		return false
 	}
-	compactEvent := BuildCompactEvent(summaryText, a.Provider, a.Model, asInt(summary.Meta["total_tokens"]))
+	compactEvent := buildCompactEvent(summaryText, a.cfg.Provider, a.cfg.Model, asInt(summary.Meta["total_tokens"]))
 	if err := a.persist(compactEvent); err != nil {
 		return false
 	}
-	a.Messages = append(a.Messages, compactEvent)
-	out <- Event{Type: "compact", Data: map[string]any{}}
+	a.cfg.Messages = append(a.cfg.Messages, compactEvent)
+	out.send(Event{Type: "compact", Data: map[string]any{}})
 	return false
 }
 
-func (a *Agent) providerToolSpecs() []tools.Spec {
-	return a.Tools
-}
-
-func toolSpecs(specs []tools.Spec) []map[string]any {
-	out := make([]map[string]any, 0, len(specs))
+func providerTools(specs []tools.Spec) []provider.ToolSpec {
+	out := make([]provider.ToolSpec, 0, len(specs))
 	for _, spec := range specs {
-		out = append(out, map[string]any{
-			"name":         spec.Name,
-			"description":  spec.Description,
-			"input_schema": spec.InputSchema,
+		out = append(out, provider.ToolSpec{
+			Name:        spec.Name,
+			Description: spec.Description,
+			InputSchema: spec.InputSchema,
 		})
 	}
 	return out

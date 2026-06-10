@@ -15,6 +15,13 @@ import (
 
 const defaultRequestTimeout = 300 * time.Second
 
+// ToolSpec is one tool exposed to the provider.
+type ToolSpec struct {
+	Name        string
+	Description string
+	InputSchema map[string]any
+}
+
 // Request is one provider turn request.
 type Request struct {
 	Provider           string
@@ -22,7 +29,7 @@ type Request struct {
 	SessionID          string
 	Messages           []message.Message
 	System             string
-	Tools              []map[string]any
+	Tools              []ToolSpec
 	MaxTokens          int
 	Temperature        *float64
 	APIKey             string

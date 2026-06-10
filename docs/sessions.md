@@ -91,7 +91,7 @@ When `Store.LoadSession(sessionID)` runs:
 1. Read all JSONL lines into a raw list.
 2. Apply rewind markers sequentially.
 
-`LoadSession` returns the raw timeline minus rewound tails as the visible history. `compact` records stay in place as inline markers. The agent substitutes the latest compact marker into provider context lazily on each request via `ApplyCompactReplay`. Orphan `tool_use` blocks left by an interrupted run are closed by the provider adapter when messages are replayed, not by the loader.
+`LoadSession` returns the raw timeline minus rewound tails as the visible history. `compact` records stay in place as inline markers. The agent substitutes the latest compact marker into provider context lazily on each request via `applyCompactReplay`. Orphan `tool_use` blocks left by an interrupted run are closed by the provider adapter when messages are replayed, not by the loader.
 
 ## Context Compaction
 
@@ -107,7 +107,7 @@ If the summary request fails or returns no text, no `compact` record is persiste
 
 ### Provider projection
 
-Visible state preserves pre-compact history and `compact` markers. Before each provider request, `ApplyCompactReplay` rebuilds a provider-facing view:
+Visible state preserves pre-compact history and `compact` markers. Before each provider request, `applyCompactReplay` rebuilds a provider-facing view:
 
 - finds the last `compact` marker
 - replaces everything up to and including that marker with one synthetic `user` message that frames the continuation, embeds the summary text, and points at the original JSONL transcript when available

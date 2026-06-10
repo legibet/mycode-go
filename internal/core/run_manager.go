@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 	"sync"
@@ -84,7 +85,7 @@ type runSnapshot struct {
 // runAgent is the agent behavior RunManager drives. *agent.Agent satisfies it;
 // tests provide a fake.
 type runAgent interface {
-	ChatMessage(ctx context.Context, msg message.Message) <-chan agentpkg.Event
+	ChatMessage(ctx context.Context, msg message.Message) iter.Seq[agentpkg.Event]
 	Cancel()
 }
 

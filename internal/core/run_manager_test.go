@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"iter"
 	"testing"
 	"time"
 
@@ -18,12 +19,12 @@ type fakeRunAgent struct {
 	after   []agentpkg.Event
 }
 
-func (f *fakeRunAgent) ChatMessage(ctx context.Context, _ message.Message) <-chan agentpkg.Event {
-	out := make(chan agentpkg.Event, 8)
-	go func() {
-		defer close(out)
+func (f *fakeRunAgent) ChatMessage(ctx context.Context, _ message.Message) iter.Seq[agentpkg.Event] {
+	return func(yield func(agentpkg.Event) bool) {
 		for _, event := range f.before {
-			out <- event
+			if !yield(event) {
+				return
+			}
 		}
 		if f.release != nil {
 			select {
@@ -33,10 +34,11 @@ func (f *fakeRunAgent) ChatMessage(ctx context.Context, _ message.Message) <-cha
 			}
 		}
 		for _, event := range f.after {
-			out <- event
+			if !yield(event) {
+				return
+			}
 		}
-	}()
-	return out
+	}
 }
 
 func (f *fakeRunAgent) Cancel() {}

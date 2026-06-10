@@ -119,10 +119,10 @@ func TestAnthropicConvertMessageKeepsStopSequenceAndServiceTier(t *testing.T) {
 func TestOpenAIResponsesSerializeToolMakesOptionalFieldsNullable(t *testing.T) {
 	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
 	read := tools.Read
-	readTool, err := adapter.serializeTool(map[string]any{
-		"name":         read.Name,
-		"description":  read.Description,
-		"input_schema": read.InputSchema,
+	readTool, err := adapter.serializeTool(ToolSpec{
+		Name:        read.Name,
+		Description: read.Description,
+		InputSchema: read.InputSchema,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestOpenAIResponsesSerializeToolMakesOptionalFieldsNullable(t *testing.T) {
 
 func TestOpenAIResponsesSerializeToolDefaultsMissingSchema(t *testing.T) {
 	adapter := newOpenAIResponsesAdapter().(openAIResponsesAdapter)
-	tool, err := adapter.serializeTool(map[string]any{})
+	tool, err := adapter.serializeTool(ToolSpec{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,10 +167,10 @@ func TestOpenAIResponsesSerializesNestedStrictToolSchemas(t *testing.T) {
 		Messages: []message.Message{
 			message.UserTextMessage("hello", nil),
 		},
-		Tools: []map[string]any{{
-			"name":        "patch",
-			"description": "Patch a file.",
-			"input_schema": map[string]any{
+		Tools: []ToolSpec{{
+			Name:        "patch",
+			Description: "Patch a file.",
+			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"path":  map[string]any{"type": "string"},
@@ -236,10 +236,10 @@ func TestOpenAIResponsesRejectsDynamicObjectToolSchemas(t *testing.T) {
 		Messages: []message.Message{
 			message.UserTextMessage("hello", nil),
 		},
-		Tools: []map[string]any{{
-			"name":        "search",
-			"description": "Search entries.",
-			"input_schema": map[string]any{
+		Tools: []ToolSpec{{
+			Name:        "search",
+			Description: "Search entries.",
+			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"filters": map[string]any{
@@ -1050,11 +1050,11 @@ func TestGoogleBuildConfigUsesSupportedToolSettings(t *testing.T) {
 		Model:     "gemini-3-flash-preview",
 		System:    "You are helpful.",
 		MaxTokens: 2048,
-		Tools: []map[string]any{
+		Tools: []ToolSpec{
 			{
-				"name":        "read",
-				"description": "Read a file.",
-				"input_schema": map[string]any{
+				Name:        "read",
+				Description: "Read a file.",
+				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"path": map[string]any{"type": "string"},
@@ -1092,8 +1092,8 @@ func TestGoogleBuildConfigOmitsUnsupportedExtrasProvider(t *testing.T) {
 		Model:     "gemini-3-flash-preview",
 		System:    "You are helpful.",
 		MaxTokens: 2048,
-		Tools: []map[string]any{
-			{"name": "read", "description": "Read a file.", "input_schema": map[string]any{"type": "object"}},
+		Tools: []ToolSpec{
+			{Name: "read", Description: "Read a file.", InputSchema: map[string]any{"type": "object"}},
 		},
 		ReasoningEffort: "none",
 	})

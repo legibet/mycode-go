@@ -30,15 +30,18 @@ func TestPublicAgentTemperatureValidation(t *testing.T) {
 }
 
 func TestPublicAgentInfersProviderFromModel(t *testing.T) {
-	runtime, err := agent.New(agent.Config{
+	if _, err := agent.New(agent.Config{
 		Model: "claude-opus-4-7",
 		CWD:   t.TempDir(),
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("agent.New returned error: %v", err)
 	}
-	if runtime.Provider != "anthropic" {
-		t.Fatalf("inferred provider = %q, want anthropic", runtime.Provider)
+
+	if _, err := agent.New(agent.Config{
+		Model: "mystery-model",
+		CWD:   t.TempDir(),
+	}); err == nil {
+		t.Fatal("expected unsupported provider error for unrecognizable model")
 	}
 }
 

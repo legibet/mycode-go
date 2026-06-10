@@ -243,7 +243,7 @@ func (s *Service) StartChat(req ChatRequest) (ChatResponse, error) {
 		APIKey:             resolved.APIKey,
 		APIBase:            resolved.APIBase,
 		System:             prompt.Build(cwd, settings.Project, config.ResolveHome()),
-		MaxTokens:          resolved.Override.MaxOutputTokens,
+		MaxOutputTokens:    resolved.Override.MaxOutputTokens,
 		ContextWindow:      resolved.Override.ContextWindow,
 		CompactThreshold:   settings.CompactThreshold,
 		DisableCompact:     settings.CompactThreshold <= 0,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"iter"
 	"os"
 	"strings"
 
@@ -90,7 +91,7 @@ func runCommand(args []string) int {
 		APIBase:            resolvedProvider.APIBase,
 		System:             promptpkg.Build(cwd, settings.Project, config.ResolveHome()),
 		MaxTurns:           *maxTurns,
-		MaxTokens:          resolvedProvider.Override.MaxOutputTokens,
+		MaxOutputTokens:    resolvedProvider.Override.MaxOutputTokens,
 		ContextWindow:      resolvedProvider.Override.ContextWindow,
 		CompactThreshold:   settings.CompactThreshold,
 		DisableCompact:     settings.CompactThreshold <= 0,
@@ -131,7 +132,7 @@ func runCommand(args []string) int {
 
 // chatAgent is the agent behavior runNoninteractive needs.
 type chatAgent interface {
-	ChatMessage(ctx context.Context, msg message.Message) <-chan agentpkg.Event
+	ChatMessage(ctx context.Context, msg message.Message) iter.Seq[agentpkg.Event]
 }
 
 // runNoninteractive drives one turn and returns the final assistant text plus

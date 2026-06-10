@@ -119,9 +119,9 @@ func (a anthropicAdapter) buildPayload(req Request) (map[string]any, error) {
 		tools := make([]map[string]any, 0, len(req.Tools))
 		for _, tool := range req.Tools {
 			tools = append(tools, map[string]any{
-				"name":         tool["name"],
-				"description":  tool["description"],
-				"input_schema": tool["input_schema"],
+				"name":         tool.Name,
+				"description":  tool.Description,
+				"input_schema": tool.InputSchema,
 			})
 		}
 		payload["tools"] = tools

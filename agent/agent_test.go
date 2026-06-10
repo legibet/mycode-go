@@ -2,11 +2,11 @@ package agent
 
 import (
 	"context"
+	"iter"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/legibet/mycode-go/attachment"
 	"github.com/legibet/mycode-go/internal/config"
@@ -71,7 +71,7 @@ func newTestStore(t *testing.T) *session.Store {
 	return store
 }
 
-func collectEvents(stream <-chan Event) []Event {
+func collectEvents(stream iter.Seq[Event]) []Event {
 	events := []Event{}
 	for event := range stream {
 		events = append(events, event)
@@ -110,7 +110,7 @@ func TestChatPersistsReasoningBlocks(t *testing.T) {
 		CWD:                t.TempDir(),
 		Store:              store,
 		SessionID:          "session",
-		MaxTokens:          4096,
+		MaxOutputTokens:    4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: new(true),
@@ -158,7 +158,7 @@ func TestChatPersistsPartialAssistantOnProviderCancel(t *testing.T) {
 		CWD:                t.TempDir(),
 		Store:              store,
 		SessionID:          "session",
-		MaxTokens:          4096,
+		MaxOutputTokens:    4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: new(true),
@@ -169,19 +169,25 @@ func TestChatPersistsPartialAssistantOnProviderCancel(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	stream := agent.Chat(ctx, "hello")
+	next, stop := iter.Pull(agent.Chat(ctx, "hello"))
+	defer stop()
 
-	var first Event
-	select {
-	case first = <-stream:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for first event")
+	first, ok := next()
+	if !ok {
+		t.Fatal("missing first event")
 	}
 	if first.Type != "reasoning" || first.Data["delta"] != "working" {
 		t.Fatalf("unexpected first event: %#v", first)
 	}
 	cancel()
-	remaining := collectEvents(stream)
+	remaining := []Event{}
+	for {
+		event, ok := next()
+		if !ok {
+			break
+		}
+		remaining = append(remaining, event)
+	}
 
 	if len(remaining) != 1 || remaining[0].Type != "error" || remaining[0].Data["message"] != "cancelled" {
 		t.Fatalf("unexpected remaining events: %#v", remaining)
@@ -215,7 +221,7 @@ func TestChatRespectsExplicitTurnLimit(t *testing.T) {
 		Provider:           "openai",
 		CWD:                t.TempDir(),
 		MaxTurns:           2,
-		MaxTokens:          4096,
+		MaxOutputTokens:    4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: new(true),
@@ -256,7 +262,7 @@ func TestChatPassesSessionIDToProviderRequest(t *testing.T) {
 		Provider:           "openai",
 		CWD:                t.TempDir(),
 		SessionID:          "session-explicit",
-		MaxTokens:          4096,
+		MaxOutputTokens:    4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: new(true),
@@ -279,7 +285,7 @@ func TestChatDeniesToolOutsidePermissionLevel(t *testing.T) {
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                dir,
-		MaxTokens:          4096,
+		MaxOutputTokens:    4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: new(true),
@@ -331,7 +337,7 @@ func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                t.TempDir(),
-		MaxTokens:          4096,
+		MaxOutputTokens:    4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: new(true),
@@ -351,17 +357,14 @@ func TestChatStreamingToolCancelKeepsLiveOutput(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stream := agent.Chat(ctx, "run bash")
 	events := []Event{}
-	for event := range stream {
+	for event := range agent.Chat(ctx, "run bash") {
 		events = append(events, event)
 		if event.Type == "tool_output" {
 			cancel()
 			agent.Cancel()
-			break
 		}
 	}
-	events = append(events, collectEvents(stream)...)
 
 	var toolDone *Event
 	for i := range events {
@@ -387,7 +390,7 @@ func TestChatCancelBetweenToolsKeepsCompletedResults(t *testing.T) {
 		CWD:                t.TempDir(),
 		Store:              store,
 		SessionID:          "session",
-		MaxTokens:          4096,
+		MaxOutputTokens:    4096,
 		ContextWindow:      128000,
 		CompactThreshold:   0.8,
 		SupportsImageInput: new(true),
@@ -467,7 +470,7 @@ func TestCompactRequestOmitsReasoningEffort(t *testing.T) {
 		Model:              "gpt-5.4",
 		Provider:           "openai",
 		CWD:                t.TempDir(),
-		MaxTokens:          4096,
+		MaxOutputTokens:    4096,
 		ContextWindow:      100,
 		CompactThreshold:   0.8,
 		ReasoningEffort:    "high",

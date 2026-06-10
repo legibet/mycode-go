@@ -50,13 +50,13 @@ func main() {
 }
 ```
 
-`a.Chat` takes a prompt string (plus optional attachments) and returns a channel of `agent.Event` values. The turn loops provider → tool calls → provider internally until the assistant stops calling tools, then the channel closes. Event types match the SSE contract in `docs/api.md`. Use `a.ChatMessage` to pass a fully built `message.Message` (e.g. multi-modal content).
+`a.Chat` takes a prompt string (plus optional attachments) and returns an `iter.Seq[agent.Event]`. The turn loops provider → tool calls → provider internally until the assistant stops calling tools, then the sequence ends. The sequence is single-use: iterate it once with `range`. Breaking out of the loop stops the agent at the next phase boundary; cancel `ctx` to interrupt a provider stream or a running tool. Event types match the SSE contract in `docs/api.md`. Use `a.ChatMessage` to pass a fully built `message.Message` (e.g. multi-modal content).
 
 Config notes:
 
 - `Tools` is explicit: leave it nil for a runtime with no tools, or list the built-in `tools.Read`, `tools.Write`, `tools.Edit`, `tools.Bash` values (any subset) together with custom tools.
 - `Provider` may be empty when the model id is recognizable (`claude-*`, `gpt-*`, `gemini-*`, …); `New` infers it via `provider.InferProviderFromModel` and errors when it can't.
-- Model capabilities resolve from the bundled catalog: leave `MaxTokens`/`ContextWindow` zero and `SupportsImageInput`/`SupportsPDFInput` nil to use the catalog values (falling back to `16384`/`128000`), or set them to override. `New` resolves them via `provider.ResolveModel`.
+- Model capabilities resolve from the bundled catalog: leave `MaxOutputTokens`/`ContextWindow` zero and `SupportsImageInput`/`SupportsPDFInput` nil to use the catalog values (falling back to `16384`/`128000`), or set them to override. `New` resolves them via `provider.ResolveModel`.
 - `Temperature` is an optional `*float64`: nil uses the provider default, otherwise the value (`0`–`1`) is sent.
 - `CompactThreshold` defaults to `agent.DefaultCompactThreshold`; set `DisableCompact` to turn automatic compaction off.
 
@@ -116,6 +116,8 @@ for event := range a.Chat(ctx, "Continue.") {
 Leave `Store` nil to keep the run in memory. With a `Store`, leave `Messages`
 nil to resume an existing session. Passing `Messages` is accepted only for a new
 session id, so an existing transcript cannot be mixed with a different history.
+`a.SessionID()` returns the session id (generated when Config left it empty);
+`a.Messages()` returns a copy of the accumulated history.
 
 ## Custom Tools
 

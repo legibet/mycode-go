@@ -207,9 +207,9 @@ func (a googleAdapter) buildConfig(req Request) *genai.GenerateContentConfig {
 		declarations := make([]*genai.FunctionDeclaration, 0, len(req.Tools))
 		for _, tool := range req.Tools {
 			declarations = append(declarations, &genai.FunctionDeclaration{
-				Name:                 fmt.Sprintf("%v", tool["name"]),
-				Description:          fmt.Sprintf("%v", tool["description"]),
-				ParametersJsonSchema: tool["input_schema"],
+				Name:                 tool.Name,
+				Description:          tool.Description,
+				ParametersJsonSchema: tool.InputSchema,
 			})
 		}
 		config.Tools = []*genai.Tool{{

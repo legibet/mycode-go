@@ -1,5 +1,5 @@
 // Context compaction: summarize past history when nearing the context window.
-// Compact records persist inline as `role: "compact"` markers; ApplyCompactReplay
+// Compact records persist inline as `role: "compact"` markers; applyCompactReplay
 // substitutes them with a summary continuation only when projecting messages
 // for the provider.
 
@@ -12,7 +12,7 @@ import (
 	"github.com/legibet/mycode-go/message"
 )
 
-const CompactSummaryPrompt = `Summarize this conversation to create a continuation document. This summary will replace the full conversation history, so it must capture everything needed to continue the work seamlessly.
+const compactSummaryPrompt = `Summarize this conversation to create a continuation document. This summary will replace the full conversation history, so it must capture everything needed to continue the work seamlessly.
 
 Include:
 
@@ -39,14 +39,14 @@ const continuationFooter = `Resume directly from where the work left off. Do not
 
 const compactAck = "Acknowledged."
 
-func ShouldCompact(totalTokens, contextWindow int, threshold float64) bool {
+func shouldCompact(totalTokens, contextWindow int, threshold float64) bool {
 	if totalTokens <= 0 || contextWindow <= 0 || threshold <= 0 {
 		return false
 	}
 	return float64(totalTokens) >= float64(contextWindow)*threshold
 }
 
-func BuildCompactEvent(summary, provider, model string, totalTokens int) message.Message {
+func buildCompactEvent(summary, provider, model string, totalTokens int) message.Message {
 	meta := map[string]any{
 		"provider": provider,
 		"model":    model,
@@ -57,14 +57,14 @@ func BuildCompactEvent(summary, provider, model string, totalTokens int) message
 	return message.BuildMessage("compact", []message.Block{message.TextBlock(summary, nil)}, meta)
 }
 
-// ApplyCompactReplay rewrites messages so the latest `compact` marker becomes
+// applyCompactReplay rewrites messages so the latest `compact` marker becomes
 // a summary continuation; the input slice is not mutated.
 //
 // The tail (messages after the latest compact) drives whether we follow the
 // summary with an "Acknowledged." assistant turn: an assistant-led tail (or
 // none) means we resume directly; a user-led tail needs the ack so role
 // alternation stays valid for the provider.
-func ApplyCompactReplay(messages []message.Message, transcriptPath string) []message.Message {
+func applyCompactReplay(messages []message.Message, transcriptPath string) []message.Message {
 	lastCompact := -1
 	for i, msg := range messages {
 		if msg.Role == "compact" {

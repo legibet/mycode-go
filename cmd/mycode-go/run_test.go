@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"iter"
+	"slices"
 	"testing"
 
 	agentpkg "github.com/legibet/mycode-go/agent"
@@ -104,12 +106,7 @@ type fakeChatAgent struct {
 	events   []agentpkg.Event
 }
 
-func (f *fakeChatAgent) ChatMessage(_ context.Context, msg message.Message) <-chan agentpkg.Event {
+func (f *fakeChatAgent) ChatMessage(_ context.Context, msg message.Message) iter.Seq[agentpkg.Event] {
 	f.received = msg
-	out := make(chan agentpkg.Event, len(f.events))
-	for _, event := range f.events {
-		out <- event
-	}
-	close(out)
-	return out
+	return slices.Values(f.events)
 }

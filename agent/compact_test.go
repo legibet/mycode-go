@@ -8,16 +8,16 @@ import (
 )
 
 func TestShouldCompactRespectsThresholdBoundaries(t *testing.T) {
-	if !ShouldCompact(80000, 100000, 0.8) {
+	if !shouldCompact(80000, 100000, 0.8) {
 		t.Fatal("expected compact at threshold")
 	}
-	if ShouldCompact(79999, 100000, 0.8) {
+	if shouldCompact(79999, 100000, 0.8) {
 		t.Fatal("did not expect compact below threshold")
 	}
-	if ShouldCompact(99999, 100000, 0) {
+	if shouldCompact(99999, 100000, 0) {
 		t.Fatal("did not expect compact when disabled")
 	}
-	if ShouldCompact(0, 100000, 0.8) || ShouldCompact(50000, 0, 0.8) {
+	if shouldCompact(0, 100000, 0.8) || shouldCompact(50000, 0, 0.8) {
 		t.Fatal("did not expect compact without usage or context")
 	}
 }
@@ -27,7 +27,7 @@ func TestApplyCompactReplayWithoutMarkerReturnsInput(t *testing.T) {
 		message.UserTextMessage("hi", nil),
 		message.AssistantMessage([]message.Block{message.TextBlock("hello", nil)}, "p", "m", "", "", 0, nil),
 	}
-	out := ApplyCompactReplay(messages, "")
+	out := applyCompactReplay(messages, "")
 	if len(out) != 2 {
 		t.Fatalf("expected unchanged messages, got %d", len(out))
 	}
@@ -73,11 +73,11 @@ func TestApplyCompactReplayPreservesRoleOrderAfterSummary(t *testing.T) {
 			messages := []message.Message{
 				message.UserTextMessage("hello", nil),
 				message.AssistantMessage([]message.Block{message.TextBlock("hi", nil)}, "p", "m", "", "", 0, nil),
-				BuildCompactEvent("summary text", "p", "m", 0),
+				buildCompactEvent("summary text", "p", "m", 0),
 			}
 			messages = append(messages, tc.tail...)
 
-			projected := ApplyCompactReplay(messages, tc.transcriptPath)
+			projected := applyCompactReplay(messages, tc.transcriptPath)
 			if len(projected) != len(tc.expectedRoles) {
 				t.Fatalf("unexpected projected messages: %#v", projected)
 			}
@@ -106,8 +106,8 @@ func TestApplyCompactReplayPreservesRoleOrderAfterSummary(t *testing.T) {
 }
 
 func TestApplyCompactReplayUsesLatestMarkerAndTranscriptHint(t *testing.T) {
-	older := BuildCompactEvent("old", "p", "m", 0)
-	newer := BuildCompactEvent("new", "p", "m", 0)
+	older := buildCompactEvent("old", "p", "m", 0)
+	newer := buildCompactEvent("new", "p", "m", 0)
 	messages := []message.Message{
 		message.UserTextMessage("a", nil),
 		older,
@@ -115,7 +115,7 @@ func TestApplyCompactReplayUsesLatestMarkerAndTranscriptHint(t *testing.T) {
 		newer,
 		message.UserTextMessage("c", nil),
 	}
-	projected := ApplyCompactReplay(messages, "/tmp/messages.jsonl")
+	projected := applyCompactReplay(messages, "/tmp/messages.jsonl")
 	body := projected[0].Content[0].Text
 	if !strings.Contains(body, "new") {
 		t.Fatalf("expected newer summary in projection, got %q", body)
@@ -129,7 +129,7 @@ func TestApplyCompactReplayUsesLatestMarkerAndTranscriptHint(t *testing.T) {
 }
 
 func TestBuildCompactEventMetadata(t *testing.T) {
-	event := BuildCompactEvent("summary", "anthropic", "claude", 0)
+	event := buildCompactEvent("summary", "anthropic", "claude", 0)
 	if event.Role != "compact" {
 		t.Fatalf("expected compact role, got %s", event.Role)
 	}
@@ -140,7 +140,7 @@ func TestBuildCompactEventMetadata(t *testing.T) {
 		t.Fatal("v7 compact events do not carry compacted_count")
 	}
 
-	withUsage := BuildCompactEvent("summary", "anthropic", "claude", 1234)
+	withUsage := buildCompactEvent("summary", "anthropic", "claude", 1234)
 	if withUsage.Meta["total_tokens"] != 1234 {
 		t.Fatalf("expected total_tokens=1234, got %v", withUsage.Meta["total_tokens"])
 	}

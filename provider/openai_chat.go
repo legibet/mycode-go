@@ -184,9 +184,9 @@ func (a openAIChatAdapter) buildPayload(req Request) (map[string]any, error) {
 			toolsPayload = append(toolsPayload, map[string]any{
 				"type": "function",
 				"function": map[string]any{
-					"name":        tool["name"],
-					"description": tool["description"],
-					"parameters":  tool["input_schema"],
+					"name":        tool.Name,
+					"description": tool.Description,
+					"parameters":  tool.InputSchema,
 				},
 			})
 		}
