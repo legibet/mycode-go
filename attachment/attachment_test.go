@@ -48,7 +48,7 @@ func TestBuildPathTextAttachment(t *testing.T) {
 
 	blocks, err := attachment.Build([]attachment.Attachment{
 		attachment.Path(`report <"draft">.txt`),
-	}, attachment.Options{CWD: cwd})
+	}, cwd)
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestBuildPathImageAttachment(t *testing.T) {
 
 	blocks, err := attachment.Build([]attachment.Attachment{
 		attachment.Path("tiny.png"),
-	}, attachment.Options{CWD: cwd})
+	}, cwd)
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestBuildPathPDFAttachment(t *testing.T) {
 
 	blocks, err := attachment.Build([]attachment.Attachment{
 		attachment.Path("report.pdf"),
-	}, attachment.Options{CWD: cwd})
+	}, cwd)
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestBuildBytesImageAttachment(t *testing.T) {
 
 	blocks, err := attachment.Build([]attachment.Attachment{
 		attachment.Bytes(data, "image/png", "inline.png"),
-	}, attachment.Options{})
+	}, "")
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestBuildBytesImageAttachment(t *testing.T) {
 func TestBuildTextAttachment(t *testing.T) {
 	blocks, err := attachment.Build([]attachment.Attachment{
 		attachment.Text("package main\n", `main <"v2">.go`),
-	}, attachment.Options{})
+	}, "")
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestBuildTextAttachment(t *testing.T) {
 func TestBuildTextAttachmentRequiresName(t *testing.T) {
 	_, err := attachment.Build([]attachment.Attachment{
 		attachment.Text("package main\n", ""),
-	}, attachment.Options{})
+	}, "")
 	if err == nil {
 		t.Fatal("expected text attachment name error")
 	}

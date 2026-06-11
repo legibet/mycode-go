@@ -111,12 +111,12 @@ for event := range a.Chat(ctx, "Describe these files.",
 
 Each item becomes a canonical block:
 
-- A path to PNG/JPEG/GIF/WebP becomes an `image` block; a path to PDF becomes a `document` block.
+- A path to PNG/JPEG/GIF/WebP becomes an `image` block; a path to PDF becomes a `document` block. `attachment.PathWithName` overrides the display name (default: the file's basename).
 - A path to a UTF-8 text file becomes a `<file name="…">…</file>` text block tagged with `meta.attachment`.
 - `attachment.Bytes` carries raw `image/*` or `application/pdf` data without touching disk.
 - `attachment.Text` wraps an inline snippet as the same `<file>` text block and requires a name.
 
-A missing path, a directory, an unsupported binary, or an unsupported media type surfaces as an `error` event before the provider is called. For full control, build blocks with `attachment.Build` and pass a `message.Message` to `ChatMessage`.
+A missing path, a directory, an unsupported binary, or an unsupported media type surfaces as an `error` event before the provider is called. For full control, build blocks with `attachment.Build(items, cwd)` and pass a `message.Message` to `ChatMessage`.
 
 ## Sessions
 

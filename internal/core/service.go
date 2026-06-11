@@ -666,13 +666,12 @@ func buildDocumentBlock(block ChatInputBlock, cwd string) (message.Block, error)
 	return mediaBlock, nil
 }
 
+// buildAttachmentBlock converts one attachment; Build returns exactly one
+// block per item.
 func buildAttachmentBlock(item attachment.Attachment, cwd string) (message.Block, error) {
-	blocks, err := attachment.Build([]attachment.Attachment{item}, attachment.Options{CWD: cwd})
+	blocks, err := attachment.Build([]attachment.Attachment{item}, cwd)
 	if err != nil {
 		return message.Block{}, err
-	}
-	if len(blocks) == 0 {
-		return message.Block{}, errors.New("attachment produced no blocks")
 	}
 	return blocks[0], nil
 }

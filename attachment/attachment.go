@@ -15,10 +15,8 @@ import (
 	"github.com/legibet/mycode-go/message"
 )
 
-type Options struct {
-	CWD string
-}
-
+// Attachment is one pending input item; convert to message blocks with Build.
+// Construct with Path, PathWithName, Bytes, or Text.
 type Attachment struct {
 	kind      attachmentKind
 	path      string
@@ -36,26 +34,33 @@ const (
 	attachmentText
 )
 
+// Path attaches the file at path: images and PDFs become media blocks, UTF-8
+// text becomes a <file> text block. Relative paths resolve against Build's cwd.
 func Path(path string) Attachment {
 	return Attachment{kind: attachmentPath, path: path}
 }
 
+// PathWithName is Path with an explicit display name instead of the basename.
 func PathWithName(path, name string) Attachment {
 	return Attachment{kind: attachmentPath, path: path, name: name}
 }
 
+// Bytes attaches raw image/* or application/pdf data without touching disk.
 func Bytes(data []byte, mediaType, name string) Attachment {
 	return Attachment{kind: attachmentBytes, data: append([]byte(nil), data...), mediaType: mediaType, name: name}
 }
 
+// Text attaches an inline snippet as a named <file> text block.
 func Text(text, name string) Attachment {
 	return Attachment{kind: attachmentText, text: text, name: name}
 }
 
-func Build(items []Attachment, opts Options) ([]message.Block, error) {
+// Build converts attachments to message blocks in order, resolving relative
+// paths against cwd.
+func Build(items []Attachment, cwd string) ([]message.Block, error) {
 	blocks := make([]message.Block, 0, len(items))
 	for _, item := range items {
-		block, err := build(item, opts)
+		block, err := build(item, cwd)
 		if err != nil {
 			return nil, err
 		}
@@ -64,10 +69,10 @@ func Build(items []Attachment, opts Options) ([]message.Block, error) {
 	return blocks, nil
 }
 
-func build(item Attachment, opts Options) (message.Block, error) {
+func build(item Attachment, cwd string) (message.Block, error) {
 	switch item.kind {
 	case attachmentPath:
-		return buildPath(item, opts)
+		return buildPath(item, cwd)
 	case attachmentBytes:
 		return buildBytes(item)
 	case attachmentText:
@@ -91,8 +96,8 @@ func buildBytes(item Attachment) (message.Block, error) {
 	}
 }
 
-func buildPath(item Attachment, opts Options) (message.Block, error) {
-	resolved := ResolvePath(item.path, opts.CWD)
+func buildPath(item Attachment, cwd string) (message.Block, error) {
+	resolved := ResolvePath(item.path, cwd)
 	info, err := os.Stat(resolved)
 	if err != nil {
 		return message.Block{}, fmt.Errorf("attachment not found: %s", item.path)

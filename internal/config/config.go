@@ -30,22 +30,23 @@ var (
 
 var ErrUnsupportedReasoningEffort = errors.New("unsupported reasoning_effort")
 
-// ProviderConfig defines one configured provider alias.
+// ProviderConfig defines one configured provider alias, parsed field by field
+// from the raw settings JSON.
 type ProviderConfig struct {
-	Name            string                            `json:"-"`
-	Type            string                            `json:"type"`
-	Models          map[string]provider.ModelOverride `json:"models"`
-	ModelOrder      []string                          `json:"-"`
-	APIKey          string                            `json:"-"`
-	APIKeyEnvVar    string                            `json:"-"`
-	BaseURL         string                            `json:"base_url"`
-	ReasoningEffort string                            `json:"reasoning_effort"`
+	Name            string
+	Type            string
+	Models          map[string]provider.ModelOverride
+	ModelOrder      []string
+	APIKey          string
+	APIKeyEnvVar    string
+	BaseURL         string
+	ReasoningEffort string
 }
 
 // PermissionConfig controls automatic tool execution.
 type PermissionConfig struct {
-	Level string `json:"level"`
-	Mode  string `json:"mode"`
+	Level string
+	Mode  string
 }
 
 // Settings is the resolved config view for one cwd.

@@ -149,7 +149,7 @@ func ClassifyTool(toolName string, input map[string]any, cwd, project string, sk
 		return Check{Tier: classifyBash(command), Preview: command}
 	case "read", "write", "edit":
 		raw := asString(input["path"])
-		path := config.ResolveSymlinks(attachment.ResolvePath(raw, cwd))
+		path := attachment.ResolvePath(raw, cwd)
 		preview := raw
 		if strings.TrimSpace(preview) == "" {
 			preview = path

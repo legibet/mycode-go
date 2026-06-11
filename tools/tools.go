@@ -42,13 +42,15 @@ const (
 // tools with Define; the built-in tools are package-level Spec values
 // (Read, Write, Edit, Bash).
 type Spec struct {
-	Name          string                                 `json:"name"`
-	Description   string                                 `json:"description"`
-	InputSchema   map[string]any                         `json:"input_schema"`
-	StreamsOutput bool                                   `json:"-"`
-	Runner        func(context.Context, ToolCall) Result `json:"-"`
+	Name          string
+	Description   string
+	InputSchema   map[string]any
+	StreamsOutput bool
+	Runner        func(context.Context, ToolCall) Result
 }
 
+// ToolCall is the raw invocation a Spec runner receives: the provider-supplied
+// input map plus the run's working directory and streaming callback.
 type ToolCall struct {
 	ID    string
 	Name  string
@@ -142,11 +144,15 @@ func reflectSchema[T any]() map[string]any {
 	return out
 }
 
+// BeforeToolHook runs before a tool executes; returning true short-circuits
+// execution with the given result. AfterToolHook runs after execution;
+// returning true replaces the result.
 type (
 	BeforeToolHook func(context.Context, ToolCall) (Result, bool)
 	AfterToolHook  func(context.Context, ToolCall, Result) (Result, bool)
 )
 
+// Hooks intercept tool execution; each slice runs in order.
 type Hooks struct {
 	BeforeTool []BeforeToolHook
 	AfterTool  []AfterToolHook

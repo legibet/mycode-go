@@ -18,10 +18,6 @@ import (
 	"github.com/legibet/mycode-go/tools"
 )
 
-type resolvedSession struct {
-	ID string
-}
-
 func runCommand(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -70,12 +66,7 @@ func runCommand(args []string) int {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	resolvedSession, err := resolveSession(
-		store,
-		cwd,
-		*sessionID,
-		*continueLast,
-	)
+	resolvedSessionID, err := resolveSessionID(store, cwd, *sessionID, *continueLast)
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -86,7 +77,7 @@ func runCommand(args []string) int {
 		Provider:         resolvedProvider.ProviderType,
 		CWD:              cwd,
 		Store:            store,
-		SessionID:        resolvedSession.ID,
+		SessionID:        resolvedSessionID,
 		APIKey:           resolvedProvider.APIKey,
 		APIBase:          resolvedProvider.APIBase,
 		System:           promptpkg.Build(cwd, settings.Project, config.ResolveHome()),
@@ -165,35 +156,34 @@ func runNoninteractive(ctx context.Context, agent chatAgent, userMessage message
 	return strings.TrimSpace(reply.String()), errorMessage
 }
 
-func resolveSession(store *session.Store, cwd, requestedSessionID string, continueLast bool) (resolvedSession, error) {
+func resolveSessionID(store *session.Store, cwd, requestedSessionID string, continueLast bool) (string, error) {
 	if requestedSessionID != "" {
 		data, err := store.LoadSession(requestedSessionID)
 		if err != nil {
-			return resolvedSession{}, err
+			return "", err
 		}
 		if data == nil {
-			return resolvedSession{}, fmt.Errorf("unknown session: %s", requestedSessionID)
+			return "", fmt.Errorf("unknown session: %s", requestedSessionID)
 		}
-		return resolvedSession{ID: requestedSessionID}, nil
+		return requestedSessionID, nil
 	}
 
 	if continueLast {
 		latest, err := store.LatestSession(cwd)
 		if err != nil {
-			return resolvedSession{}, err
+			return "", err
 		}
 		if latest != nil && latest.ID != "" {
 			data, err := store.LoadSession(latest.ID)
 			if err != nil {
-				return resolvedSession{}, err
+				return "", err
 			}
 			if data == nil {
-				return resolvedSession{}, fmt.Errorf("unknown session: %s", latest.ID)
+				return "", fmt.Errorf("unknown session: %s", latest.ID)
 			}
-			return resolvedSession{ID: latest.ID}, nil
+			return latest.ID, nil
 		}
 	}
 
-	draft := store.DraftSession(cwd)
-	return resolvedSession{ID: draft.Session.ID}, nil
+	return store.DraftSession(cwd).Session.ID, nil
 }

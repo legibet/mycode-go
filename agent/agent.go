@@ -196,7 +196,7 @@ func (e *emitter) sendError(msg string) {
 func (a *Agent) Chat(ctx context.Context, prompt string, attachments ...attachment.Attachment) iter.Seq[Event] {
 	blocks := []message.Block{message.TextBlock(prompt, nil)}
 	if len(attachments) > 0 {
-		attached, err := attachment.Build(attachments, attachment.Options{CWD: a.cfg.CWD})
+		attached, err := attachment.Build(attachments, a.cfg.CWD)
 		if err != nil {
 			return func(yield func(Event) bool) {
 				yield(Event{Type: "error", Data: map[string]any{"message": err.Error()}})
@@ -281,18 +281,15 @@ func (a *Agent) ChatMessage(ctx context.Context, userInput message.Message) iter
 				}
 			}
 			if len(toolCalls) > 0 {
+				// executeToolCalls records a result for every call, including
+				// cancelled ones, so the tool message is never empty.
 				toolMessage, cancelled := a.executeToolCalls(ctx, toolCalls, out)
-				if len(toolMessage.Content) > 0 {
-					a.cfg.Messages = append(a.cfg.Messages, toolMessage)
-					if err := a.persist(toolMessage); err != nil {
-						out.sendError(err.Error())
-						return
-					}
+				a.cfg.Messages = append(a.cfg.Messages, toolMessage)
+				if err := a.persist(toolMessage); err != nil {
+					out.sendError(err.Error())
+					return
 				}
 				if cancelled {
-					if len(toolMessage.Content) == 0 {
-						out.sendError("cancelled")
-					}
 					return
 				}
 			}

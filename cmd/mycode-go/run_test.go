@@ -12,15 +12,15 @@ import (
 	"github.com/legibet/mycode-go/session"
 )
 
-func TestResolveSession(t *testing.T) {
+func TestResolveSessionID(t *testing.T) {
 	t.Run("new session stays draft", func(t *testing.T) {
 		store := newRunTestStore(t)
-		resolved, err := resolveSession(store, t.TempDir(), "", false)
+		resolved, err := resolveSessionID(store, t.TempDir(), "", false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resolved.ID == "" {
-			t.Fatalf("unexpected session: %#v", resolved)
+		if resolved == "" {
+			t.Fatal("expected a generated session id")
 		}
 		sessions, err := store.ListSessions("")
 		if err != nil {
@@ -44,18 +44,18 @@ func TestResolveSession(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		resolved, err := resolveSession(store, cwd, "", true)
+		resolved, err := resolveSessionID(store, cwd, "", true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resolved.ID != "second" {
-			t.Fatalf("unexpected session: %#v", resolved)
+		if resolved != "second" {
+			t.Fatalf("unexpected session: %q", resolved)
 		}
 	})
 
 	t.Run("missing explicit session", func(t *testing.T) {
 		store := newRunTestStore(t)
-		if _, err := resolveSession(store, t.TempDir(), "missing", false); err == nil {
+		if _, err := resolveSessionID(store, t.TempDir(), "missing", false); err == nil {
 			t.Fatal("expected missing session error")
 		}
 	})
