@@ -162,16 +162,12 @@ func (a anthropicAdapter) serializeBlock(block message.Block) (map[string]any, e
 		}
 		return payload, nil
 	case "tool_use":
-		payload := map[string]any{
+		return map[string]any{
 			"type":  "tool_use",
 			"id":    block.ID,
 			"name":  block.Name,
 			"input": defaultInput(block.Input),
-		}
-		if caller := blockNativeMeta(block)["caller"]; caller != nil {
-			payload["caller"] = caller
-		}
-		return payload, nil
+		}, nil
 	case "image":
 		mimeType, data, err := loadImageBlockPayload(block)
 		if err != nil {
@@ -384,11 +380,7 @@ func (a anthropicAdapter) convertMessage(msg anthropic.Message) message.Message 
 			if len(block.Input) > 0 {
 				_ = json.Unmarshal(block.Input, &input)
 			}
-			meta := map[string]any{}
-			if caller := dumpJSON(block.Caller); caller != nil {
-				meta["native"] = map[string]any{"caller": caller}
-			}
-			blocks = append(blocks, message.ToolUseBlock(block.ID, block.Name, input, meta))
+			blocks = append(blocks, message.ToolUseBlock(block.ID, block.Name, input, nil))
 		}
 	}
 	nativeMeta := map[string]any{}

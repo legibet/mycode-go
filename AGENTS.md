@@ -10,6 +10,8 @@ Always-loaded context for agent runs on this branch. Detailed specs live in `doc
 - `cmd/mycode-go` + `internal/*` — the CLI, HTTP server, config loading, system prompt, permission policy, run manager, and web adapter built on top of the public packages.
 - `web/` — the shared React + Vite UI.
 
+Current sync: Python `main` provider behavior reviewed through `2bdabcb`.
+
 ## Project Layout
 
 ```text

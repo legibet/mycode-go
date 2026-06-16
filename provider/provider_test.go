@@ -82,13 +82,13 @@ func TestAllBuiltInProvidersRegisterAdapters(t *testing.T) {
 	}
 }
 
-func TestAnthropicSerializeBlockReplaysCaller(t *testing.T) {
+func TestAnthropicSerializeBlockSkipsToolUseCaller(t *testing.T) {
 	adapter := newAnthropicAdapter("anthropic").(anthropicAdapter)
 	block := message.ToolUseBlock("call_1", "read", map[string]any{"path": "x.py"}, map[string]any{
-		"native": map[string]any{"caller": "assistant"},
+		"native": map[string]any{"caller": map[string]any{"tool_id": "", "type": ""}},
 	})
 	payload := mustAnthropicBlock(t, adapter, block)
-	if payload["caller"] != "assistant" {
+	if _, ok := payload["caller"]; ok {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
 }
@@ -102,7 +102,7 @@ func TestAnthropicConvertMessageKeepsStopSequenceAndServiceTier(t *testing.T) {
 		"stop_sequence":"stop-here",
 		"usage":{"input_tokens":10,"output_tokens":5,"service_tier":"priority"},
 		"content":[
-			{"type":"tool_use","id":"call_1","name":"read","input":{"path":"x.py"},"caller":"assistant"}
+			{"type":"tool_use","id":"call_1","name":"read","input":{"path":"x.py"}}
 		]
 	}`)
 	var msg anthropic.Message
