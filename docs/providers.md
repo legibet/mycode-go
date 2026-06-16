@@ -37,11 +37,12 @@ type Adapter interface {
 - API: Anthropic Messages API
 - Base URL: `https://api.anthropic.com`
 - API key env: `ANTHROPIC_API_KEY`
-- Default models: `claude-sonnet-4-6`, `claude-opus-4-7`
+- Default models: `claude-sonnet-4-6`, `claude-opus-4-8`
 - `SupportsReasoningEffort`: true
-- Adaptive thinking for `claude-sonnet-4-6`, `claude-opus-4-6`, and `claude-opus-4-7`; manual `budget_tokens` for older reasoning models
-- `claude-opus-4-7` uses adaptive thinking and forwards `output_config.effort`
-- `reasoning_effort=xhigh` maps to `high` for Sonnet 4.6 and `max` for Opus 4.6
+- Reasoning efforts use adaptive thinking; `claude-opus-4-7` / `claude-opus-4-8` request summarized thinking output
+- `claude-opus-4-7` / `claude-opus-4-8` use `output_config.effort`
+- Omits `temperature`; Anthropic-compatible providers use provider-default sampling
+- Replays only Claude-origin thinking blocks that include Anthropic's native `signature`; foreign or unsigned `thinking` blocks are skipped before request serialization
 - Adds ephemeral `cache_control` to the system prompt block and latest user content block
 - Tool call IDs are projected to ASCII-safe format with a SHA1 collision suffix
 - Images serialize as Anthropic `image` blocks
@@ -52,8 +53,10 @@ type Adapter interface {
 - SDK: `github.com/anthropics/anthropic-sdk-go` against Moonshot's Anthropic-compatible endpoint
 - Base URL: `https://api.moonshot.ai/anthropic`
 - API key env: `MOONSHOT_API_KEY`
-- Default model: `kimi-k2.6`
-- `SupportsReasoningEffort`: true; maps to manual `budget_tokens`
+- Default models: `kimi-k2.7-code`, `kimi-k2.6`
+- `SupportsReasoningEffort`: true; maps enabled efforts to adaptive thinking and forwards `output_config.effort`
+- For `kimi-k2.7-code`, `none` maps to adaptive thinking because the model does not support disabled thinking
+- Omits `temperature`; Anthropic-compatible providers use provider-default sampling
 - Prior reasoning blocks are replayed on later tool-loop turns when thinking is enabled
 - Shares Anthropic-like ephemeral cache markers, tool call ID projection, image format, and PDF format
 
@@ -62,8 +65,10 @@ type Adapter interface {
 - SDK: `github.com/anthropics/anthropic-sdk-go` against MiniMax's Anthropic-compatible endpoint
 - Base URL: `https://api.minimax.io/anthropic`
 - API key env: `MINIMAX_API_KEY`
-- Default models: `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`
-- `SupportsReasoningEffort`: true; maps to manual `budget_tokens`
+- Default models: `MiniMax-M3`
+- `SupportsReasoningEffort`: false
+- `MiniMax-M3` uses adaptive thinking by default; MiniMax Anthropic endpoint does not support effort depth
+- Omits `temperature`; Anthropic-compatible providers use provider-default sampling
 - Preserves provider-native thinking signatures in `block.meta.native`
 - Shares Anthropic-like ephemeral cache markers, tool call ID projection, image format, and PDF format
 
@@ -135,10 +140,10 @@ type Adapter interface {
 ### `zai` — `openai_chat.go`
 
 - SDK: `github.com/openai/openai-go/v3` against Z.AI's OpenAI-compatible endpoint
-- Base URL: `https://api.z.ai/api/paas/v4`
+- Base URL: `https://api.z.ai/api/paas/v4/`
 - API key env: `ZAI_API_KEY`
-- Default models: `glm-5.1`, `glm-5-turbo`
-- `SupportsReasoningEffort`: false; thinking is enabled by provider-specific config with `clear_thinking=false`
+- Default models: `glm-5.2`
+- `SupportsReasoningEffort`: true; thinking is enabled by provider-specific config with `clear_thinking=false`; `glm-5.2` maps `low`/`medium`/`high` to `high` and `xhigh` to `max`
 - `AutoDiscoverable`: true
 - `clear_thinking=false` preserves reasoning across multi-turn tool loops; historical `reasoning_content` must be replayed unmodified
 
@@ -156,13 +161,15 @@ type Adapter interface {
 
 ## Reasoning Effort Mapping
 
-| effort   | anthropic / moonshotai / minimax       | google (Gemini 3)       | openai / openrouter | deepseek |
-| -------- | -------------------------------------- | ----------------------- | ------------------- | -------- |
-| `none`   | thinking disabled                      | `LOW`/`MINIMAL` level   | `none`              | disabled |
-| `low`    | low `budget_tokens`                    | `LOW`/`MINIMAL` level   | `low`               | `high`   |
-| `medium` | medium `budget_tokens`                 | `MEDIUM` level          | `medium`            | `high`   |
-| `high`   | high `budget_tokens`                   | `HIGH` level            | `high`              | `high`   |
-| `xhigh`  | `high` (sonnet) / `max` (opus) effort  | `HIGH` level            | `xhigh`             | `max`    |
+| effort   | anthropic / moonshotai                          | google (Gemini 3)       | openai / openrouter | deepseek / zai |
+| -------- | ----------------------------------------------- | ----------------------- | ------------------- | -------------- |
+| `none`   | thinking disabled                               | `LOW`/`MINIMAL` level   | `none`              | disabled       |
+| `low`    | adaptive thinking                               | `LOW`/`MINIMAL` level   | `low`               | `high`         |
+| `medium` | adaptive thinking                               | `MEDIUM` level          | `medium`            | `high`         |
+| `high`   | adaptive thinking                               | `HIGH` level            | `high`              | `high`         |
+| `xhigh`  | adaptive thinking; provider max where supported | `HIGH` level            | `xhigh`             | `max`          |
+
+MiniMax is not listed in the effort mapping table because its Anthropic endpoint does not support effort depth; `MiniMax-M3` always sends adaptive thinking.
 
 Config-resolved `reasoning_effort` is only applied when both `Spec.SupportsReasoningEffort` and catalog `supports_reasoning` are true.
 

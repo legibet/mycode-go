@@ -15,13 +15,6 @@ import (
 	"github.com/legibet/mycode-go/message"
 )
 
-var anthropicThinkingBudgets = map[string]int{
-	"low":    2048,
-	"medium": 8192,
-	"high":   24576,
-	"xhigh":  32768,
-}
-
 type anthropicAdapter struct {
 	baseAdapter
 }
@@ -96,7 +89,10 @@ func (a anthropicAdapter) buildPayload(req Request) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		messages = append(messages, serialized)
+		content, _ := serialized["content"].([]map[string]any)
+		if len(content) > 0 {
+			messages = append(messages, serialized)
+		}
 	}
 	a.applyCacheControl(messages)
 
@@ -104,9 +100,6 @@ func (a anthropicAdapter) buildPayload(req Request) (map[string]any, error) {
 		"model":      req.Model,
 		"max_tokens": req.MaxTokens,
 		"messages":   messages,
-	}
-	if req.Temperature != nil {
-		payload["temperature"] = *req.Temperature
 	}
 	if strings.TrimSpace(req.System) != "" {
 		payload["system"] = []map[string]any{{
@@ -139,6 +132,13 @@ func (a anthropicAdapter) buildPayload(req Request) (map[string]any, error) {
 func (a anthropicAdapter) serializeMessage(msg message.Message) (map[string]any, error) {
 	blocks := make([]map[string]any, 0, len(msg.Content))
 	for _, block := range msg.Content {
+		if a.Spec().ID == "anthropic" && msg.Role == "assistant" && block.Type == "thinking" {
+			sourceProvider, _ := msg.Meta["provider"].(string)
+			signature, _ := blockNativeMeta(block)["signature"].(string)
+			if sourceProvider != "anthropic" || signature == "" {
+				continue
+			}
+		}
 		serialized, err := a.serializeBlock(block)
 		if err != nil {
 			return nil, err
@@ -245,39 +245,44 @@ func (a anthropicAdapter) thinkingConfig(req Request) map[string]any {
 			return map[string]any{"type": "disabled"}
 		}
 		model := strings.ToLower(req.Model)
-		if strings.HasPrefix(model, "claude-opus-4-7") || strings.HasPrefix(model, "claude-opus-4-6") || strings.HasPrefix(model, "claude-sonnet-4-6") {
-			thinking := map[string]any{"type": "adaptive"}
-			if strings.HasPrefix(model, "claude-opus-4-7") {
-				thinking["display"] = "summarized"
-			}
-			return thinking
+		thinking := map[string]any{"type": "adaptive"}
+		if strings.HasPrefix(model, "claude-opus-4-7") || strings.HasPrefix(model, "claude-opus-4-8") {
+			thinking["display"] = "summarized"
 		}
-		return manualAnthropicThinkingConfig(effort)
-	case "moonshotai", "minimax":
-		return manualAnthropicThinkingConfig(req.ReasoningEffort)
+		return thinking
+	case "moonshotai":
+		if req.ReasoningEffort == "" {
+			return nil
+		}
+		if req.ReasoningEffort == "none" && strings.ToLower(req.Model) != "kimi-k2.7-code" {
+			return map[string]any{"type": "disabled"}
+		}
+		return map[string]any{"type": "adaptive"}
+	case "minimax":
+		return map[string]any{"type": "adaptive"}
 	default:
 		return nil
 	}
 }
 
 func (a anthropicAdapter) outputConfig(req Request) map[string]any {
-	if a.Spec().ID != "anthropic" || req.ReasoningEffort == "" || req.ReasoningEffort == "none" {
+	if req.ReasoningEffort == "" || req.ReasoningEffort == "none" {
+		return nil
+	}
+	if a.Spec().ID == "moonshotai" {
+		return map[string]any{"effort": req.ReasoningEffort}
+	}
+	if a.Spec().ID != "anthropic" {
 		return nil
 	}
 	model := strings.ToLower(req.Model)
 	switch {
-	case strings.HasPrefix(model, "claude-opus-4-7"):
+	case strings.HasPrefix(model, "claude-opus-4-7"), strings.HasPrefix(model, "claude-opus-4-8"):
 		return map[string]any{"effort": req.ReasoningEffort}
 	case strings.HasPrefix(model, "claude-sonnet-4-6"):
 		effort := req.ReasoningEffort
 		if effort == "xhigh" {
 			effort = "high"
-		}
-		return map[string]any{"effort": effort}
-	case strings.HasPrefix(model, "claude-opus-4-6"):
-		effort := req.ReasoningEffort
-		if effort == "xhigh" {
-			effort = "max"
 		}
 		return map[string]any{"effort": effort}
 	default:
@@ -403,20 +408,6 @@ func (a anthropicAdapter) convertMessage(msg anthropic.Message) message.Message 
 		int(totalTokens),
 		nativeMeta,
 	)
-}
-
-func manualAnthropicThinkingConfig(effort string) map[string]any {
-	if effort == "" {
-		return nil
-	}
-	if effort == "none" {
-		return map[string]any{"type": "disabled"}
-	}
-	budget := anthropicThinkingBudgets[effort]
-	if budget == 0 {
-		return nil
-	}
-	return map[string]any{"type": "enabled", "budget_tokens": budget}
 }
 
 func defaultInput(input map[string]any) map[string]any {

@@ -104,7 +104,7 @@ Sync direction: `main` -> `mycode-go` -> `mycode-go-wails`.
 - `mycode-go` — this Go rewrite; tracks `main`, keeps Go internals idiomatic, and stays free of Wails code.
 - `mycode-go-wails` — Wails desktop adapter on top of `mycode-go`.
 
-Current sync: Python `main` reviewed through `36bf9ae`; `web/` is aligned through `36bf9ae`; Go backend behavior is aligned through `36bf9ae` where it affects external SDK/CLI/API/session/provider behavior.
+Current sync: Python `main` reviewed through `0f931a5`; `web/` is aligned through `36bf9ae`; Go backend behavior is aligned through `0f931a5` where it affects external SDK/CLI/API/session/provider behavior.
 
 When syncing from Python `main`:
 

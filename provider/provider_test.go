@@ -1277,15 +1277,15 @@ func mustUnmarshalOutputItems(t *testing.T, raw string) []responses.ResponseOutp
 
 func TestInferProviderFromModel(t *testing.T) {
 	cases := map[string]string{
-		"claude-opus-4-7":         "anthropic",
+		"claude-opus-4-8":         "anthropic",
 		"anthropic/claude-opus-4": "anthropic",
 		"deepseek-v4-pro":         "deepseek",
 		"gemini-3.5-flash":        "google",
-		"glm-5.1":                 "zai",
+		"glm-5.2":                 "zai",
 		"gpt-5.5":                 "openai",
 		"o3":                      "openai",
-		"kimi-k2.6":               "moonshotai",
-		"MiniMax-M2.7":            "minimax",
+		"kimi-k2.7-code":          "moonshotai",
+		"MiniMax-M3":              "minimax",
 	}
 	for model, want := range cases {
 		got, ok := InferProviderFromModel(model)

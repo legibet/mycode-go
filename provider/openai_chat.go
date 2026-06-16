@@ -218,6 +218,14 @@ func (a openAIChatAdapter) buildPayload(req Request) (map[string]any, error) {
 				"clear_thinking": false,
 			},
 		}
+		if strings.HasPrefix(strings.ToLower(req.Model), "glm-5.2") {
+			switch req.ReasoningEffort {
+			case "low", "medium", "high":
+				payload["reasoning_effort"] = "high"
+			case "xhigh":
+				payload["reasoning_effort"] = "max"
+			}
+		}
 	case "openrouter":
 		if req.ReasoningEffort != "" {
 			payload["extra_body"] = map[string]any{
