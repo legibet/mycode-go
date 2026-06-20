@@ -12,12 +12,11 @@ help:
 		'  make run-web      Run the Go web command with go run.' \
 		'  make web-install  Install web dependencies.' \
 		'  make web-dev      Start only the frontend dev server.' \
-		'  make web-check    Run web lint, typecheck, and tests.' \
 		'  make web-build    Build web assets and sync them for embedding.' \
 		'  make fmt          Format Go code.' \
 		'  make lint         Lint Go code.' \
 		'  make test         Run Go tests.' \
-		'  make check        Run all Go and web checks.' \
+		'  make check        Run all Go checks.' \
 		'  make build        Build the embedded binary.' \
 		'  make clean        Remove build outputs.'
 
@@ -38,13 +37,8 @@ web-dev:
 
 .PHONY: web-install
 web-install:
+	git submodule update --init --recursive
 	pnpm --dir $(WEB_DIR) install --frozen-lockfile
-
-.PHONY: web-check
-web-check:
-	pnpm --dir $(WEB_DIR) check
-	pnpm --dir $(WEB_DIR) typecheck
-	pnpm --dir $(WEB_DIR) test:run
 
 .PHONY: web-build
 web-build: web-install
@@ -68,7 +62,6 @@ check:
 	go vet ./...
 	go test -race ./...
 	golangci-lint run ./...
-	$(MAKE) web-check
 
 .PHONY: build
 build: web-build

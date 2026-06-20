@@ -146,8 +146,10 @@ mycode-go session list --all         list saved sessions for all cwd values
 
 ## Development
 
+The `web/` UI is a git submodule from [`legibet/mycode-web`](https://github.com/legibet/mycode-web); `--recurse-submodules` fetches it.
+
 ```bash
-git clone <repo> && cd mycode-go
+git clone --recurse-submodules https://github.com/legibet/mycode-go.git && cd mycode-go
 make test
 go run ./cmd/mycode-go "hello"
 ```

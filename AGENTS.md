@@ -8,7 +8,7 @@ Always-loaded context for agent runs on this branch. Detailed specs live in `doc
 
 - Public packages — `agent`, `message`, `attachment`, `tools`, `session`, and `provider`: the runtime, canonical message format, attachment conversion, tool execution, append-only sessions, and provider adapters.
 - `cmd/mycode-go` + `internal/*` — the CLI, HTTP server, config loading, system prompt, permission policy, run manager, and web adapter built on top of the public packages.
-- `web/` — the shared React + Vite UI.
+- `web/` — the shared React + Vite UI, a git submodule from [`legibet/mycode-web`](https://github.com/legibet/mycode-web). Develop UI there; this repo only embeds it.
 
 Current sync: Python `main` provider behavior reviewed through `2bdabcb`.
 
@@ -35,7 +35,7 @@ Current sync: Python `main` provider behavior reviewed through `2bdabcb`.
   internal/prompt/            # system prompt, AGENTS discovery, skills discovery
   internal/server/            # HTTP adapter and SSE framing
 
-web/src/                      # shared React + Vite UI from Python main
+web/                          # shared React + Vite UI (git submodule: legibet/mycode-web)
   hooks/useChat.ts            # chat state + SSE streaming
   utils/messages.ts           # canonical blocks -> UI messages
 
@@ -100,30 +100,24 @@ Server routes are mounted under `/api`: chat runs, run stream/cancel/decide, con
 
 ## Sync Rules
 
-Sync direction: `main` -> `mycode-go` -> `mycode-go-wails`.
+Sync direction: `main` -> `mycode-go` -> `mycode-go-wails`. The web UI lives in its own
+repo, `legibet/mycode-web`, consumed by both backends as the `web/` git submodule.
 
-- `main` — Python implementation; source of truth for `web/`, message/session formats, HTTP API, and SSE contracts.
-- `mycode-go` — this Go rewrite; tracks `main`, keeps Go internals idiomatic, and stays free of Wails code.
+- `main` — Python implementation; source of truth for message/session formats, HTTP API, and SSE contracts.
+- `legibet/mycode-web` — shared React + Vite UI; source of truth for `web/`.
+- `mycode-go` — this Go rewrite; tracks `main` for backend behavior and pins the `web/` submodule, keeps Go internals idiomatic, and stays free of Wails code.
 - `mycode-go-wails` — Wails desktop adapter on top of `mycode-go`.
 
-Current sync: Python `main` reviewed through `0f931a5`; `web/` is aligned through `36bf9ae`; Go backend behavior is aligned through `0f931a5` where it affects external SDK/CLI/API/session/provider behavior.
+Current sync: Python `main` reviewed through `0f931a5`; `web/` submodule pinned at `mycode-web@85679d8`; Go backend behavior is aligned through `0f931a5` where it affects external SDK/CLI/API/session/provider behavior.
 
 When syncing from Python `main`:
 
 - Fetch `main` into `refs/remotes/local-main/main`.
-- Directly cherry-pick `web/` commits.
+- Bump the `web/` submodule to the matching `mycode-web` commit; UI changes land in `mycode-web`, not here.
 - Sync external behavior. Keep Go implementation idiomatic.
 - Use Python `mycode-sdk` as the scope reference for Go SDK behavior; Go API shape may differ when that is the clearer Go design.
 - Reimplement backend commits in Go when they affect SDK-visible behavior, CLI behavior, API/SSE contracts, message/session formats, tools, providers, config, models, prompts, permissions, or web expectations.
 - Skip Python-only release/package/TUI work unless it changes shared external behavior.
-- Keep `web/` commits separate from Go backend, config, model, and docs commits.
-
-Useful checks:
-
-```bash
-git log --reverse --oneline <last-sync>..refs/remotes/local-main/main -- web/
-git diff --stat refs/remotes/local-main/main -- web
-```
 
 ## Commit Conventions
 
@@ -131,26 +125,24 @@ Format: `type(scope): description`.
 
 Scopes:
 
-- `web` — changes under `web/` only
+- `web` — `web/` submodule pointer bumps
 - `backend` — Go backend changes only
 - `cli` — CLI changes only
 - `docs` — documentation only
-
-When a sync needs both web and backend/docs/model changes, make separate commits.
 
 ## Dev Workflow
 
 Make targets agents may use:
 
 - `make dev` — full-stack dev server.
-- `make web-check` — web checks.
 - `make web-build` — web build and sync.
-- `make check` — full verification.
+- `make check` — Go verification (vet, race tests, lint).
 - `make build` — embedded binary.
 
 Raw commands:
 
 ```bash
+git submodule update --init
 go test ./...
 go vet ./...
 go test -race ./...
@@ -159,8 +151,6 @@ golangci-lint run ./...
 go run ./cmd/mycode-go web --dev
 
 pnpm --dir web install
-pnpm --dir web typecheck
-pnpm --dir web test:run
 pnpm --dir web dev
 pnpm --dir web build
 ./scripts/sync_web_dist.sh
