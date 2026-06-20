@@ -78,6 +78,18 @@ legacy/
 /mycode/server/static/
 /internal/server/webdist/*
 /wailsjs/
+!/frontend/
+!/frontend/dist/
+/frontend/dist/*
+!/frontend/dist/.gitkeep
+
+# Wails source assets and build output
+!/build/
+!/build/appicon.png
+!/build/darwin/
+!/build/darwin/Info.plist
+!/build/darwin/Info.dev.plist
+/build/bin/
 
 # Config with secrets (use config.example.json as template)
 config.json

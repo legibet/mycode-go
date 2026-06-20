@@ -247,6 +247,41 @@ func TestRunManagerEventsRespectAfterAndFinish(t *testing.T) {
 	}
 }
 
+func TestRunManagerEmitsDoneEventToSink(t *testing.T) {
+	events := make(chan EventPayload, 4)
+	manager := NewRunManager(func(payload EventPayload) {
+		events <- payload
+	})
+
+	run, err := manager.startRun("session-1", message.UserTextMessage("done", nil), nil, completeAgent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := run["id"].(string)
+
+	var done EventPayload
+	waitFor(t, time.Second, func() bool {
+		for {
+			select {
+			case payload := <-events:
+				if payload.Event["type"] == "done" {
+					done = payload
+					return true
+				}
+			default:
+				return false
+			}
+		}
+	})
+
+	if done.RunID != runID || done.SessionID != "session-1" {
+		t.Fatalf("unexpected done event target: %#v", done)
+	}
+	if done.Event["status"] != "completed" {
+		t.Fatalf("unexpected done event payload: %#v", done.Event)
+	}
+}
+
 func TestRunManagerProviderErrorMarksRunFailedAndReleasesSession(t *testing.T) {
 	manager := NewRunManager(nil)
 

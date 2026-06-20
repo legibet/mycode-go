@@ -14,7 +14,7 @@ Always-loaded context for agent runs on this repo. Detailed specs live in `docs/
 
 Python `../mycode` main is the source of truth for message/session formats, HTTP API, SSE contracts, and external backend behavior. The web UI lives in `legibet/mycode-web`; this repo consumes it as the `web/` git submodule.
 
-Current sync: Python `../mycode` main reviewed through `0f931a5`; `web/` submodule pinned at `mycode-web@c472f0d`.
+Current sync: Python `../mycode` main reviewed through `0f931a5`; base web UI pinned at `mycode-web@c472f0d`.
 
 When syncing from Python `../mycode` main:
 
@@ -23,6 +23,17 @@ When syncing from Python `../mycode` main:
 - Use Python `mycode-sdk` as the scope reference for Go SDK behavior; Go API shape may differ when that is the clearer Go design.
 - Reimplement backend commits in Go when they affect SDK-visible behavior, CLI behavior, API/SSE contracts, message/session formats, tools, providers, config, models, prompts, permissions, or web expectations.
 - Skip Python-only release/package/TUI work unless it changes shared external behavior.
+
+## Wails Branch
+
+`mycode-go-wails` is the Wails desktop adapter on top of `mycode-go/main`.
+
+- `web/` is pinned to `mycode-web/mycode-go-wails@14e9854`.
+- Wails UI calls Go bindings through `window.go.main.App` and receives live run updates through Wails runtime events.
+- Native menu commands emit `mycode:desktop_command`: `new_chat`, `select_workspace`, and `open_settings`.
+- Attachments use native file dialogs and file drops through `SelectFiles` and `ReadFiles`.
+- Desktop-specific code stays in `app.go`, `main.go`, `wails.json`, `build/`, `frontend/dist/`, and Wails build scripts.
+- Rebase this branch on top of `mycode-go/main`; keep Wails-specific web changes on `mycode-web/mycode-go-wails`, then bump the `web/` submodule here.
 
 ## Project Layout
 
