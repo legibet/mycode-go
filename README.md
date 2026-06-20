@@ -10,7 +10,7 @@ A minimal coding agent.
 - Mobile-friendly web UI.
 - Native image and pdf input support.
 
-This branch is the Go CLI/server rewrite. It keeps the `.mycode` config and session layout, HTTP API, SSE events, provider ids, and web UI contract aligned with `mycode` on Python `main`. The terminal TUI is not part of this branch.
+`mycode-go` is the Go CLI/server rewrite of [`mycode`](https://github.com/legibet/mycode).
 
 ## Go SDK
 

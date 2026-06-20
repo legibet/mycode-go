@@ -1,6 +1,6 @@
 # mycode-go — Agent Context
 
-Always-loaded context for agent runs on this branch. Detailed specs live in `docs/`; this file points at them rather than duplicating their content.
+Always-loaded context for agent runs on this repo. Detailed specs live in `docs/`; this file points at them rather than duplicating their content.
 
 ## Product
 
@@ -10,7 +10,19 @@ Always-loaded context for agent runs on this branch. Detailed specs live in `doc
 - `cmd/mycode-go` + `internal/*` — the CLI, HTTP server, config loading, system prompt, permission policy, run manager, and web adapter built on top of the public packages.
 - `web/` — the shared React + Vite UI, a git submodule from [`legibet/mycode-web`](https://github.com/legibet/mycode-web). Develop UI there; this repo only embeds it.
 
-Current sync: Python `main` provider behavior reviewed through `2bdabcb`.
+## Sync Rules
+
+Python `../mycode` main is the source of truth for message/session formats, HTTP API, SSE contracts, and external backend behavior. The web UI lives in `legibet/mycode-web`; this repo consumes it as the `web/` git submodule.
+
+Current sync: Python `../mycode` main reviewed through `0f931a5`; `web/` submodule pinned at `mycode-web@c472f0d`.
+
+When syncing from Python `../mycode` main:
+
+- Bump the `web/` submodule to the matching `mycode-web` commit; UI changes land in `mycode-web`, not here.
+- Sync external behavior. Keep Go implementation idiomatic.
+- Use Python `mycode-sdk` as the scope reference for Go SDK behavior; Go API shape may differ when that is the clearer Go design.
+- Reimplement backend commits in Go when they affect SDK-visible behavior, CLI behavior, API/SSE contracts, message/session formats, tools, providers, config, models, prompts, permissions, or web expectations.
+- Skip Python-only release/package/TUI work unless it changes shared external behavior.
 
 ## Project Layout
 
@@ -105,27 +117,6 @@ For third-party SDKs and APIs touched by adapter or runtime code, prefer `contex
 CLI commands: `mycode-go <message>`, `mycode-go run "..."`, `mycode-go web [--dev]`, `mycode-go session list`. This Go rewrite does not include the Python terminal TUI.
 
 Server routes are mounted under `/api`: chat runs, run stream/cancel/decide, config, settings, sessions, and workspaces. Endpoint schemas and run lifecycle details live in `docs/api.md`.
-
-## Sync Rules
-
-Sync direction: `main` -> `mycode-go` -> `mycode-go-wails`. The web UI lives in its own
-repo, `legibet/mycode-web`, consumed by both backends as the `web/` git submodule.
-
-- `main` — Python implementation; source of truth for message/session formats, HTTP API, and SSE contracts.
-- `legibet/mycode-web` — shared React + Vite UI; source of truth for `web/`.
-- `mycode-go` — this Go rewrite; tracks `main` for backend behavior and pins the `web/` submodule, keeps Go internals idiomatic, and stays free of Wails code.
-- `mycode-go-wails` — Wails desktop adapter on top of `mycode-go`.
-
-Current sync: Python `main` reviewed through `0f931a5`; `web/` submodule pinned at `mycode-web@85679d8`; Go backend behavior is aligned through `0f931a5` where it affects external SDK/CLI/API/session/provider behavior.
-
-When syncing from Python `main`:
-
-- Fetch `main` into `refs/remotes/local-main/main`.
-- Bump the `web/` submodule to the matching `mycode-web` commit; UI changes land in `mycode-web`, not here.
-- Sync external behavior. Keep Go implementation idiomatic.
-- Use Python `mycode-sdk` as the scope reference for Go SDK behavior; Go API shape may differ when that is the clearer Go design.
-- Reimplement backend commits in Go when they affect SDK-visible behavior, CLI behavior, API/SSE contracts, message/session formats, tools, providers, config, models, prompts, permissions, or web expectations.
-- Skip Python-only release/package/TUI work unless it changes shared external behavior.
 
 ## Commit Conventions
 
