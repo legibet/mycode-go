@@ -76,19 +76,27 @@ Adapter ids: `anthropic`, `moonshotai`, `minimax`, `google`, `openai`, `openai_c
 
 Event names and payload shapes are a cross-component contract. Changes need to land in server and web UI together. Full payload fields and reconnect semantics live in `docs/api.md`.
 
+## Web UI
+
+`web/` is the `legibet/mycode-web` submodule; UI internals (components, state model, streaming, config) live in `web/AGENTS.md`.
+
+- `mycode-go web` — serves the embedded `webdist` (or `MYCODE_WEB_DIST` / local `web/dist` in dev).
+- `mycode-go web --dev` — API-only (pair with `pnpm --dir web dev`); CORS allows only the Vite dev origin.
+- `make build` — `web-build` (pnpm build + `scripts/sync_web_dist.sh`) then `go build -tags embedweb` embeds `webdist`.
+
 ## Detailed Specs
 
 Read the relevant doc before related changes.
 
-| Area                                                                 | Doc                                                |
-| -------------------------------------------------------------------- | -------------------------------------------------- |
-| Public SDK API (`agent.Config`, `Chat`, model capabilities)          | `docs/sdk.md`                                      |
-| `agent`, `attachment`, `message`, `tools`, `session`                 | `docs/sessions.md`                                 |
-| `provider/*`                                                         | `docs/providers.md`                                |
-| `internal/core`, `internal/server`, SSE events, or routes            | `docs/api.md`                                      |
-| `internal/config`, `internal/prompt`, `internal/permissions`, models | `docs/config.md`                                   |
-| `web/src/**`                                                         | `docs/web.md`                                      |
-| Cross-cutting contract changes                                       | `docs/api.md` + `docs/sessions.md` + `docs/web.md` |
+| Area                                                                 | Doc                                                  |
+| -------------------------------------------------------------------- | ---------------------------------------------------- |
+| Public SDK API (`agent.Config`, `Chat`, model capabilities)          | `docs/sdk.md`                                        |
+| `agent`, `attachment`, `message`, `tools`, `session`                 | `docs/sessions.md`                                   |
+| `provider/*`                                                         | `docs/providers.md`                                  |
+| `internal/core`, `internal/server`, SSE events, or routes            | `docs/api.md`                                        |
+| `internal/config`, `internal/prompt`, `internal/permissions`, models | `docs/config.md`                                     |
+| `web/src/**`                                                         | `web/AGENTS.md`                                      |
+| Cross-cutting contract changes                                       | `docs/api.md` + `docs/sessions.md` + `web/AGENTS.md` |
 
 For third-party SDKs and APIs touched by adapter or runtime code, prefer `context7` lookups over assumptions.
 
